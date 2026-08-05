@@ -1,0 +1,10 @@
+# Exclude the local virtual environment from the Docker build context.
+.venv/
+# Exclude Python bytecode and tool caches from image layers.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Exclude development tests because the runtime image serves only the API.
+tests/

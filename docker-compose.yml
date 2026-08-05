@@ -1,0 +1,82 @@
+# Define the local API and private PostgreSQL services.
+services:
+  # Run the ciphertext-only FastAPI application.
+  api:
+    # Build the API image from the backend project.
+    build:
+      # Send only backend files as the Docker build context.
+      context: ./backend
+    # Name the local container for readable diagnostics.
+    container_name: secure-chat-api
+    # Pass validated configuration through process environment variables.
+    environment:
+      # Identify this Compose deployment as development.
+      APP_ENV: ${APP_ENV:-development}
+      # Bind the server to every interface inside its container.
+      API_HOST: ${API_HOST:-0.0.0.0}
+      # Serve HTTP on the configured container port.
+      API_PORT: ${API_PORT:-8000}
+      # Connect SQLAlchemy to PostgreSQL over Compose's private network.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://secure_chat:change-me@postgres:5432/secure_chat}
+      # Permit the local Vite origin in later CORS configuration.
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+    # Start the API only after PostgreSQL accepts connections.
+    depends_on:
+      # Reference the database service by its private DNS name.
+      postgres:
+        # Wait for the database health check instead of only process startup.
+        condition: service_healthy
+    # Publish the API to the WSL host for browser and test access.
+    ports:
+      # Map the configured host port to the fixed container port.
+      - "${API_PORT:-8000}:8000"
+    # Restart the API after ordinary transient process failures.
+    restart: unless-stopped
+    # Probe the public health contract from inside the API container.
+    healthcheck:
+      # Use Python's standard library so no curl package is required.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      # Recheck readiness at a moderate development cadence.
+      interval: 10s
+      # Fail an individual probe quickly.
+      timeout: 3s
+      # Allow several startup probes before declaring the service unhealthy.
+      retries: 5
+      # Give the ASGI server time to start before counting failures.
+      start_period: 5s
+
+  # Run PostgreSQL only on Compose's private network.
+  postgres:
+    # Pin the database major and current maintenance line.
+    image: postgres:17-alpine
+    # Name the local container for readable diagnostics.
+    container_name: secure-chat-postgres
+    # Configure the initial local database and role.
+    environment:
+      # Create the application database on first startup.
+      POSTGRES_DB: ${POSTGRES_DB:-secure_chat}
+      # Create the application database role on first startup.
+      POSTGRES_USER: ${POSTGRES_USER:-secure_chat}
+      # Read the local password from .env or use the documented development fallback.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    # Persist local database state across container replacement.
+    volumes:
+      # Mount the named volume at PostgreSQL's data directory.
+      - postgres_data:/var/lib/postgresql/data
+    # Restart PostgreSQL after ordinary transient process failures.
+    restart: unless-stopped
+    # Verify that the configured database accepts authenticated connections.
+    healthcheck:
+      # Ask PostgreSQL whether the configured database and role are ready.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-secure_chat} -d ${POSTGRES_DB:-secure_chat}"]
+      # Recheck readiness at a moderate development cadence.
+      interval: 5s
+      # Fail an individual probe quickly.
+      timeout: 3s
+      # Allow enough attempts for first-time database initialization.
+      retries: 10
+
+# Declare persistent storage managed by Docker.
+volumes:
+  # Retain PostgreSQL data until explicitly removed by the developer.
+  postgres_data:

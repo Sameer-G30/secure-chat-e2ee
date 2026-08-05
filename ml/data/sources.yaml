@@ -1,0 +1,27 @@
+# Version this manifest so provenance changes remain reviewable.
+manifest_version: 1
+
+# Record every corpus admitted to local preparation.
+sources:
+  # Describe the first short-message source.
+  uci_sms_spam:
+    # Identify the authoritative catalogue record.
+    catalogue_url: https://archive.ics.uci.edu/dataset/228/sms+spam+collection
+    # Identify the exact archive downloaded by the preparation script.
+    download_url: https://archive.ics.uci.edu/static/public/228/sms+spam+collection.zip
+    # Record the retrieval date for reproducibility.
+    retrieved_on: 2026-08-03
+    # Record UCI's stable dataset identifier.
+    doi: 10.24432/C5CC84
+    # Record the licence declared on the current UCI page.
+    license: CC-BY-4.0
+    # Pin the downloaded bytes against unnoticed upstream changes.
+    raw_sha256: 1587ea43e58e82b14ff1f5425c88e17f8496bfcdb67a583dbff9eefaf9963ce3
+    # Pin the current deterministic normalized output.
+    normalized_sha256: 813712464a0b67a9b7745ac842f444f70fd8d4627d2b69f8b4e36416190f3b52
+    # Record the complete normalized record count.
+    rows: 5574
+    # Record the legitimate-class count.
+    legitimate_rows: 4827
+    # Record the scam/spam-class count.
+    scam_rows: 747

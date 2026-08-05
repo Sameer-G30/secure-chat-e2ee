@@ -1,0 +1,40 @@
+# Assign a version so later dataset changes remain auditable.
+schema_version: 1
+
+# Define the canonical columns expected from every normalized source.
+columns:
+  # Preserve a stable source-specific identifier for deduplication.
+  - message_id
+  # Store the original message text used for training and evaluation.
+  - text
+  # Store the unified binary target consumed by classifiers.
+  - label
+  # Preserve the human-readable source label for auditability.
+  - original_label
+  # Record which public or curated corpus supplied the sample.
+  - source
+  # Record the intended split without silently mixing evaluation data.
+  - split
+
+# Map all corpora onto one binary decision boundary.
+labels:
+  # Treat ordinary legitimate messages as the negative class.
+  legitimate: 0
+  # Treat spam, phishing, and scam messages as the warning class.
+  scam: 1
+
+# Document source-specific mappings before any data is combined.
+source_mappings:
+  # Normalize UCI SMS Spam Collection labels.
+  uci_sms_spam:
+    # Map ordinary SMS messages to the negative class.
+    ham: 0
+    # Map unsolicited or fraudulent SMS messages to the warning class.
+    spam: 1
+
+# Reserve the curated chat corpus exclusively for out-of-domain evaluation.
+evaluation_policy:
+  # Prevent tuning or training on the final chat-style sanity-check set.
+  chat_style_eval_training_allowed: false
+  # Require independent review of every manually authored evaluation label.
+  manual_label_review_required: true

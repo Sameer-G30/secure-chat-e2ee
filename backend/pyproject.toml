@@ -1,0 +1,79 @@
+# Configure the backend as an independently installable Python project.
+[project]
+# Give the API package a stable distribution name.
+name = "secure-chat-backend"
+# Start semantic versioning at the first development release.
+version = "0.1.0"
+# Describe the responsibility of this project in package metadata.
+description = "Ciphertext-only FastAPI service for Secure Chat"
+# Require the Python version selected for this WSL workspace.
+requires-python = "==3.11.9"
+# Declare only dependencies used by the first backend slice.
+dependencies = [
+    # Serve the typed HTTP API and generated OpenAPI schema.
+    "fastapi>=0.116,<1",
+    # Load validated settings from environment variables.
+    "pydantic-settings>=2.10,<3",
+    # Provide SQLAlchemy's PostgreSQL asynchronous driver.
+    "asyncpg>=0.30,<1",
+    # Provide async ORM and database engine primitives.
+    "sqlalchemy[asyncio]>=2.0,<3",
+    # Manage versioned PostgreSQL schema migrations.
+    "alembic>=1.16,<2",
+    # Run the ASGI application in development and containers.
+    "uvicorn[standard]>=0.35,<1",
+]
+
+# Keep test, lint, and type-checking tools out of the runtime dependency set.
+[dependency-groups]
+# Define development dependencies installed by uv during local work and CI.
+dev = [
+    # Exercise API routes through FastAPI's synchronous test client.
+    "httpx>=0.28,<1",
+    # Type-check application code with strict static analysis.
+    "mypy>=1.17,<2",
+    # Run backend unit and integration tests.
+    "pytest>=8.4,<9",
+    # Lint and format Python source consistently.
+    "ruff>=0.12,<1",
+]
+
+# Configure pytest to discover tests in the backend test directory.
+[tool.pytest.ini_options]
+# Add the backend root to Python's import path while testing.
+pythonpath = ["."]
+# Restrict test discovery to the intended test suite.
+testpaths = ["tests"]
+
+# Configure Ruff for Python 3.11 and a practical line width.
+[tool.ruff]
+# Match lint rules to the project's selected interpreter.
+target-version = "py311"
+# Keep source readable without excessive wrapping.
+line-length = 100
+
+# Enable a broad, security-conscious baseline of lint rules.
+[tool.ruff.lint]
+# Check pycodestyle, Pyflakes, import ordering, bug risks, and modernization.
+select = ["E", "F", "I", "B", "UP"]
+
+# Configure mypy to reject ambiguous or weakly typed code.
+[tool.mypy]
+# Analyze code using Python 3.11 semantics.
+python_version = "3.11"
+# Require complete and explicit type information.
+strict = true
+# Allow third-party packages without bundled type declarations.
+ignore_missing_imports = true
+
+# Tell uv how to package the importable backend module.
+[tool.hatch.build.targets.wheel]
+# Include the application package in built wheels.
+packages = ["app"]
+
+# Select Hatchling as the standards-based build backend.
+[build-system]
+# Install Hatchling when creating a wheel or source distribution.
+requires = ["hatchling"]
+# Use Hatchling's PEP 517 build implementation.
+build-backend = "hatchling.build"

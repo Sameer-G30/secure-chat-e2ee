@@ -1,0 +1,54 @@
+# Configure offline model research as an independent uv project.
+[project]
+# Give the training workspace a stable package name.
+name = "secure-chat-ml"
+# Start semantic versioning at the first research slice.
+version = "0.1.0"
+# Describe the privacy-preserving model-development purpose.
+description = "Offline scam-detection data preparation, evaluation, and ONNX export"
+# Use the project-wide Python patch version.
+requires-python = "==3.11.9"
+# Declare exploratory data-analysis dependencies for Slice 1.
+dependencies = [
+    # Provide notebook execution and interactive research tools.
+    "jupyterlab>=4.4,<5",
+    # Draw class-balance and text-length visualizations.
+    "matplotlib>=3.10,<4",
+    # Load and transform labeled tabular text datasets.
+    "pandas>=2.3,<3",
+    # Train and evaluate the later TF-IDF baseline.
+    "scikit-learn>=1.7,<2",
+    # Build readable statistical plots on Matplotlib.
+    "seaborn>=0.13,<1",
+]
+
+# Keep test and lint tools separate from notebook runtime dependencies.
+[dependency-groups]
+# Define local quality tools for data-preparation scripts.
+dev = [
+    # Type-check ML utility code.
+    "mypy>=1.17,<2",
+    # Run data-schema and loader tests added in later slices.
+    "pytest>=8.4,<9",
+    # Lint and format Python scripts.
+    "ruff>=0.12,<1",
+]
+
+# Configure Ruff for the selected Python version.
+[tool.ruff]
+# Match lint behavior to Python 3.11.
+target-version = "py311"
+# Keep research utilities readable on ordinary displays.
+line-length = 100
+
+# Enable common correctness and modernization checks.
+[tool.ruff.lint]
+# Detect syntax, imports, bug risks, and outdated idioms.
+select = ["E", "F", "I", "B", "UP"]
+
+# Select Hatchling as the package build backend.
+[build-system]
+# Install Hatchling when building the research utility package.
+requires = ["hatchling"]
+# Use Hatchling's standards-based build implementation.
+build-backend = "hatchling.build"

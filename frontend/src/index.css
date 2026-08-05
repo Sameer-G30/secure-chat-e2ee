@@ -1,0 +1,406 @@
+/* Define reusable colors, radii, and typography from the legacy visual language. */
+:root {
+  /* Preserve the original gradient's blue-violet starting color. */
+  --grad-start: #667eea;
+  /* Preserve the original gradient's purple ending color. */
+  --grad-end: #764ba2;
+  /* Preserve the original light application surface. */
+  --surface: #f8f9fa;
+  /* Use a solid card surface beneath the glass treatment. */
+  --card: rgba(255, 255, 255, 0.95);
+  /* Use high-contrast near-black for primary text. */
+  --text-primary: #1a1a1a;
+  /* Use the legacy gray for supporting copy. */
+  --text-secondary: #666;
+  /* Use a quiet border around form controls. */
+  --border: #e5e5e5;
+  /* Retain the legacy green for future online presence. */
+  --online: #34c759;
+  /* Preserve the largest legacy container radius. */
+  --radius-xl: 32px;
+  /* Preserve the medium legacy pill radius. */
+  --radius-lg: 24px;
+  /* Preserve the message-bubble radius. */
+  --radius-md: 18px;
+  /* Preserve the form-control radius. */
+  --radius-sm: 16px;
+  /* Use the platform font stack from the original prototype. */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  /* Use readable default text rendering. */
+  color: var(--text-primary);
+  /* Prevent browsers from synthesizing unavailable font styles. */
+  font-synthesis: none;
+  /* Improve text rendering where the browser supports it. */
+  text-rendering: optimizeLegibility;
+  /* Smooth text consistently in WebKit-based browsers. */
+  -webkit-font-smoothing: antialiased;
+  /* Smooth text consistently in Firefox on macOS. */
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Apply predictable sizing to every element and pseudo-element. */
+*,
+*::before,
+*::after {
+  /* Include padding and borders inside declared dimensions. */
+  box-sizing: border-box;
+}
+
+/* Remove browser spacing and establish the minimum application canvas. */
+body {
+  /* Remove the browser's default outer margin. */
+  margin: 0;
+  /* Ensure the background always reaches the visible viewport. */
+  min-width: 320px;
+  /* Ensure short screens retain a full-height application canvas. */
+  min-height: 100vh;
+}
+
+/* Let React's mount point fill the complete viewport. */
+#root {
+  /* Match the minimum height of the host document. */
+  min-height: 100vh;
+}
+
+/* Center the card over the approved diagonal gradient. */
+.auth-screen {
+  /* Establish a positioning context for the decorative dot layer. */
+  position: relative;
+  /* Center the card horizontally and vertically. */
+  display: grid;
+  /* Place the single card in both grid axes. */
+  place-items: center;
+  /* Fill at least the dynamic viewport height on mobile browsers. */
+  min-height: 100svh;
+  /* Preserve comfortable spacing on narrow screens. */
+  padding: 24px;
+  /* Recreate the prototype's purple diagonal gradient. */
+  background: linear-gradient(135deg, var(--grad-start) 0%, var(--grad-end) 100%);
+  /* Clip the animated decorative layer at viewport edges. */
+  overflow: hidden;
+  /* Isolate decorative stacking from surrounding page content. */
+  isolation: isolate;
+}
+
+/* Recreate the subtle moving field of floating light dots. */
+.floating-dots {
+  /* Position the decorative field independently of document flow. */
+  position: absolute;
+  /* Extend the field beyond every viewport edge during animation. */
+  inset: -50%;
+  /* Draw a low-contrast one-pixel radial dot. */
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.16) 1px, transparent 1px);
+  /* Repeat dots at the original prototype spacing. */
+  background-size: 50px 50px;
+  /* Move the repeated pattern continuously. */
+  animation: float-dots 20s linear infinite;
+  /* Keep decoration behind the interactive card. */
+  z-index: -1;
+}
+
+/* Define one seamless pattern-width translation. */
+@keyframes float-dots {
+  /* Begin at the unshifted dot-grid position. */
+  from {
+    /* Preserve the starting grid alignment. */
+    transform: translate(0, 0);
+  }
+  /* End one tile away so repetition creates a seamless loop. */
+  to {
+    /* Shift by exactly one background tile in both axes. */
+    transform: translate(-50px, -50px);
+  }
+}
+
+/* Present authentication controls in the approved glass card. */
+.auth-card {
+  /* Keep the card above animated decoration. */
+  position: relative;
+  /* Fill available width until the desktop design limit. */
+  width: min(100%, 440px);
+  /* Preserve the original generous card spacing. */
+  padding: 44px 40px 36px;
+  /* Use the approved translucent white surface. */
+  background: var(--card);
+  /* Blur background dots beneath the card where supported. */
+  backdrop-filter: blur(12px);
+  /* Preserve the largest legacy corner radius. */
+  border-radius: var(--radius-xl);
+  /* Separate the card from the gradient with a subtle light edge. */
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  /* Recreate the prototype's elevated shadow. */
+  box-shadow: 0 25px 50px -12px rgba(29, 18, 68, 0.38);
+  /* Animate the card into view without delaying interaction. */
+  animation: card-arrival 420ms ease-out;
+}
+
+/* Define the card's short entrance transition. */
+@keyframes card-arrival {
+  /* Start slightly lower and transparent. */
+  from {
+    /* Hide the initial frame. */
+    opacity: 0;
+    /* Offset the card downward before arrival. */
+    transform: translateY(24px);
+  }
+  /* End at the normal visible position. */
+  to {
+    /* Show the completed frame. */
+    opacity: 1;
+    /* Return the card to its layout position. */
+    transform: translateY(0);
+  }
+}
+
+/* Center and separate the product heading block. */
+.auth-header {
+  /* Center lock, heading, and supporting copy. */
+  text-align: center;
+  /* Separate identity from input controls. */
+  margin-bottom: 30px;
+}
+
+/* Display the lock as a stable product motif. */
+.lock-icon {
+  /* Place the icon on its own line. */
+  display: inline-block;
+  /* Match the visual weight of the legacy icon. */
+  font-size: 52px;
+  /* Set a compact icon line box. */
+  line-height: 1;
+  /* Separate the icon from the heading. */
+  margin-bottom: 14px;
+  /* Add a gentle continuous movement. */
+  animation: lock-bounce 2.4s ease-in-out infinite;
+}
+
+/* Define the lock's low-amplitude vertical movement. */
+@keyframes lock-bounce {
+  /* Keep both ends of the loop at rest. */
+  0%,
+  100% {
+    /* Return the icon to its baseline. */
+    transform: translateY(0);
+  }
+  /* Lift the icon at the midpoint. */
+  50% {
+    /* Move only enough to suggest activity. */
+    transform: translateY(-7px);
+  }
+}
+
+/* Style the single page heading. */
+.auth-header h1 {
+  /* Remove browser heading margins. */
+  margin: 0 0 8px;
+  /* Preserve the legacy heading scale. */
+  font-size: clamp(28px, 7vw, 34px);
+  /* Use a strong but not overly heavy title. */
+  font-weight: 750;
+  /* Tighten the large title slightly. */
+  letter-spacing: -0.03em;
+}
+
+/* Style the trust-boundary supporting copy. */
+.auth-header p {
+  /* Remove browser paragraph margins. */
+  margin: 0;
+  /* Use the approved secondary gray. */
+  color: var(--text-secondary);
+  /* Keep long supporting copy compact. */
+  font-size: 14px;
+  /* Improve readability when the line wraps. */
+  line-height: 1.5;
+}
+
+/* Stack form fields with consistent spacing. */
+.auth-form {
+  /* Use grid for predictable vertical rhythm. */
+  display: grid;
+  /* Separate controls without per-field margin exceptions. */
+  gap: 20px;
+}
+
+/* Anchor each floating label to its own control. */
+.input-group {
+  /* Establish the label's positioning context. */
+  position: relative;
+}
+
+/* Draw the legacy floating-label treatment. */
+.input-group label {
+  /* Place the label across the input border. */
+  position: absolute;
+  /* Align label text with input content. */
+  left: 14px;
+  /* Raise the label above the border. */
+  top: -8px;
+  /* Keep label text over the input surface. */
+  z-index: 1;
+  /* Mask the border beneath label text. */
+  padding: 0 6px;
+  /* Match the card behind the label. */
+  background: #fff;
+  /* Use the gradient's accessible blue as an accent. */
+  color: #5368d6;
+  /* Keep the label compact. */
+  font-size: 12px;
+  /* Make labels easy to scan. */
+  font-weight: 650;
+}
+
+/* Give every authentication input a large accessible target. */
+.input-group input {
+  /* Fill the available card width. */
+  width: 100%;
+  /* Preserve the legacy input spacing. */
+  padding: 14px 16px;
+  /* Draw a quiet neutral border. */
+  border: 2px solid var(--border);
+  /* Preserve the form-control radius. */
+  border-radius: var(--radius-sm);
+  /* Keep user-entered text comfortably readable. */
+  font: inherit;
+  /* Use a white input surface. */
+  background: #fff;
+  /* Use high-contrast text. */
+  color: var(--text-primary);
+  /* Animate focus state changes without moving layout. */
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+/* Expose a visible keyboard and pointer focus state. */
+.input-group input:focus {
+  /* Remove the browser outline in favor of the custom high-contrast ring. */
+  outline: none;
+  /* Highlight the active control with the gradient start color. */
+  border-color: var(--grad-start);
+  /* Draw an additional translucent focus halo. */
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.18);
+}
+
+/* Style the future login/register submit action. */
+.primary-button {
+  /* Fill the form width. */
+  width: 100%;
+  /* Preserve the legacy button height. */
+  padding: 14px 18px;
+  /* Remove the browser's default border. */
+  border: 0;
+  /* Preserve the form-control radius. */
+  border-radius: var(--radius-sm);
+  /* Reuse the approved purple gradient. */
+  background: linear-gradient(135deg, var(--grad-start), var(--grad-end));
+  /* Keep button text readable over both gradient colors. */
+  color: #fff;
+  /* Inherit platform typography. */
+  font: inherit;
+  /* Emphasize the primary action. */
+  font-weight: 700;
+  /* Communicate clickability. */
+  cursor: pointer;
+  /* Animate elevation and translation without layout changes. */
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+/* Lift the primary action under pointer hover. */
+.primary-button:hover {
+  /* Move the button slightly toward the user. */
+  transform: translateY(-2px);
+  /* Add a purple-tinted elevation shadow. */
+  box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+}
+
+/* Draw a visible keyboard focus state around the primary action. */
+.primary-button:focus-visible,
+.text-button:focus-visible {
+  /* Outline controls against both card and gradient surfaces. */
+  outline: 3px solid rgba(102, 126, 234, 0.45);
+  /* Separate the outline from the control edge. */
+  outline-offset: 3px;
+}
+
+/* Center the alternate-mode prompt. */
+.auth-switch {
+  /* Separate the prompt from the submit button. */
+  margin: 20px 0 0;
+  /* Center the compact text. */
+  text-align: center;
+  /* Use supporting-copy color. */
+  color: var(--text-secondary);
+  /* Keep the prompt subordinate to inputs. */
+  font-size: 14px;
+}
+
+/* Make an actual button look like an inline navigation link. */
+.text-button {
+  /* Remove button chrome. */
+  padding: 0;
+  /* Remove button borders. */
+  border: 0;
+  /* Let the card surface show through. */
+  background: transparent;
+  /* Use the accessible blue-violet accent. */
+  color: #5368d6;
+  /* Inherit the surrounding typeface and size. */
+  font: inherit;
+  /* Emphasize the mode destination. */
+  font-weight: 700;
+  /* Communicate clickability. */
+  cursor: pointer;
+}
+
+/* Explain this checkpoint's intentionally static API state. */
+.slice-note {
+  /* Separate the note from the mode switch. */
+  margin: 20px 0 0;
+  /* Give the implementation note a quiet surface. */
+  padding: 10px 12px;
+  /* Preserve the medium rounded visual language. */
+  border-radius: 12px;
+  /* Use a subtle blue-violet tint. */
+  background: rgba(102, 126, 234, 0.1);
+  /* Use a dark purple for sufficient contrast. */
+  color: #4b3c78;
+  /* Keep implementation status visually secondary. */
+  font-size: 12px;
+  /* Improve readability of wrapped status text. */
+  line-height: 1.45;
+  /* Center the checkpoint note. */
+  text-align: center;
+}
+
+/* Adapt the card to compact phone widths. */
+@media (max-width: 520px) {
+  /* Reduce outer spacing while retaining touch-safe edges. */
+  .auth-screen {
+    /* Use narrower viewport padding on phones. */
+    padding: 16px;
+  }
+
+  /* Reduce card spacing without changing its visual structure. */
+  .auth-card {
+    /* Use compact but comfortable inner spacing. */
+    padding: 36px 22px 28px;
+    /* Slightly reduce corners on very narrow screens. */
+    border-radius: 26px;
+  }
+}
+
+/* Respect users who request reduced visual motion. */
+@media (prefers-reduced-motion: reduce) {
+  /* Disable decorative and entrance animations. */
+  .floating-dots,
+  .auth-card,
+  .lock-icon {
+    /* Stop all continuous and entrance motion. */
+    animation: none;
+  }
+
+  /* Remove animated button and focus transitions. */
+  .primary-button,
+  .input-group input {
+    /* Apply state changes immediately. */
+    transition: none;
+  }
+}

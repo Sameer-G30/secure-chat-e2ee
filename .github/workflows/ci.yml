@@ -1,0 +1,151 @@
+# Name the required verification workflow shown in GitHub checks.
+name: Continuous integration
+
+# Run verification for proposed and accepted changes.
+on:
+  # Verify every pull request targeting any branch.
+  pull_request:
+  # Verify direct pushes while the repository is still being established.
+  push:
+
+# Restrict the default token to repository read access.
+permissions:
+  # Permit actions to check out source without write capability.
+  contents: read
+
+# Define independent checks that can execute concurrently.
+jobs:
+  # Verify the FastAPI foundation and its quality gates.
+  backend:
+    # Use GitHub's current Ubuntu runner image.
+    runs-on: ubuntu-latest
+    # Set backend commands relative to the Python project.
+    defaults:
+      # Configure every shell step in this job.
+      run:
+        # Enter the backend directory before each command.
+        working-directory: backend
+    # Execute setup and verification in dependency order.
+    steps:
+      # Download the exact proposed repository revision.
+      - name: Check out source
+        # Use GitHub's maintained checkout action.
+        uses: actions/checkout@v4
+      # Install the Python version fixed by the project.
+      - name: Set up Python
+        # Use GitHub's maintained Python setup action.
+        uses: actions/setup-python@v5
+        # Configure the selected patch version.
+        with:
+          # Match local pyenv and Docker exactly.
+          python-version: 3.11.9
+      # Install uv with its built-in dependency cache.
+      - name: Set up uv
+        # Use Astral's maintained setup action.
+        uses: astral-sh/setup-uv@v7
+        # Configure reproducible installation behavior.
+        with:
+          # Enable uv's GitHub Actions dependency cache.
+          enable-cache: true
+      # Recreate the locked backend environment.
+      - name: Install backend dependencies
+        # Refuse to rewrite the reviewed lock file in CI.
+        run: uv sync --frozen
+      # Exercise the public API contract.
+      - name: Run backend tests
+        # Run the complete first-slice pytest suite.
+        run: uv run pytest
+      # Reject Python correctness and style regressions.
+      - name: Lint backend
+        # Run Ruff across application, tests, and migration configuration.
+        run: uv run ruff check .
+      # Reject weakening of the backend type contract.
+      - name: Type-check backend
+        # Analyze the application and its tests in strict mode.
+        run: uv run mypy app tests
+
+  # Verify React, TypeScript, UI behavior, and the crypto proof.
+  frontend:
+    # Use GitHub's current Ubuntu runner image.
+    runs-on: ubuntu-latest
+    # Set frontend commands relative to the Vite project.
+    defaults:
+      # Configure every shell step in this job.
+      run:
+        # Enter the frontend directory before each command.
+        working-directory: frontend
+    # Execute setup and verification in dependency order.
+    steps:
+      # Download the exact proposed repository revision.
+      - name: Check out source
+        # Use GitHub's maintained checkout action.
+        uses: actions/checkout@v4
+      # Install the required Node 22 runtime and npm cache.
+      - name: Set up Node
+        # Use GitHub's maintained Node setup action.
+        uses: actions/setup-node@v4
+        # Configure the project runtime and dependency cache.
+        with:
+          # Match the WSL nvm major version.
+          node-version: 22
+          # Cache npm's package archive between CI runs.
+          cache: npm
+          # Locate the lock file below the repository root.
+          cache-dependency-path: frontend/package-lock.json
+      # Recreate exactly the reviewed JavaScript dependency graph.
+      - name: Install frontend dependencies
+        # Use the lock-file-only clean installation command.
+        run: npm ci
+      # Prove the accessible UI and complete crypto round trip.
+      - name: Run frontend and crypto tests
+        # Execute Vitest once with a non-watch exit code.
+        run: npm run test
+      # Reject TypeScript and production-bundling failures.
+      - name: Build frontend
+        # Compile TypeScript and create optimized static assets.
+        run: npm run build
+      # Reject JavaScript and JSX correctness regressions.
+      - name: Lint frontend
+        # Run the scaffold's fast Oxlint configuration.
+        run: npm run lint
+
+  # Verify offline data-preparation source without downloading corpora.
+  ml:
+    # Use GitHub's current Ubuntu runner image.
+    runs-on: ubuntu-latest
+    # Set commands relative to the independent ML project.
+    defaults:
+      # Configure every shell step in this job.
+      run:
+        # Enter the ML directory before each command.
+        working-directory: ml
+    # Execute setup and static verification in dependency order.
+    steps:
+      # Download the exact proposed repository revision.
+      - name: Check out source
+        # Use GitHub's maintained checkout action.
+        uses: actions/checkout@v4
+      # Install the project-wide Python patch version.
+      - name: Set up Python
+        # Use GitHub's maintained Python setup action.
+        uses: actions/setup-python@v5
+        # Configure the selected interpreter.
+        with:
+          # Match local model-research environments exactly.
+          python-version: 3.11.9
+      # Install uv with dependency caching.
+      - name: Set up uv
+        # Use Astral's maintained setup action.
+        uses: astral-sh/setup-uv@v7
+        # Configure uv's cache.
+        with:
+          # Reuse downloaded scientific packages across runs.
+          enable-cache: true
+      # Recreate the reviewed ML dependency graph.
+      - name: Install ML dependencies
+        # Refuse to mutate the lock file in CI.
+        run: uv sync --frozen
+      # Check deterministic data-preparation source quality.
+      - name: Lint ML scripts
+        # Run Ruff without requiring network dataset access.
+        run: uv run ruff check scripts src

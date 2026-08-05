@@ -1,0 +1,33 @@
+# Exclude all local environment files while retaining the safe example template.
+.env
+.env.*
+!.env.example
+
+# Exclude Python virtual environments and interpreter caches.
+.venv/
+**/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Exclude JavaScript dependencies, test output, and production bundles.
+node_modules/
+**/node_modules/
+dist/
+coverage/
+
+# Exclude local ML datasets, generated model artifacts, and notebook checkpoints.
+ml/data/raw/
+ml/data/processed/
+ml/models/
+.ipynb_checkpoints/
+
+# Exclude editor and operating-system metadata.
+.vscode/
+.idea/
+.DS_Store
+
+# Exclude the insecure prototype and its exposed Firebase configuration.
+Legacy files/
