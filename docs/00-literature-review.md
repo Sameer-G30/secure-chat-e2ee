@@ -200,10 +200,14 @@ The evidence supports a staged model strategy:
 
 The expected research contribution is not a novel classifier architecture. It is an honest end-to-end engineering evaluation of how a useful scam detector can operate after local E2EE decryption without granting the relay server plaintext access.
 
-## Slice 1 data status
+## Slice 1–2 data status
 
 - The UCI download/normalization script is implemented at `ml/scripts/download_sms_spam.py`.
+- Enron-Spam, SpamAssassin, Nazario, and Kaggle phishing preparation scripts are implemented under `ml/scripts/`.
+- Shared email body extraction lives at `ml/src/secure_chat_ml/email_text.py`.
 - The normalized schema is defined at `ml/data/label-schema.yaml`.
-- The executed EDA notebook is at `ml/notebooks/01_eda.ipynb`.
+- Provenance pins for all admitted corpora are recorded in `ml/data/sources.yaml`.
+- The executed SMS EDA notebook is at `ml/notebooks/01_eda.ipynb`.
+- The executed multi-corpus EDA notebook is at `ml/notebooks/02_eda_all_corpora.ipynb`.
 - Raw and processed corpora are intentionally ignored by Git.
-- Additional corpora remain candidates until their provenance, overlap, and redistribution status pass the controls above.
+- Kaggle remains a candidate for combined training until overlap and upstream provenance controls are applied during split design.

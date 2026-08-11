@@ -31,6 +31,30 @@ source_mappings:
     ham: 0
     # Map unsolicited or fraudulent SMS messages to the warning class.
     spam: 1
+  # Normalize the Metsis Enron-Spam derivative labels.
+  enron_spam:
+    # Map Enron ham mailboxes to the legitimate class.
+    ham: 0
+    # Map Enron spam mailboxes to the warning class.
+    spam: 1
+  # Normalize Apache SpamAssassin public-corpus partitions.
+  spamassassin:
+    # Map easy legitimate mail to the legitimate class.
+    easy_ham: 0
+    # Map hard legitimate mail to the legitimate class.
+    hard_ham: 0
+    # Map spam partitions to the warning class.
+    spam: 1
+  # Normalize Jose Nazario's phishing-only corpus.
+  nazario:
+    # Map every Nazario message to the warning class.
+    phishing: 1
+  # Normalize the local Kaggle phishing-email compilation.
+  kaggle_phishing:
+    # Map Safe Email rows to the legitimate class.
+    Safe Email: 0
+    # Map Phishing Email rows to the warning class.
+    Phishing Email: 1
 
 # Reserve the curated chat corpus exclusively for out-of-domain evaluation.
 evaluation_policy:

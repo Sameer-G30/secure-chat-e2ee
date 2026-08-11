@@ -25,3 +25,99 @@ sources:
     legitimate_rows: 4827
     # Record the scam/spam-class count.
     scam_rows: 747
+
+  # Describe the Metsis Enron-Spam six-user derivative.
+  enron_spam:
+    # Identify the authoritative corpus index page.
+    catalogue_url: https://www2.aueb.gr/users/ion/data/enron-spam/
+    # Identify the preprocessed archive directory used by the script.
+    download_url: https://www2.aueb.gr/users/ion/data/enron-spam/preprocessed/
+    # Record the retrieval date for reproducibility.
+    retrieved_on: 2026-08-11
+    # Note that redistribution terms remain research-only until confirmed.
+    license: research-use-verify-redistribution
+    # List every downloaded archive with its SHA-256 digest.
+    archives:
+      enron1.tar.gz: 3d6a1fcced6c30b1701a3fd04c6b912d7046208f6ef6f4fdcf022f64bdc6c32f
+      enron2.tar.gz: 9b5bf5c4844eb4ecead52de8c676ff8761c2d7037fdc175851c88ef52c827315
+      enron3.tar.gz: 9321ca1c195b45b6f0fb795963a8020ff317e7ebac2c102205272f0b91a1ac0b
+      enron4.tar.gz: 61be71c59d7e9fdf99df63b814ddbeb18e0c9e8a69ce691d8e4e8127ed3588aa
+      enron5.tar.gz: d7b839c2a7071b6d52f1d76be8d05e66733d872614475fad7522740d7c60540d
+      enron6.tar.gz: 283f70c45a7d819e0b988536fbb8e21cc17c17a22998403c2255d2c38cbfc5a0
+    # Pin the current deterministic normalized output.
+    normalized_sha256: c4707c5950ade305438bc0c53043095faf36cd5cf8cae16abb3eaa31df12b82f
+    # Record the complete normalized record count after empty-body drops.
+    rows: 33344
+    # Record the legitimate-class count.
+    legitimate_rows: 16493
+    # Record the scam/spam-class count.
+    scam_rows: 16851
+
+  # Describe the Apache SpamAssassin public corpus snapshot.
+  spamassassin:
+    # Identify the authoritative corpus readme.
+    catalogue_url: https://spamassassin.apache.org/old/publiccorpus/readme.html
+    # Identify the public corpus directory used by the script.
+    download_url: https://spamassassin.apache.org/old/publiccorpus/
+    # Record the retrieval date for reproducibility.
+    retrieved_on: 2026-08-11
+    # Note that message copyright remains with original senders.
+    license: public-corpus-sender-copyright
+    # List every downloaded archive with its SHA-256 digest.
+    archives:
+      20030228_easy_ham.tar.bz2: 2b7b65904bcfcc31d2b5f51946f2d261370b257402cbbd62930b46ab83367438
+      20030228_easy_ham_2.tar.bz2: b4bd3dc5ae5b40f38e99a0e41ad7d16b428b56e818e3a6ffa07330d62004dd38
+      20030228_hard_ham.tar.bz2: ce2ce67880643dbde65ea7f85bffbfe4417349c4bd80b6b0de56262ae6b0a9c9
+      20030228_spam.tar.bz2: c08debc32413804949a866be45ef78195cec2cbafd1da744ed76cdb860589743
+      20050311_spam_2.tar.bz2: 44280a0e28bf7645b2279e8e42659271ad82c6f40bf8d364dbda7f1df344a765
+    # Pin the current deterministic normalized output.
+    normalized_sha256: 2bfca4eb13f7e8d4c62345f07b92a9658efd6f94e846f3224708a64518709945
+    # Record the complete normalized record count after empty-body drops.
+    rows: 6029
+    # Record the legitimate-class count.
+    legitimate_rows: 4150
+    # Record the scam/spam-class count.
+    scam_rows: 1879
+
+  # Describe Jose Nazario's public phishing corpus snapshots.
+  nazario:
+    # Identify the authoritative corpus directory.
+    catalogue_url: https://monkey.org/~jose/phishing/
+    # Identify the README that documents licence and caveats.
+    download_url: https://monkey.org/~jose/phishing/
+    # Record the retrieval date for reproducibility.
+    retrieved_on: 2026-08-11
+    # Record the licence declared in the current Nazario README.
+    license: CC-BY-4.0
+    # Note that private-phishing4.mbox was intentionally excluded.
+    excluded_files:
+      - private-phishing4.mbox
+    # Pin the current deterministic normalized output.
+    normalized_sha256: c7e7ee45d12d192bd2ae252c747fbb903080a12c6137945f2fe74dab23c88984
+    # Record the complete normalized phishing-only count after empty-body drops.
+    rows: 8235
+    # Record the legitimate-class count for this phishing-only source.
+    legitimate_rows: 0
+    # Record the scam/phishing-class count.
+    scam_rows: 8235
+
+  # Describe the manually downloaded Kaggle phishing compilation.
+  kaggle_phishing:
+    # Identify the exact Kaggle dataset page.
+    catalogue_url: https://www.kaggle.com/datasets/subhajournal/phishingemails
+    # Record that the operator supplied the CSV locally rather than through the API.
+    download_url: local:ml/data/raw/Phishing_Email.csv
+    # Record the retrieval date for reproducibility.
+    retrieved_on: 2026-08-11
+    # Note that upstream provenance remains uncertain despite the page licence label.
+    license: LGPL-3.0-claimed-verify-upstream
+    # Pin the local raw CSV bytes.
+    raw_sha256: 18ef4fff1acb8986f0ab01e83ede6025420c829656af5a377560fce17e153b97
+    # Pin the current deterministic normalized output.
+    normalized_sha256: ce633ec0a7383de5357d1338981ca512942fb6fa19386f684f45c85b166b9d3f
+    # Record the complete normalized record count after null-body drops.
+    rows: 18631
+    # Record the legitimate-class count.
+    legitimate_rows: 11322
+    # Record the scam/phishing-class count.
+    scam_rows: 7309

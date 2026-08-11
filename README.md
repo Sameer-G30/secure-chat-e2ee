@@ -110,10 +110,15 @@ Open `http://localhost:5173`.
 ```bash
 cd ml
 uv sync
+uv run python scripts/download_sms_spam.py
+uv run python scripts/download_enron_spam.py
+uv run python scripts/download_spamassassin.py
+uv run python scripts/download_nazario.py
+uv run python scripts/download_kaggle_phishing.py  # requires ml/data/raw/Phishing_Email.csv
 uv run jupyter lab
 ```
 
-Raw downloaded datasets and generated model weights remain untracked.
+Raw downloaded datasets and generated model weights remain untracked. Open `notebooks/01_eda.ipynb` for SMS-only EDA or `notebooks/02_eda_all_corpora.ipynb` for the multi-corpus report.
 
 ## Testing
 
