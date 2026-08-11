@@ -1,13 +1,13 @@
 """Extract plain-text bodies from raw email bytes for corpus normalization."""
 
-# Import HTMLParser to strip tags from text/html parts without adding dependencies.
-from html.parser import HTMLParser
-
 # Import email.message_from_bytes to parse RFC822 messages from archive members.
 from email import message_from_bytes
 
 # Import Message for type-checked multipart traversal helpers.
 from email.message import Message
+
+# Import HTMLParser to strip tags from text/html parts without adding dependencies.
+from html.parser import HTMLParser
 
 
 # Collect visible text while discarding markup and script-like noise.

@@ -1,13 +1,13 @@
 """Download and normalize the Apache SpamAssassin public corpus for local research."""
 
+# Import tarfile to read bzip2 SpamAssassin archives in memory.
+import tarfile
+
 # Import sha256 to pin downloaded research archives against upstream changes.
 from hashlib import sha256
 
 # Import Path for workspace-independent data locations.
 from pathlib import Path
-
-# Import tarfile to read bzip2 SpamAssassin archives in memory.
-import tarfile
 
 # Import urlopen for a dependency-free HTTPS dataset download.
 from urllib.request import Request, urlopen

@@ -1,16 +1,16 @@
 """Download and normalize the Metsis Enron-Spam derivative for local research."""
 
-# Import sha256 to pin downloaded research archives against upstream changes.
-from hashlib import sha256
-
-# Import Path for workspace-independent data locations.
-from pathlib import Path
-
 # Import ssl so the incomplete AUEB certificate chain can be handled explicitly.
 import ssl
 
 # Import tarfile to read gzipped Enron archives in memory.
 import tarfile
+
+# Import sha256 to pin downloaded research archives against upstream changes.
+from hashlib import sha256
+
+# Import Path for workspace-independent data locations.
+from pathlib import Path
 
 # Import urlopen for a dependency-free HTTPS dataset download.
 from urllib.request import Request, urlopen
