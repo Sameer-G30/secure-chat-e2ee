@@ -10,12 +10,16 @@ The browser will generate X25519 keypairs, derive directional session and epoch 
 
 ## Threat model
 
+
+
 ### Intended protections
 
 - Database dumps and honest-but-curious server operators cannot read message content because decryption keys remain on end-user devices.
 - XChaCha20-Poly1305 authenticates ciphertext and associated conversation metadata, making tampering and cross-conversation replay detectable.
 - Argon2id password hashing, short-lived access tokens, rotating refresh tokens, and rate limits reduce account-compromise risk.
 - React text rendering avoids raw HTML injection from user-controlled messages and usernames.
+
+
 
 ### Explicit limitations
 
@@ -25,15 +29,19 @@ The browser will generate X25519 keypairs, derive directional session and epoch 
 - Public-key authenticity is initially trusted on first use; key transparency or out-of-band safety-number verification is future work.
 - Multi-device key synchronization and recovery are outside the first implementation scope.
 
+
+
 ## Security design decisions
 
-- **AEAD:** use `crypto_aead_xchacha20poly1305_ietf_*`, not `crypto_secretbox`, so the mandated XChaCha20 primitive and associated data are both supported.
+- **AEAD:** use `crypto_aead_xchacha20poly1305_ietf_`*, not `crypto_secretbox`, so the mandated XChaCha20 primitive and associated data are both supported.
 - **Associated data:** authenticate a canonical encoding of `conversation_id`, `sender_id`, and `key_epoch`.
 - **KDF context:** use the required eight-byte context `msgkey01`; the original seven-byte value would fail in libsodium.
 - **Epoch claims:** describe the design as per-epoch key separation and compromise containment, not forward secrecy.
 - **JWT library:** use maintained PyJWT instead of `python-jose`.
 - **Baseline ONNX:** perform TF-IDF in TypeScript and export only the numerical classifier head to avoid unsupported ONNX Runtime Web tokenizer operators.
 - **DistilBERT:** lazy-load the optional quantized model while eagerly loading the smaller baseline classifier.
+
+
 
 ## Repository layout
 
@@ -43,7 +51,11 @@ The browser will generate X25519 keypairs, derive directional session and epoch 
 - `docs/` — literature review and later architecture/security documentation.
 - `Legacy files/` — insecure prototype retained locally for visual reference and intentionally excluded from Git.
 
+
+
 ## Local setup
+
+
 
 ### Prerequisites
 
@@ -52,6 +64,8 @@ The browser will generate X25519 keypairs, derive directional session and epoch 
 - Python 3.11.9 managed by pyenv
 - `uv`
 - Node.js 22 managed by nvm
+
+
 
 ### Environment
 
@@ -75,7 +89,7 @@ The health endpoint is `http://localhost:8000/health`.
 ### Full local stack
 
 ```bash
-docker compose up --build
+docker compose up --build # --build only when image needs rebuilding or when you changed something that goes into docker image, otherwise do only docker compose up
 ```
 
 Docker Compose starts FastAPI and PostgreSQL. The database has no host port because only the API should access it.
@@ -84,7 +98,7 @@ Docker Compose starts FastAPI and PostgreSQL. The database has no host port beca
 
 ```bash
 cd frontend
-npm install
+npm install # first time only
 npm run test
 npm run dev
 ```
