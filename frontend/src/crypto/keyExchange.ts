@@ -4,11 +4,11 @@ import sodium from 'libsodium-wrappers'
 // Use the exact eight-byte domain-separation context required by libsodium KDF.
 const MESSAGE_KEY_CONTEXT = 'msgkey01'
 
-// Describe the client-generated long-term X25519 key material used by this spike.
+// Describe the client-generated long-term X25519 key material this module produces.
 export interface IdentityKeyPair {
-  // Share this public key through the future authenticated API.
+  // Share this public key through the authenticated key-upload API (Slice 3).
   publicKey: Uint8Array
-  // Keep this private key exclusively on the user's endpoint.
+  // Keep this private key exclusively on the user's endpoint, sealed at rest (Slice 3).
   privateKey: Uint8Array
 }
 
@@ -38,6 +38,13 @@ export interface EnvelopeMetadata {
   senderId: string
 }
 
+// Describe the two crypto_kx roles a session pairing can take.
+//
+// §6.3 of the spec: role is decided by comparing usernames lexicographically.
+// The comparison only needs to be a stable, symmetric rule both peers agree
+// on independently — it carries no meaning beyond breaking the tie.
+export type SessionRole = 'client' | 'server'
+
 // Wait until the WebAssembly or JavaScript sodium runtime is initialized.
 export async function initializeSodium(): Promise<void> {
   // Resolve only after every requested cryptographic function is available.
@@ -55,6 +62,22 @@ export function generateIdentityKeyPair(): IdentityKeyPair {
     // Return the endpoint-only X25519 private key.
     privateKey: keyPair.privateKey,
   }
+}
+
+// Decide which crypto_kx role this endpoint plays for one pairing of accounts.
+export function determineSessionRole(selfUsername: string, peerUsername: string): SessionRole {
+  // Reject inputs that cannot produce a meaningful, stable comparison.
+  if (!selfUsername || !peerUsername) {
+    // Fail loudly rather than silently deriving an arbitrary role.
+    throw new RangeError('determineSessionRole requires two non-empty usernames')
+  }
+  // A conversation with oneself has no well-defined client/server pairing.
+  if (selfUsername === peerUsername) {
+    // Refuse rather than returning an arbitrary, meaningless role.
+    throw new RangeError('determineSessionRole requires two distinct usernames')
+  }
+  // Whoever sorts first plays the crypto_kx "client" role for this pairing.
+  return selfUsername < peerUsername ? 'client' : 'server'
 }
 
 // Derive client-role directional session keys using both public identities.
@@ -105,6 +128,25 @@ export function deriveServerSessionKeys(
     // The server role transmits data decryptable with the client's receive key.
     transmitKey: sessionKeys.sharedTx,
   }
+}
+
+// Derive directional session keys without the caller needing to branch on role.
+//
+// This is the production entry point real conversation code should call: it
+// takes the raw ingredients (both usernames and both public identities) and
+// internally applies determineSessionRole plus the matching crypto_kx call.
+export function deriveSessionKeys(
+  // Accept the local user's complete keypair and username.
+  self: { keys: IdentityKeyPair; username: string },
+  // Accept the remote peer's public key and username.
+  peer: { publicKey: Uint8Array; username: string },
+): DirectionalSessionKeys {
+  // Decide the role once, from the same rule every peer applies independently.
+  const role = determineSessionRole(self.username, peer.username)
+  // Dispatch to the crypto_kx call matching the derived role.
+  return role === 'client'
+    ? deriveClientSessionKeys(self.keys, peer.publicKey)
+    : deriveServerSessionKeys(self.keys, peer.publicKey)
 }
 
 // Derive a fixed-size message key for one non-secret epoch number.
@@ -228,4 +270,19 @@ export function decryptMessage(
   )
   // Decode verified UTF-8 bytes into UI-safe React text.
   return sodium.to_string(plaintextBytes)
+}
+
+// Encode arbitrary bytes for JSON/WebSocket transport and for the key-upload API.
+//
+// The wire format for ciphertext, nonces, and public keys is base64 text, not
+// raw bytes, because JSON and REST payloads cannot carry Uint8Array directly.
+export function encodeBase64(bytes: Uint8Array): string {
+  // Use libsodium's constant-width base64 encoding rather than a hand-rolled one.
+  return sodium.to_base64(bytes, sodium.base64_variants.ORIGINAL)
+}
+
+// Decode base64 transport text back into raw bytes for cryptographic use.
+export function decodeBase64(encoded: string): Uint8Array {
+  // Mirror encodeBase64's variant so round-tripping is always exact.
+  return sodium.from_base64(encoded, sodium.base64_variants.ORIGINAL)
 }

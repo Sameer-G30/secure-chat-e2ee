@@ -1,0 +1,55 @@
+{
+  "train_rows": 50793,
+  "test_rows": 12699,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.9792114695340501,
+      "recall": 0.9739056038785113,
+      "f1-score": 0.976551329711181,
+      "support": 7013.0
+    },
+    "scam": {
+      "precision": 0.9680293501048218,
+      "recall": 0.9744987689060851,
+      "f1-score": 0.9712532865907099,
+      "support": 5686.0
+    },
+    "accuracy": 0.9741711945822505,
+    "macro avg": {
+      "precision": 0.973620409819436,
+      "recall": 0.9742021863922983,
+      "f1-score": 0.9739023081509455,
+      "support": 12699.0
+    },
+    "weighted avg": {
+      "precision": 0.9742046555270739,
+      "recall": 0.9741711945822505,
+      "f1-score": 0.9741791214126536,
+      "support": 12699.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      6830,
+      183
+    ],
+    [
+      145,
+      5541
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "source_counts_in_test_split": {
+    "enron_spam": 5854,
+    "kaggle_phishing": 3545,
+    "spamassassin": 1129,
+    "nazario": 1127,
+    "uci_sms_spam": 1044
+  },
+  "random_state": 42,
+  "test_size": 0.2,
+  "max_features": 50000
+}

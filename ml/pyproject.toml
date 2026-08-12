@@ -46,6 +46,13 @@ line-length = 100
 # Detect syntax, imports, bug risks, and outdated idioms.
 select = ["E", "F", "I", "B", "UP"]
 
+# Configure pytest to discover the synthetic-data unit tests.
+[tool.pytest.ini_options]
+# Add the ml src layout to Python's import path while testing.
+pythonpath = ["src"]
+# Restrict test discovery to the intended test suite.
+testpaths = ["tests"]
+
 # Select Hatchling as the package build backend.
 [build-system]
 # Install Hatchling when building the research utility package.

@@ -6,8 +6,21 @@ from typing import Annotated
 # Import FastAPI's application and dependency injection primitives.
 from fastapi import Depends, FastAPI
 
+# Import CORS middleware so the Vite dev origin may call authenticated endpoints.
+from fastapi.middleware.cors import CORSMiddleware
+
+# Import slowapi's rate-limit exception and the response handler that renders it.
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
 # Import the validated settings model and cached provider.
 from app.config import Settings, get_settings
+
+# Import the authentication router added in Slice 2.
+from app.routers import auth
+
+# Import the shared limiter instance so the app enforces the same rate limits.
+from app.security.rate_limit import limiter
 
 # Construct the ASGI application with explicit public metadata.
 app = FastAPI(
@@ -15,9 +28,32 @@ app = FastAPI(
     title="Secure Chat API",
     # Describe the server's ciphertext-only trust boundary.
     description="Stores and relays encrypted message envelopes without plaintext access.",
-    # Identify the first vertical-slice API version.
-    version="0.1.0",
+    # Identify the second vertical-slice API version.
+    version="0.2.0",
 )
+
+# Attach the limiter so every @limiter.limit(...) decorator can read shared state.
+app.state.limiter = limiter
+# Register slowapi's handler so exceeding a limit returns a clean 429, not a 500.
+# slowapi's handler signature is narrower than Starlette's generic Exception handler
+# type, which mypy correctly flags; the runtime contract is exactly what Starlette expects.
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
+# Allow only the configured frontend origin to call the API with credentials.
+app.add_middleware(
+    CORSMiddleware,
+    # Read the permitted browser origin from validated settings, not a hardcoded value.
+    allow_origins=[get_settings().frontend_origin],
+    # Permit cookies/authorization headers once auth tokens arrive in Slice 3.
+    allow_credentials=True,
+    # Allow the HTTP verbs this API's routers currently use.
+    allow_methods=["GET", "POST"],
+    # Allow the headers the frontend needs to send, including future auth headers.
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+# Mount the authentication router's endpoints onto the application.
+app.include_router(auth.router)
 
 
 # Expose a lightweight endpoint for local checks and container health probes.

@@ -148,4 +148,8 @@ jobs:
       # Check deterministic data-preparation source quality.
       - name: Lint ML scripts
         # Run Ruff without requiring network dataset access.
-        run: uv run ruff check scripts src
+        run: uv run ruff check scripts src tests
+      # Exercise the baseline pipeline against tiny synthetic data, not downloaded corpora.
+      - name: Run ML unit tests
+        # These tests never touch ml/data/raw, so no dataset download is needed in CI.
+        run: uv run pytest

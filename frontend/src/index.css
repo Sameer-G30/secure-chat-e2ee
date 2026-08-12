@@ -370,6 +370,35 @@ body {
   text-align: center;
 }
 
+/* Announce registration outcomes distinctly from the static slice note. */
+.auth-feedback {
+  /* Separate feedback from the form above it. */
+  margin: 20px 0 0;
+  /* Match the compact status-message spacing used elsewhere on this card. */
+  padding: 10px 12px;
+  /* Preserve the medium rounded visual language. */
+  border-radius: 12px;
+  /* Keep status text legible without overwhelming the form. */
+  font-size: 13px;
+  line-height: 1.45;
+  /* Center the status message beneath the form. */
+  text-align: center;
+}
+
+/* Style a successfully created account with the approved online-status green. */
+.auth-feedback-success {
+  /* Use a soft green tint that stays legible on the light card surface. */
+  background: rgba(52, 199, 89, 0.12);
+  color: #1f7a3d;
+}
+
+/* Style a rejected submission so the problem reads as an error, not a note. */
+.auth-feedback-error {
+  /* Use a soft red tint that reads as an error without being alarming. */
+  background: rgba(220, 38, 38, 0.1);
+  color: #b42318;
+}
+
 /* Adapt the card to compact phone widths. */
 @media (max-width: 520px) {
   /* Reduce outer spacing while retaining touch-safe edges. */

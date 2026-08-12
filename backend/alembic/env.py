@@ -12,11 +12,17 @@ from sqlalchemy import Connection, pool
 # Import SQLAlchemy's asynchronous engine factory.
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+# Import every ORM model so mapping side effects register on Base.metadata.
+import app.models  # noqa: F401
+
 # Import Alembic's process-wide migration context.
 from alembic import context
 
 # Import the same validated database URL used by the API.
 from app.config import get_settings
+
+# Import the declarative base so its accumulated metadata drives autogeneration.
+from app.db import Base
 
 # Access the active Alembic configuration object.
 config = context.config
@@ -28,8 +34,8 @@ if config.config_file_name is not None:
     # Apply the logger, handler, and formatter sections from alembic.ini.
     fileConfig(config.config_file_name)
 
-# Use no schema metadata until SQLAlchemy models arrive in Slice 2.
-target_metadata = None
+# Point autogeneration at the real ORM metadata now that User exists.
+target_metadata = Base.metadata
 
 
 # Generate migration SQL without opening a database connection.

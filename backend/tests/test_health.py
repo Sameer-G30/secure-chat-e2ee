@@ -34,7 +34,7 @@ def test_health_endpoint_reports_ready() -> None:
     assert status_code == 200
     # Confirm the process reports itself as available.
     assert payload["status"] == "ok"
-    # Confirm the response identifies this first API slice.
-    assert payload["version"] == "0.1.0"
+    # Confirm the response identifies the current API slice version.
+    assert payload["version"] == "0.2.0"
     # Confirm no database URL or future secret appears in diagnostics.
     assert "database_url" not in payload

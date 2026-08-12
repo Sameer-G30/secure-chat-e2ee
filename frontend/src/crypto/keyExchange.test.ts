@@ -3,24 +3,32 @@
 // Import Vitest lifecycle, grouping, and assertion helpers.
 import { beforeAll, describe, expect, it } from 'vitest'
 
-// Import only the crypto-spike operations exercised by this proof.
+// Import only the key-exchange operations exercised by this proof.
 import {
   // Verify authenticated decryption and failure behavior.
   decryptMessage,
+  // Round-trip raw bytes through the base64 transport encoding.
+  decodeBase64,
+  // Decide which crypto_kx role an endpoint plays for a pairing.
+  determineSessionRole,
   // Derive the sender's client-role directional keys.
   deriveClientSessionKeys,
   // Derive the recipient's complementary server-role keys.
   deriveServerSessionKeys,
+  // Derive directional keys without the caller branching on role.
+  deriveSessionKeys,
+  // Round-trip raw bytes through the base64 transport encoding.
+  encodeBase64,
   // Produce an authenticated ciphertext envelope.
   encryptMessage,
   // Generate independent endpoint identity keys.
   generateIdentityKeyPair,
   // Initialize libsodium before any synchronous operation.
   initializeSodium,
-} from './cryptoSpike'
+} from './keyExchange'
 
 // Group the complete key-exchange, KDF, and AEAD proof.
-describe('libsodium E2EE crypto spike', () => {
+describe('keyExchange', () => {
   // Wait for libsodium's runtime once before all proof cases.
   beforeAll(async () => {
     // Ensure every cryptographic binding is initialized.
@@ -116,5 +124,70 @@ describe('libsodium E2EE crypto spike', () => {
     }
     // Require authentication failure under the substituted conversation.
     expect(() => decryptMessage(envelope, bobSession.receiveKey, replayedMetadata)).toThrow()
+  })
+
+  // Prove role derivation is a stable, symmetric, and deterministic rule.
+  describe('determineSessionRole', () => {
+    // Prove the lexicographically earlier username always plays "client".
+    it('assigns client to the lexicographically earlier username', () => {
+      // "alice" sorts before "bob" under ordinary string comparison.
+      expect(determineSessionRole('alice', 'bob')).toBe('client')
+      // The same pairing viewed from Bob's side must assign the complementary role.
+      expect(determineSessionRole('bob', 'alice')).toBe('server')
+    })
+
+    // Prove identical usernames cannot produce a meaningful role.
+    it('rejects deriving a role against your own username', () => {
+      // A conversation with oneself is not a valid crypto_kx pairing.
+      expect(() => determineSessionRole('alice', 'alice')).toThrow(RangeError)
+    })
+
+    // Prove empty identifiers are rejected before any comparison happens.
+    it('rejects empty usernames', () => {
+      // An empty peer username cannot be compared meaningfully.
+      expect(() => determineSessionRole('alice', '')).toThrow(RangeError)
+      // An empty self username cannot be compared meaningfully either.
+      expect(() => determineSessionRole('', 'bob')).toThrow(RangeError)
+    })
+  })
+
+  // Prove the role-agnostic wrapper reaches the same keys as the manual calls.
+  it('deriveSessionKeys matches the manually role-dispatched directional keys', () => {
+    // Generate two independent identities named so their sort order is fixed.
+    const alice = generateIdentityKeyPair()
+    const bob = generateIdentityKeyPair()
+    // Derive Alice's keys through the convenience wrapper.
+    const aliceKeys = deriveSessionKeys(
+      { keys: alice, username: 'alice' },
+      { publicKey: bob.publicKey, username: 'bob' },
+    )
+    // Derive Alice's keys through the manual role-specific call for comparison.
+    const expectedAliceKeys = deriveClientSessionKeys(alice, bob.publicKey)
+    // Require both derivation paths to agree exactly.
+    expect(aliceKeys.transmitKey).toEqual(expectedAliceKeys.transmitKey)
+    expect(aliceKeys.receiveKey).toEqual(expectedAliceKeys.receiveKey)
+
+    // Derive Bob's keys through the convenience wrapper from the opposite side.
+    const bobKeys = deriveSessionKeys(
+      { keys: bob, username: 'bob' },
+      { publicKey: alice.publicKey, username: 'alice' },
+    )
+    // Derive Bob's keys through the manual role-specific call for comparison.
+    const expectedBobKeys = deriveServerSessionKeys(bob, alice.publicKey)
+    // Require both derivation paths to agree exactly.
+    expect(bobKeys.transmitKey).toEqual(expectedBobKeys.transmitKey)
+    expect(bobKeys.receiveKey).toEqual(expectedBobKeys.receiveKey)
+  })
+
+  // Prove base64 transport encoding round-trips exactly for wire-format use.
+  it('round-trips arbitrary bytes through base64 transport encoding', () => {
+    // Generate real key-sized random bytes rather than a trivial fixed string.
+    const original = generateIdentityKeyPair().publicKey
+    // Encode the bytes as the format that will travel over JSON/WebSocket.
+    const encoded = encodeBase64(original)
+    // Confirm the transport form is a plain string, not binary.
+    expect(typeof encoded).toBe('string')
+    // Decode and require an exact match with the original bytes.
+    expect(decodeBase64(encoded)).toEqual(original)
   })
 })
