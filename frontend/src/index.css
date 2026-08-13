@@ -399,6 +399,79 @@ body {
   color: #b42318;
 }
 
+/* Present the minimal Slice 3 authenticated placeholder shell. */
+.chat-screen-placeholder {
+  /* Constrain content width for comfortable reading on wide screens. */
+  max-width: 720px;
+  /* Center the shell within the viewport. */
+  margin: 0 auto;
+  /* Preserve comfortable spacing on every screen size. */
+  padding: 32px 24px;
+  /* Stack the header, identity card, and slice note with even rhythm. */
+  display: grid;
+  gap: 20px;
+  /* Fill at least the viewport height with the light application surface. */
+  min-height: 100svh;
+  background: var(--surface);
+}
+
+/* Lay out the account identity and logout action side by side. */
+.chat-placeholder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.chat-placeholder-header h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+}
+
+.chat-placeholder-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* Present the local device-identity summary in the approved card treatment. */
+.chat-placeholder-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+}
+
+.chat-placeholder-card h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.chat-placeholder-card p {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.chat-placeholder-card dt {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.identity-public-key {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
 /* Adapt the card to compact phone widths. */
 @media (max-width: 520px) {
   /* Reduce outer spacing while retaining touch-safe edges. */

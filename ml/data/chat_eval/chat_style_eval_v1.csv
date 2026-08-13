@@ -1,0 +1,81 @@
+message_id,text,label,original_label,source,split
+chat-eval-legit-000,hey are we still on for lunch tomorrow?,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-001,"omg yes that movie was so good, we need to talk about the ending",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-002,can u send me the notes from today's lecture,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-003,"running 5 mins late, save me a seat",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-004,happy bday!! hope ur having an amazing day 🎂,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-005,did you finish the assignment yet lol im stuck on q3,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-006,lol that meme you sent literally killed me,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-007,"mom said dinner's at 7, don't be late",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-008,can you pick up milk on your way home,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-009,just landed! will call you in a bit,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-010,"wyd this weekend, wanna hit the new cafe?",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-011,thanks for helping me move all that furniture yesterday,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-012,the wifi here is so bad lmao,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-013,"sent you the photos from the trip, check ur email",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-014,"bro I'm so tired, exam week is killing me",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-015,"let's reschedule our call to friday, something came up",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-016,congrats on the new job!! so proud of you,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-017,"can you send me your address again, forgot to save it",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-018,"the game starts at 8, don't forget to bring snacks",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-019,"ugh traffic is insane rn, gonna be like 20 mins late",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-020,hey did you get the group project doc I shared,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-021,"haha yeah I saw that tweet too, so cursed",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-022,we still meeting at the library at 3?,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-023,"loved the playlist you made, adding it to my library",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-024,can u proofread my email before I send it to the professor,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-025,"just got back from the gym, absolutely dead",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-026,what time does the store close today,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-027,sending good vibes for your interview tomorrow!,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-028,my phone's at 2% gonna call you back later,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-029,"thank you so much for the birthday gift, I love it",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-030,can we push our study session to sunday instead,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-031,"did you watch the new episode yet, no spoilers pls",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-032,"grabbing coffee, want me to bring you one",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-033,"the concert tickets went on sale, wanna go together",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-034,"sorry for the late reply, been swamped with work",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-035,"hope your flight lands safely, text me when you land",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-036,can you feed the cat while I'm away this weekend,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-037,"that recipe you sent was amazing, making it again tonight",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-038,let me know when you're free to video call,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-039,"good luck on your exam today, you got this",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-000,"hey it's me, I lost my phone, can you send money to this new number urgently",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-001,"OMG i just made $3000 in a week trading crypto, message me and I'll show you how",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-002,"Your Netflix payment failed, update your card here: bit.ly/netflix-billing-fix",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-003,You've been selected for a $500 Amazon gift card! Claim now: giftcard-verify.co/claim,1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-004,"hi, I'm a talent recruiter, we'd love to hire you, just send your bank details to set up payroll",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-005,"URGENT: someone tried logging into your Instagram, verify your password now at instasecure-login.com",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-006,"Congratulations!! You won our weekly giveaway, DM your card number to receive the prize",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-007,"hey bestie, I'm stuck abroad and need $200 wired asap, will pay you back I promise",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-008,"Your package couldn't be delivered, pay a small $1.99 customs fee here: track-delivery-usps.info",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-009,"I'm a widow with $2M inheritance, I need a trustworthy partner to help transfer funds, interested?",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-010,"Your bank flagged suspicious activity, click here to confirm it's you before your account locks",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-011,"hey it's your bank, we need your OTP to verify a recent transaction, reply with the code now",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-012,"I can double any crypto you send me within 24 hours, guaranteed, just send to this wallet",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-013,"This is IT support, we detected a virus on your device, download this tool to fix it immediately",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-014,"you left your card at the store, send your card number so we can hold it for you",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-015,"Hi love, I feel such a connection with you, can you send me itunes gift cards so we can talk more",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-016,Final notice: your electricity will be shut off today unless you pay via this link right now,1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-017,"I'm your new boss, I need you to buy $300 in gift cards for a client meeting, keep receipts",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-018,Click this link to see who viewed your profile 👀 freeprofileviews-check.net,1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-019,"Your account has unusual sign-in activity, verify immediately or it will be permanently suspended",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-020,"I work for the IRS, you owe back taxes, pay now via gift card or a warrant will be issued",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-021,"hey I'm selling my old laptop cheap, just send a deposit via this payment link first",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-022,"You're pre-approved for a $10,000 loan, no credit check, just confirm your SSN to proceed",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-023,Scan this QR code to claim your free reward before it expires in 10 minutes,1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-024,"This is WhatsApp support, your account will be deleted unless you verify your number here",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-025,"I invested with this broker and tripled my savings, DM me and I'll get you set up too",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-026,"Your subscription renewal failed, re-enter your card details here to avoid service interruption",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-027,"hi, this is your delivery driver, I need you to pay an extra fee through this app to release your parcel",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-028,"we matched on the app, I really like you, can you help me pay my rent this month, I'll pay you back",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-029,"Your social security number has been suspended due to suspicious activity, call this number now",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-030,"you've inherited $1,000,000 from a relative you didn't know, send processing fee to claim",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-031,"this investment group guarantees 40% weekly returns, spots filling fast, send your deposit today",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-032,"Someone is trying to reset your password, if this wasn't you enter your current password here to stop it",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-033,"hey it's grandma, I'm in trouble and need bail money wired right away, please don't tell anyone",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-034,"Your PayPal has been limited, verify your identity within 24 hours: paypal-account-check.net",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-035,"I'm a model scout, send your bank info so we can pay your modeling fee in advance",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-036,"your device has a critical security issue, call this toll-free number immediately to fix it",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-037,"You qualify for student loan forgiveness, just confirm your bank account to receive the credit",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-038,"I'm stuck at customs and they want a bribe to release my luggage, can you send $150 now",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-039,"verify your crypto wallet now or your funds will be frozen permanently, link below",1,scam_chat,chat_style_eval_v1,eval_only

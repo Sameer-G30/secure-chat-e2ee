@@ -175,6 +175,58 @@ def evaluate(
     )
 
 
+# Load the hand-curated, chat-style, evaluation-only dataset.
+def load_chat_style_eval_set(path: Path) -> pd.DataFrame:
+    """Return the chat-style eval set, failing loudly if it has not been built yet.
+
+    Per data/label-schema.yaml's evaluation_policy, callers must never pass
+    the result of this function to Pipeline.fit(...) — only .predict(...).
+    """
+
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No chat-style eval set found at {path}. "
+            "Run scripts/build_chat_style_eval_set.py first."
+        )
+    frame = pd.read_csv(path)
+    frame["text"] = frame["text"].fillna("").astype(str).str.strip()
+    return frame.reset_index(drop=True)
+
+
+# Evaluate an already-fitted pipeline against external (non-training) data.
+def evaluate_external(pipeline: Pipeline, external_df: pd.DataFrame) -> BaselineEvaluation:
+    """Score a fitted pipeline's predictions on data it was never trained on.
+
+    Unlike evaluate(), this never calls pipeline.fit(...): the pipeline
+    passed in must already be fitted on in-domain training data. This is
+    the function scripts/evaluate_chat_style_eval.py uses so the hand-curated
+    chat-style set is scored, never trained on.
+    """
+
+    predictions = pipeline.predict(external_df["text"])
+    report = classification_report(
+        external_df["label"],
+        predictions,
+        target_names=list(CLASS_NAMES),
+        output_dict=True,
+        zero_division=0,
+    )
+    matrix = confusion_matrix(
+        external_df["label"], predictions, labels=[LEGITIMATE_LABEL, SCAM_LABEL]
+    )
+    return BaselineEvaluation(
+        train_rows=0,
+        test_rows=len(external_df),
+        classification_report=report,
+        confusion_matrix=matrix.tolist(),
+        source_counts=(
+            external_df["source"].value_counts().to_dict()
+            if "source" in external_df.columns
+            else {}
+        ),
+    )
+
+
 # Render the confusion matrix as an annotated heatmap saved to disk.
 def save_confusion_matrix_plot(evaluation: BaselineEvaluation, output_path: Path) -> None:
     """Save a labeled confusion-matrix heatmap for the README and reports."""

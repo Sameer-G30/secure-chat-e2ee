@@ -1,5 +1,8 @@
 // Register accessible DOM assertions such as toBeInTheDocument for every test.
 import '@testing-library/jest-dom/vitest'
+// Polyfill IndexedDB in jsdom, which implements no storage APIs itself; the
+// key vault (frontend/src/crypto/keyVault.ts) needs a real IndexedDB to exercise.
+import 'fake-indexeddb/auto'
 // Import cleanup so each component test starts with an empty document.
 import { cleanup } from '@testing-library/react'
 // Import Vitest's post-test lifecycle hook.

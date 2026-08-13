@@ -20,6 +20,14 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://secure_chat:change-me@postgres:5432/secure_chat}
       # Permit the local Vite origin in later CORS configuration.
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      # Sign and verify JWTs; override with a real secret outside local development.
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-replace-with-at-least-32-random-bytes}
+      # Pin the JWT signing algorithm.
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      # Keep access tokens short-lived.
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      # Let rotated refresh tokens live longer than access tokens.
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
     # Start the API only after PostgreSQL accepts connections.
     depends_on:
       # Reference the database service by its private DNS name.

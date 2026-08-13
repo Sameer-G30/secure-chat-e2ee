@@ -2,50 +2,43 @@
 import { useState } from 'react'
 // Import the form-event type separately; verbatimModuleSyntax requires type-only imports.
 import type { FormEvent } from 'react'
-// Import the typed backend client this screen now calls for registration.
-import { AuthApiError, registerAccount } from '../api/authClient'
+// Import the typed backend client this screen calls for registration and login.
+import { AuthApiError, loginAccount, registerAccount } from '../api/authClient'
+// Import the key-bootstrap flow that runs once per successful login.
+import { ensureIdentityKeys, IdentitySetupError } from '../crypto/identitySetup'
+// Import the session context this screen populates after a successful login.
+import { useAuth } from '../context/AuthContext'
 
 // Identify the two authentication views without ambiguous booleans.
 type AuthMode = 'login' | 'register'
 
-// Identify the registration request lifecycle so the UI can disable and announce state.
-type RegisterStatus = 'idle' | 'submitting' | 'success' | 'error'
+// Identify a request lifecycle so the UI can disable controls and announce state.
+type RequestStatus = 'idle' | 'submitting' | 'success' | 'error'
 
-// Render the accessible authentication screen, now wired to real registration.
+// Render the accessible authentication screen, now wired to real login and registration.
 export function AuthScreen() {
+  // Make the session setter available for a successful login's key-bootstrap step.
+  const { setSession } = useAuth()
+
   // Start with the returning-user login view.
   const [mode, setMode] = useState<AuthMode>('login')
   // Derive readable display state from the current authentication mode.
   const isRegistering = mode === 'register'
 
-  // Track the in-flight registration request's lifecycle.
-  const [registerStatus, setRegisterStatus] = useState<RegisterStatus>('idle')
+  // Track the in-flight request's lifecycle, shared by both login and registration.
+  const [status, setStatus] = useState<RequestStatus>('idle')
   // Hold the specific message to show for the current error or success state.
-  const [registerMessage, setRegisterMessage] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
 
-  // Switch modes and clear any stale status from a previous registration attempt.
+  // Switch modes and clear any stale status from a previous attempt.
   function switchMode(nextMode: AuthMode) {
-    // Reset the registration lifecycle so switching back doesn't show a stale result.
-    setRegisterStatus('idle')
-    // Clear any previously displayed message.
-    setRegisterMessage(null)
-    // Apply the requested view.
+    setStatus('idle')
+    setMessage(null)
     setMode(nextMode)
   }
 
-  // Handle registration submissions against the real backend; login arrives in Slice 3.
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    // Prevent the browser's native full-page form submission.
-    event.preventDefault()
-
-    // Login is not implemented yet; keep the previous slice's explicit no-op behavior.
-    if (!isRegistering) {
-      return
-    }
-
-    // Read field values directly from the submitted form.
-    const form = event.currentTarget
-    const formData = new FormData(form)
+  // Handle a registration submission against the real backend.
+  async function handleRegister(form: HTMLFormElement, formData: FormData) {
     const username = String(formData.get('username') ?? '').trim()
     const email = String(formData.get('email') ?? '').trim()
     const password = String(formData.get('password') ?? '')
@@ -53,29 +46,75 @@ export function AuthScreen() {
 
     // Validate password confirmation client-side before spending a network round trip.
     if (password !== confirmPassword) {
-      setRegisterStatus('error')
-      setRegisterMessage('Passwords do not match.')
+      setStatus('error')
+      setMessage('Passwords do not match.')
       return
     }
 
-    // Enter the submitting state so the button disables and announces progress.
-    setRegisterStatus('submitting')
-    setRegisterMessage(null)
-
+    setStatus('submitting')
+    setMessage(null)
     try {
-      // Call the real backend registration endpoint added in Slice 2.
       const account = await registerAccount({ username, email, password })
-      // Report success with the confirmed username; no token/session yet (Slice 3).
-      setRegisterStatus('success')
-      setRegisterMessage(`Account "${account.username}" created. Login arrives in the next checkpoint.`)
-      // Clear the form so a resubmission cannot silently double-submit the same values.
+      setStatus('success')
+      setMessage(`Account "${account.username}" created. Log in below to finish setup.`)
       form.reset()
+      // Hand the user to the login view; key generation happens on first login (§6.1),
+      // once an access token exists to authenticate the POST /keys/me upload.
+      setMode('login')
     } catch (error) {
-      // Distinguish the API's typed errors from unexpected failures for an honest message.
-      const message =
+      const errorMessage =
         error instanceof AuthApiError ? error.message : 'Registration failed. Please try again shortly.'
-      setRegisterStatus('error')
-      setRegisterMessage(message)
+      setStatus('error')
+      setMessage(errorMessage)
+    }
+  }
+
+  // Handle a login submission against the real backend, then bootstrap this device's identity keys.
+  async function handleLogin(formData: FormData) {
+    const username = String(formData.get('username') ?? '').trim()
+    const password = String(formData.get('password') ?? '')
+
+    setStatus('submitting')
+    setMessage(null)
+    try {
+      const tokens = await loginAccount({ username, password })
+      // Generate-and-upload (first login) or unseal (returning login) this device's identity key.
+      const identity = await ensureIdentityKeys(
+        username,
+        password,
+        tokens.accessToken,
+        tokens.hasPublicKey,
+      )
+      // Only now, with verified credentials and usable local key material, start the session.
+      setSession({
+        username,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        identityKeyPair: identity.keyPair,
+      })
+      // No further UI state matters: App renders ChatScreen once a session exists.
+    } catch (error) {
+      const errorMessage =
+        error instanceof IdentitySetupError
+          ? error.message
+          : error instanceof AuthApiError
+            ? error.message
+            : 'Login failed. Please try again shortly.'
+      setStatus('error')
+      setMessage(errorMessage)
+    }
+  }
+
+  // Route form submissions to the mode-specific handler.
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    // Prevent the browser's native full-page form submission.
+    event.preventDefault()
+    const form = event.currentTarget
+    const formData = new FormData(form)
+    if (isRegistering) {
+      await handleRegister(form, formData)
+    } else {
+      await handleLogin(formData)
     }
   }
 
@@ -99,8 +138,8 @@ export function AuthScreen() {
           <p>End-to-end encrypted messaging with on-device scam detection</p>
         </header>
 
-        {/* Registration now submits to the real backend; login stays a preview. */}
-        <form className="auth-form" onSubmit={handleSubmit}>
+        {/* Both login and registration now submit to the real backend. */}
+        <form className="auth-form" onSubmit={(event) => void handleSubmit(event)}>
           {/* Collect the account identifier in both authentication modes. */}
           <div className="input-group">
             {/* Associate the visible label with its username field. */}
@@ -164,24 +203,22 @@ export function AuthScreen() {
           )}
 
           {/* Show the submit action with mode-specific wording and busy state. */}
-          <button
-            className="primary-button"
-            type="submit"
-            disabled={isRegistering && registerStatus === 'submitting'}
-          >
+          <button className="primary-button" type="submit" disabled={status === 'submitting'}>
             {/* Explain the action performed by the current form mode and request state. */}
             {isRegistering
-              ? registerStatus === 'submitting'
+              ? status === 'submitting'
                 ? 'Creating account…'
                 : 'Create account'
-              : 'Log in'}
+              : status === 'submitting'
+                ? 'Logging in…'
+                : 'Log in'}
           </button>
         </form>
 
-        {/* Announce registration outcomes to sighted and assistive-technology users alike. */}
-        {isRegistering && registerMessage && (
-          <p className={`auth-feedback auth-feedback-${registerStatus}`} role="status">
-            {registerMessage}
+        {/* Announce login/registration outcomes to sighted and assistive-technology users alike. */}
+        {message && (
+          <p className={`auth-feedback auth-feedback-${status}`} role="status">
+            {message}
           </p>
         )}
 
@@ -202,13 +239,6 @@ export function AuthScreen() {
             {isRegistering ? 'Log in' : 'Create one'}
           </button>
         </p>
-
-        {/* Clarify that login specifically is still a preview pending Slice 3. */}
-        {!isRegistering && (
-          <p className="slice-note" role="status">
-            Login arrives with JWT auth in the next checkpoint — registration is live.
-          </p>
-        )}
       </section>
     </main>
   )

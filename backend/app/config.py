@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://secure_chat:change-me@postgres:5432/secure_chat"
     # Define the browser origin that future CORS policy will permit.
     frontend_origin: str = "http://localhost:5173"
+    # Sign and verify JWTs with a secret that must be overridden in every real deployment.
+    jwt_secret_key: str = "replace-with-at-least-32-random-bytes"
+    # Pin the signing algorithm explicitly rather than trusting a token-supplied header.
+    jwt_algorithm: str = "HS256"
+    # Keep access tokens short-lived so a leaked token has a small blast radius.
+    access_token_expire_minutes: int = 15
+    # Let refresh tokens live far longer, since rotation-on-use limits replay risk.
+    refresh_token_expire_days: int = 7
     # Read case-insensitive variables without silently accepting unknown keys.
     model_config = SettingsConfigDict(
         # Load a local untracked file when the API runs outside Docker.

@@ -57,3 +57,41 @@ class RegisterResponse(BaseModel):
 
     # Allow constructing this schema directly from the SQLAlchemy ORM instance.
     model_config = {"from_attributes": True}
+
+
+# Validate the exact fields a login attempt must supply.
+class LoginRequest(BaseModel):
+    """Represent the client-submitted login payload."""
+
+    # Identify which account to authenticate.
+    username: str = Field(min_length=1, max_length=_USERNAME_MAX_LENGTH)
+    # Accept the plaintext password only for the duration of this HTTPS request.
+    #
+    # Deliberately no min_length policy re-check here: enforcing the registration
+    # password policy on login would leak information about which usernames are
+    # registered accounts versus not, for no security benefit (Argon2id
+    # verification against a wrong-length password already just fails).
+    password: str = Field(min_length=1, max_length=256)
+
+
+# Validate the single field a token-refresh request must supply.
+class RefreshRequest(BaseModel):
+    """Represent the client-submitted refresh-rotation payload."""
+
+    # Carry the refresh token whose hash the server looks up and rotates.
+    refresh_token: str = Field(min_length=1)
+
+
+# Describe the token pair issued after a successful login or rotation.
+class TokenPairResponse(BaseModel):
+    """Represent one freshly issued access/refresh token pair."""
+
+    # Carry the short-lived JWT used to authenticate subsequent API requests.
+    access_token: str
+    # Carry the longer-lived, single-use JWT used only to request a new pair.
+    refresh_token: str
+    # Name the standard bearer scheme so clients know how to send the access token.
+    token_type: str = "bearer"
+    # Tell the client whether this account still needs to complete key upload,
+    # so it knows whether to run the client-side keypair-generation flow now.
+    has_public_key: bool

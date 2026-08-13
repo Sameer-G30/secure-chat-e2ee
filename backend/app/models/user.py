@@ -37,11 +37,22 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(nullable=False)
     # Store the base64 X25519 public key uploaded by the client.
     #
-    # Nullable in this slice: the spec's POST /keys/me upload endpoint that
-    # populates this column ships in Slice 3. Making the column NOT NULL now
-    # would force registration to invent a placeholder key, which is worse
-    # than an honest nullable column plus a Slice-3 migration that tightens
-    # the constraint once every account is required to have uploaded a key.
+    # Still nullable in Slice 3, by design rather than oversight: POST
+    # /keys/me now exists and requires a bearer access token, but
+    # POST /auth/register intentionally returns no tokens (its response
+    # contract is exercised by Slice 2's tests and stays account-metadata
+    # only). Key upload therefore happens on the client's first
+    # authenticated session (immediately after the first successful
+    # POST /auth/login), not at the moment the row is inserted. Adding a
+    # database NOT NULL constraint would force one of two worse designs:
+    # bundling key upload into registration itself (coupling account
+    # creation to a client-side crypto step that can fail independently),
+    # or having the client invent a placeholder key. This documents the
+    # transitional rule instead: a freshly registered account is not yet
+    # usable for E2EE messaging until its first login completes key
+    # upload, and Slice 4's conversation/message endpoints must check
+    # `public_key is not None` (both parties) before allowing a
+    # conversation to start.
     public_key: Mapped[str | None] = mapped_column(nullable=True, default=None)
     # Record account creation time using the database server's clock.
     created_at: Mapped[datetime] = mapped_column(

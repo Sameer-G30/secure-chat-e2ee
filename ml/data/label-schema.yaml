@@ -55,6 +55,14 @@ source_mappings:
     Safe Email: 0
     # Map Phishing Email rows to the warning class.
     Phishing Email: 1
+  # Normalize the hand-curated, evaluation-only chat-style set (Slice 3).
+  # Rows are authored with the binary label already assigned; original_label
+  # is documentation only and never re-derived from this mapping.
+  chat_style_eval_v1:
+    # Map hand-authored ordinary chat messages to the legitimate class.
+    legitimate_chat: 0
+    # Map hand-authored scam/phishing chat messages to the warning class.
+    scam_chat: 1
 
 # Reserve the curated chat corpus exclusively for out-of-domain evaluation.
 evaluation_policy:

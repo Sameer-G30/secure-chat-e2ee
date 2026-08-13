@@ -16,8 +16,9 @@ from slowapi.errors import RateLimitExceeded
 # Import the validated settings model and cached provider.
 from app.config import Settings, get_settings
 
-# Import the authentication router added in Slice 2.
-from app.routers import auth
+# Import the authentication router added in Slice 2 and extended in Slice 3,
+# and the key upload/lookup router added in Slice 3.
+from app.routers import auth, keys
 
 # Import the shared limiter instance so the app enforces the same rate limits.
 from app.security.rate_limit import limiter
@@ -28,8 +29,8 @@ app = FastAPI(
     title="Secure Chat API",
     # Describe the server's ciphertext-only trust boundary.
     description="Stores and relays encrypted message envelopes without plaintext access.",
-    # Identify the second vertical-slice API version.
-    version="0.2.0",
+    # Identify the third vertical-slice API version.
+    version="0.3.0",
 )
 
 # Attach the limiter so every @limiter.limit(...) decorator can read shared state.
@@ -44,7 +45,7 @@ app.add_middleware(
     CORSMiddleware,
     # Read the permitted browser origin from validated settings, not a hardcoded value.
     allow_origins=[get_settings().frontend_origin],
-    # Permit cookies/authorization headers once auth tokens arrive in Slice 3.
+    # Permit the Authorization header carrying Slice 3's bearer access tokens.
     allow_credentials=True,
     # Allow the HTTP verbs this API's routers currently use.
     allow_methods=["GET", "POST"],
@@ -54,6 +55,8 @@ app.add_middleware(
 
 # Mount the authentication router's endpoints onto the application.
 app.include_router(auth.router)
+# Mount the key upload/lookup router's endpoints onto the application.
+app.include_router(keys.router)
 
 
 # Expose a lightweight endpoint for local checks and container health probes.
