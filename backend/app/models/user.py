@@ -50,9 +50,11 @@ class User(Base):
     # or having the client invent a placeholder key. This documents the
     # transitional rule instead: a freshly registered account is not yet
     # usable for E2EE messaging until its first login completes key
-    # upload, and Slice 4's conversation/message endpoints must check
-    # `public_key is not None` (both parties) before allowing a
-    # conversation to start.
+    # upload. Slice 4 conversation and message endpoints check
+    # `public_key is not None` for both parties before allowing a
+    # conversation to start or a ciphertext envelope to be relayed.
+    # A database NOT NULL constraint is still not added: registration
+    # remains decoupled from client-side key generation.
     public_key: Mapped[str | None] = mapped_column(nullable=True, default=None)
     # Record account creation time using the database server's clock.
     created_at: Mapped[datetime] = mapped_column(

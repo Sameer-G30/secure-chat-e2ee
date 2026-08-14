@@ -6,8 +6,9 @@ sealing happen entirely client-side (frontend/src/crypto/keyExchange.ts and
 keyVault.ts).
 """
 
-# Import Annotated to describe dependency-injected parameter metadata.
+# Import Annotated and UUID for dependency metadata and the §6.4 epoch path.
 from typing import Annotated
+from uuid import UUID
 
 # Import FastAPI's routing, dependency, and HTTP-error primitives.
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,14 +23,39 @@ from app.db import get_db
 # Import the ORM model this router reads and writes.
 from app.models.user import User
 
+# Import the epoch response so the §6.4 alias can reuse the conversations schema.
+from app.schemas.conversations import EpochResponse
+
 # Import the validated request and response shapes for this router's endpoints.
 from app.schemas.keys import PublicKeyResponse, PublicKeyUploadRequest
 
 # Import the shared bearer-token authentication dependency.
 from app.security.dependencies import get_current_user
 
-# Group both key endpoints under one versionable prefix and tag.
+# Import the membership-gated epoch reader shared with the conversations router.
+from app.services.conversations import get_epoch_for_participant
+
+# Group key endpoints under one versionable prefix and tag.
 router = APIRouter(prefix="/keys", tags=["keys"])
+
+
+# Spec §6.4: GET /keys/conversations/{id}/epoch — registered before /{username}
+# so the literal path "conversations" is never treated as a username lookup.
+@router.get("/conversations/{conversation_id}/epoch", response_model=EpochResponse)
+async def get_conversation_epoch(
+    # Identify which conversation's non-secret counter to return.
+    conversation_id: UUID,
+    # Require a valid access token; only a member may read the epoch.
+    current_user: Annotated[User, Depends(get_current_user)],
+    # Inject a request-scoped async database session.
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> EpochResponse:
+    """Return current_epoch, a plain integer, not a key.
+
+    Equivalent to GET /conversations/{id}/epoch. Clients may use either path.
+    """
+
+    return await get_epoch_for_participant(db, conversation_id, current_user)
 
 
 # Upload or replace the authenticated caller's own X25519 public key.

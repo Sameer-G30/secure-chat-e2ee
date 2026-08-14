@@ -36,6 +36,8 @@ dev = [
     "aiosqlite>=0.20,<1",
     # Exercise API routes through FastAPI's synchronous test client.
     "httpx>=0.28,<1",
+    # Exercise WebSocket ciphertext-relay endpoints on the same asyncio loop as HTTP tests.
+    "httpx-ws>=0.9.0",
     # Type-check application code with strict static analysis.
     "mypy>=1.17,<2",
     # Run backend unit and integration tests.

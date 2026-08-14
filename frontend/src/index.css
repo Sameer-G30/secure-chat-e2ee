@@ -399,93 +399,175 @@ body {
   color: #b42318;
 }
 
-/* Present the minimal Slice 3 authenticated placeholder shell. */
-.chat-screen-placeholder {
-  /* Constrain content width for comfortable reading on wide screens. */
+/* Present the Slice 4 authenticated chat shell on the light application surface. */
+.chat-screen {
   max-width: 720px;
-  /* Center the shell within the viewport. */
   margin: 0 auto;
-  /* Preserve comfortable spacing on every screen size. */
-  padding: 32px 24px;
-  /* Stack the header, identity card, and slice note with even rhythm. */
+  padding: 24px;
   display: grid;
-  gap: 20px;
-  /* Fill at least the viewport height with the light application surface. */
+  grid-template-rows: auto auto auto auto 1fr auto auto;
+  gap: 16px;
   min-height: 100svh;
   background: var(--surface);
 }
 
 /* Lay out the account identity and logout action side by side. */
-.chat-placeholder-header {
+.chat-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
 }
 
-.chat-placeholder-header h1 {
+.chat-header h1 {
   margin: 0 0 4px;
   font-size: 24px;
   letter-spacing: -0.02em;
 }
 
-.chat-placeholder-header p {
+.chat-header p {
   margin: 0;
   color: var(--text-secondary);
   font-size: 14px;
 }
 
-/* Present the local device-identity summary in the approved card treatment. */
-.chat-placeholder-card {
+/* Collect the peer username and the start-chat action on one row when space allows. */
+.chat-peer-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.chat-start-button {
+  width: auto;
+  min-width: 200px;
+}
+
+/* Announce connection state without looking like an error. */
+.chat-status {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* Scroll the in-memory transcript independently of the composer. */
+.chat-transcript {
+  min-height: 280px;
+  max-height: 50vh;
+  overflow: auto;
+  padding: 16px;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 24px;
 }
 
-.chat-placeholder-card h2 {
-  margin: 0 0 8px;
-  font-size: 16px;
-}
-
-.chat-placeholder-card p {
-  margin: 0 0 16px;
+.chat-empty {
+  margin: 0;
   color: var(--text-secondary);
   font-size: 14px;
   line-height: 1.5;
 }
 
-.chat-placeholder-card dt {
-  font-size: 12px;
-  font-weight: 650;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
+.chat-message-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
 }
 
-.identity-public-key {
-  margin: 0;
-  padding: 10px 12px;
-  background: var(--surface);
+/* Shared bubble chrome matching the legacy sent/received treatment. */
+.chat-bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.chat-bubble-sent {
+  justify-self: end;
+  color: #fff;
+  background: linear-gradient(135deg, var(--grad-start), var(--grad-end));
+}
+
+.chat-bubble-received {
+  justify-self: start;
+  color: var(--text-primary);
+  background: #fff;
+  border: 1px solid var(--border);
+}
+
+/* Show authentication failure as a distinct state, never as garbled plaintext. */
+.chat-bubble-failed {
+  justify-self: start;
+  color: #b42318;
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid rgba(220, 38, 38, 0.25);
+}
+
+/* Keep the composer on one row beneath the transcript. */
+.chat-composer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+}
+
+.chat-composer input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 2px solid var(--border);
   border-radius: var(--radius-sm);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  word-break: break-all;
+  font: inherit;
+  background: #fff;
+  color: var(--text-primary);
+}
+
+.chat-composer input:focus {
+  outline: none;
+  border-color: var(--grad-start);
+  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.18);
+}
+
+.chat-send-button {
+  width: auto;
+  min-width: 96px;
+}
+
+/* Hide a label visually while keeping it available to assistive technology. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Adapt the card to compact phone widths. */
 @media (max-width: 520px) {
-  /* Reduce outer spacing while retaining touch-safe edges. */
   .auth-screen {
-    /* Use narrower viewport padding on phones. */
     padding: 16px;
   }
 
-  /* Reduce card spacing without changing its visual structure. */
   .auth-card {
-    /* Use compact but comfortable inner spacing. */
     padding: 36px 22px 28px;
-    /* Slightly reduce corners on very narrow screens. */
     border-radius: 26px;
+  }
+
+  .chat-peer-form,
+  .chat-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-start-button,
+  .chat-send-button {
+    width: 100%;
   }
 }
 

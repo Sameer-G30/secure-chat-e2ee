@@ -17,8 +17,9 @@ from slowapi.errors import RateLimitExceeded
 from app.config import Settings, get_settings
 
 # Import the authentication router added in Slice 2 and extended in Slice 3,
-# and the key upload/lookup router added in Slice 3.
-from app.routers import auth, keys
+# the key upload/lookup router added in Slice 3 (plus the §6.4 epoch alias),
+# and the Slice 4 conversation REST + WebSocket ciphertext-relay routers.
+from app.routers import auth, conversations, keys, ws
 
 # Import the shared limiter instance so the app enforces the same rate limits.
 from app.security.rate_limit import limiter
@@ -29,8 +30,8 @@ app = FastAPI(
     title="Secure Chat API",
     # Describe the server's ciphertext-only trust boundary.
     description="Stores and relays encrypted message envelopes without plaintext access.",
-    # Identify the third vertical-slice API version.
-    version="0.3.0",
+    # Identify the fourth vertical-slice API version.
+    version="0.4.0",
 )
 
 # Attach the limiter so every @limiter.limit(...) decorator can read shared state.
@@ -55,8 +56,12 @@ app.add_middleware(
 
 # Mount the authentication router's endpoints onto the application.
 app.include_router(auth.router)
-# Mount the key upload/lookup router's endpoints onto the application.
+# Mount the key upload/lookup router (and the spec §6.4 epoch alias).
 app.include_router(keys.router)
+# Mount 1:1 conversation create/fetch and the REST epoch endpoint.
+app.include_router(conversations.router)
+# Mount the authenticated ciphertext-only WebSocket relay.
+app.include_router(ws.router)
 
 
 # Expose a lightweight endpoint for local checks and container health probes.

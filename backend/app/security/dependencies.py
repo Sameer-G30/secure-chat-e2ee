@@ -33,18 +33,17 @@ _bearer_scheme = HTTPBearer(
 )
 
 
-# Resolve the authenticated account from a validated bearer access token.
-async def get_current_user(
-    # Extract and require a well-formed "Authorization: Bearer <token>" header.
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer_scheme)],
-    # Inject a request-scoped async database session.
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> User:
-    """Return the User row identified by a verified access token's subject claim."""
+# Resolve the authenticated account from a raw access-token string.
+async def get_user_from_access_token(raw_token: str, db: AsyncSession) -> User:
+    """Return the User row identified by a verified access token's subject claim.
+
+    Used by both HTTP Bearer auth and the WebSocket query-string handshake so
+    the two paths cannot drift onto different verification rules.
+    """
 
     try:
         # Verify signature, expiry, and that this is specifically an access token.
-        payload = decode_token(credentials.credentials, expected_type=ACCESS_TOKEN_TYPE)
+        payload = decode_token(raw_token, expected_type=ACCESS_TOKEN_TYPE)
     except TokenError as exc:
         # Never distinguish "expired" from "malformed" to callers; both are just unauthenticated.
         raise HTTPException(
@@ -68,3 +67,16 @@ async def get_current_user(
             status.HTTP_401_UNAUTHORIZED, detail="account for this token no longer exists"
         )
     return user
+
+
+# Resolve the authenticated account from a validated bearer access token.
+async def get_current_user(
+    # Extract and require a well-formed "Authorization: Bearer <token>" header.
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer_scheme)],
+    # Inject a request-scoped database session.
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    """Return the User row identified by the request's Authorization bearer token."""
+
+    # Delegate to the shared verifier so HTTP and WebSocket auth stay identical.
+    return await get_user_from_access_token(credentials.credentials, db)

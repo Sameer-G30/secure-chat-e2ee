@@ -1,7 +1,7 @@
 """Provide a fast, isolated database and HTTP client for backend tests."""
 
-# Import AsyncIterator to type async fixture generators.
-from collections.abc import AsyncIterator
+# Import AsyncIterator and Iterator to type async and sync fixture generators.
+from collections.abc import AsyncIterator, Iterator
 
 # Import pytest and pytest-asyncio's fixture decorator.
 import pytest
@@ -23,6 +23,7 @@ from app import models  # noqa: F401
 from app.db import Base, get_db
 from app.main import app
 from app.security.rate_limit import limiter
+from app.services.relay import connection_hub
 
 # Use an in-memory SQLite database so tests never require a running Postgres
 # container or network access; StaticPool keeps the single in-memory database
@@ -82,7 +83,7 @@ async def client(_engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
     # Reset slowapi's in-memory counters so earlier tests cannot exhaust a later one's limit.
     limiter.reset()
 
-    # Route requests through the ASGI app without opening a real network socket.
+    # Route HTTP requests through the ASGI app without opening a real network socket.
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as test_client:
         # Hand control to the test function.
@@ -90,3 +91,16 @@ async def client(_engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
 
     # Remove the override so later tests are unaffected by this fixture.
     app.dependency_overrides.pop(get_db, None)
+
+
+# Drop in-process WebSocket rooms between tests so fan-out cannot leak across cases.
+@pytest.fixture(autouse=True)
+def _reset_connection_hub() -> Iterator[None]:
+    """Reset the ciphertext relay hub before and after every test."""
+
+    # Forget every tracked socket from a previous case.
+    connection_hub.reset()
+    # Hand control to the test function.
+    yield
+    # Forget sockets this test registered, even if it failed mid-connection.
+    connection_hub.reset()
