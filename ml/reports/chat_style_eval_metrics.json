@@ -1,45 +1,53 @@
 {
-  "trained_on_rows": 63492,
-  "chat_eval_rows": 80,
+  "trained_on_rows": 52539,
+  "trained_on": "train_plus_val_processed_chat",
+  "held_out_in_domain_test_rows": 5838,
+  "chat_eval_rows": 200,
+  "chosen_C": 4.0,
+  "chosen_threshold": 0.3,
+  "threshold_source": "reports/baseline_metrics.json (validation-frozen)",
+  "retuned_on_chat_eval": false,
+  "chat_style_eval_training_allowed": false,
   "classification_report": {
     "legitimate": {
-      "precision": 0.8297872340425532,
-      "recall": 0.975,
-      "f1-score": 0.896551724137931,
-      "support": 40.0
+      "precision": 0.6857142857142857,
+      "recall": 0.96,
+      "f1-score": 0.8,
+      "support": 100.0
     },
     "scam": {
-      "precision": 0.9696969696969697,
-      "recall": 0.8,
-      "f1-score": 0.8767123287671232,
-      "support": 40.0
+      "precision": 0.9333333333333333,
+      "recall": 0.56,
+      "f1-score": 0.7,
+      "support": 100.0
     },
-    "accuracy": 0.8875,
+    "accuracy": 0.76,
     "macro avg": {
-      "precision": 0.8997421018697614,
-      "recall": 0.8875,
-      "f1-score": 0.8866320264525271,
-      "support": 80.0
+      "precision": 0.8095238095238095,
+      "recall": 0.76,
+      "f1-score": 0.75,
+      "support": 200.0
     },
     "weighted avg": {
-      "precision": 0.8997421018697616,
-      "recall": 0.8875,
-      "f1-score": 0.8866320264525271,
-      "support": 80.0
+      "precision": 0.8095238095238095,
+      "recall": 0.76,
+      "f1-score": 0.75,
+      "support": 200.0
     }
   },
   "confusion_matrix": [
     [
-      39,
-      1
+      96,
+      4
     ],
     [
-      8,
-      32
+      44,
+      56
     ]
   ],
   "confusion_matrix_labels": [
     "legitimate",
     "scam"
-  ]
+  ],
+  "live_url_reputation": false
 }

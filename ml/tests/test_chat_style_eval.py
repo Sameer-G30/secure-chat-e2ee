@@ -96,7 +96,7 @@ def test_evaluate_external_reports_metrics_without_fitting(
     """Assert evaluate_external scores an out-of-domain set using only .predict()."""
 
     chat_eval_df = load_chat_style_eval_set(synthetic_chat_eval_path)
-    result = evaluate_external(fitted_pipeline, chat_eval_df)
+    result = evaluate_external(fitted_pipeline, chat_eval_df, threshold=0.5)
 
     # train_rows is always 0 here: this function must never fit anything.
     assert result.train_rows == 0
@@ -107,3 +107,22 @@ def test_evaluate_external_reports_metrics_without_fitting(
         assert 0.0 <= class_metrics["recall"] <= 1.0
     assert len(result.confusion_matrix) == 2
     assert sum(sum(row) for row in result.confusion_matrix) == len(chat_eval_df)
+    # The frozen threshold must be recorded on the result.
+    assert result.threshold == 0.5
+
+
+# Confirm evaluate_external applies a frozen threshold instead of sklearn's 0.5.
+def test_evaluate_external_honors_frozen_threshold(
+    fitted_pipeline, synthetic_chat_eval_path: Path
+) -> None:
+    """Assert threshold=0.0 predicts every locked-eval row as scam."""
+
+    chat_eval_df = load_chat_style_eval_set(synthetic_chat_eval_path)
+    result = evaluate_external(fitted_pipeline, chat_eval_df, threshold=0.0)
+    # [[TN, FP], [FN, TP]] with all predicted scam → TN=0, FN=0, FP+TP = n.
+    true_negative, false_positive = result.confusion_matrix[0]
+    false_negative, true_positive = result.confusion_matrix[1]
+    assert true_negative == 0
+    assert false_negative == 0
+    assert false_positive + true_positive == len(chat_eval_df)
+

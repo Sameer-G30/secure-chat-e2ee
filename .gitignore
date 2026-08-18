@@ -21,6 +21,7 @@ coverage/
 # Exclude local ML datasets, generated model artifacts, and notebook checkpoints.
 ml/data/raw/
 ml/data/processed/
+ml/data/processed_chat/
 ml/models/
 .ipynb_checkpoints/
 

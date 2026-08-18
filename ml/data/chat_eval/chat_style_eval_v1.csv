@@ -39,6 +39,66 @@ chat-eval-legit-036,can you feed the cat while I'm away this weekend,0,legitimat
 chat-eval-legit-037,"that recipe you sent was amazing, making it again tonight",0,legitimate_chat,chat_style_eval_v1,eval_only
 chat-eval-legit-038,let me know when you're free to video call,0,legitimate_chat,chat_style_eval_v1,eval_only
 chat-eval-legit-039,"good luck on your exam today, you got this",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-040,can you review the pr when you get a sec,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-041,"i'm outside, should i park in the back lot",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-042,we still on for tennis at 6,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-043,"my laptop charger died, you have an extra",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-044,sending the zoom link for class https://zoom.us/j/5551112222,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-045,here's the shared notes https://docs.google.com/document/d/1abcNotesDemo,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-046,map to the restaurant https://maps.google.com/?q=Oak+Street+Bistro,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-047,the github readme is here https://github.com/example/notes#readme,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-048,"mom's flight lands at 4:10, can you pick her up",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-049,i'll bring dessert if you handle mains,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-050,that article you sent was actually really good,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-051,do we need a reservation or is it walk-in,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-052,class got moved to room 204 btw,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-053,"i left your jacket in my car, grabbing it later",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-054,wanna watch the match at my place,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-055,coffee tomorrow before standup?,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-056,the printer on 3rd floor is working again,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-057,thanks for covering my shift yesterday,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-058,i booked saturday 2pm for the haircut,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-059,"lol i just saw your story, the dog is so cute",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-060,"i'm skipping the gym today, back tomorrow",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-061,"reminder: rent is due friday, i already sent my half",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-062,here's the recipe https://www.allrecipes.com/recipe/22764/potato-soup,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-063,meeting notes are in the usual folder,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-064,can we swap tuesdays for the carpool,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-065,"i finished the slides, tell me if slide 4 is too busy",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-066,"caught the bus, there in 15",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-067,"your package arrived, i signed for it",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-068,we should try that new ramen place,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-069,"i'm making pasta, you want some leftover",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-070,"prof posted grades, check the portal",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-071,i'll be offline on a hike till sunday,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-072,"bring a jacket, it's windy at the lake",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-073,did you see the group chat about saturday,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-074,i can take notes if you lead the discussion,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-075,the museum is free this thursday,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-076,need your opinion on these two paint colors,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-077,"i set an alarm, don't let me sleep past 8",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-078,sending you the track i mentioned,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-079,"we still have milk, just need eggs",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-080,"my cousin is in town, dinner friday?",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-081,that lecture made way more sense today,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-082,i'll upload the photos tonight,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-083,can you water the plants too not just the cat,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-084,i found a cheaper textbook edition,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-085,let's leave by 7 to beat traffic,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-086,"the trailer looks fun, we should go opening week",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-087,i saved you a bagel in the kitchen,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-088,your umbrella is still in my backpack,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-089,study room 3 is free at 2 if we grab it,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-090,i voted for the pizza place in the poll,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-091,"thanks, that explanation actually clicked",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-092,"i'm on the train, call you when i get off",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-093,we need more chairs if 8 people are coming,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-094,here's the public docs https://support.google.com/docs,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-095,the weather app says rain after 5,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-096,i'll handle dishes if you cook,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-097,just confirming 3pm at the library still works,0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-098,"office wifi is guest-office, password is on the fridge",0,legitimate_chat,chat_style_eval_v1,eval_only
+chat-eval-legit-099,putting the extra tickets in your mailbox later,0,legitimate_chat,chat_style_eval_v1,eval_only
 chat-eval-scam-000,"hey it's me, I lost my phone, can you send money to this new number urgently",1,scam_chat,chat_style_eval_v1,eval_only
 chat-eval-scam-001,"OMG i just made $3000 in a week trading crypto, message me and I'll show you how",1,scam_chat,chat_style_eval_v1,eval_only
 chat-eval-scam-002,"Your Netflix payment failed, update your card here: bit.ly/netflix-billing-fix",1,scam_chat,chat_style_eval_v1,eval_only
@@ -79,3 +139,63 @@ chat-eval-scam-036,"your device has a critical security issue, call this toll-fr
 chat-eval-scam-037,"You qualify for student loan forgiveness, just confirm your bank account to receive the credit",1,scam_chat,chat_style_eval_v1,eval_only
 chat-eval-scam-038,"I'm stuck at customs and they want a bribe to release my luggage, can you send $150 now",1,scam_chat,chat_style_eval_v1,eval_only
 chat-eval-scam-039,"verify your crypto wallet now or your funds will be frozen permanently, link below",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-040,"your icloud storage is full, confirm billing at appleid-secure-billing.net/login",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-041,"we need your seed phrase to sync the wallet, reply with the 12 words",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-042,"this airdrop ends in 20 minutes, connect wallet at claim-drop.example.xyz",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-043,"i can get you verified on the exchange, just send a selfie holding your id and a code",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-044,"customs held your parcel, unlock with a card payment at parcel-unlock.top/pay",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-045,"your cousin anna changed numbers, send 400 for the hospital bill today",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-046,"hr payroll update, reply with routing number and ssn to keep getting paid",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-047,"police warrant in your name, pay the processing fee with bitcoin now",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-048,"your steam inventory will be reset, log in at steamcommunnity-login.com",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-049,"i'm locked out of my exchange, can you receive my crypto then send it back",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-050,"kids school trip fee, pay this new vendor link before noon",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-051,"your domain expires tonight, renew with card at domain-renew-now.click",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-052,"we found your car on camera, pay the fine here to avoid towing",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-053,send amazon cards so i can join the video app they require for dating,1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-054,"your 2fa backup codes leaked, confirm them here to rotate",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-055,"tiktok copyright strike, appeal at tiktok-appeals-help.io/verify",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-056,"i already paid the courier, just refund me to this cashapp",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-057,"your nft whitelist spot, mint from this contract before gas spikes",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-058,"bank: unusual venmo, reply YES and your pin to approve",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-059,"remote job, buy the laptop from our partner link and we'll reimburse",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-060,"your recovery email was changed, undo at account-restore-secure.com",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-061,"doctor office: update insurance, enter member id and ssn at this portal",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-062,"i'll send you $2000 extra, deposit $200 first to unlock the transfer",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-063,"whatsapp new terms, verify or your chats get deleted tonight",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-064,"your neighbor's wifi cam saw a package thief, pay to see the clip",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-065,"crypto recovery specialist, we need remote access software now",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-066,"you won concert tickets, pay shipping with a gift card code",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-067,"charity for the disaster, only accept crypto to this address",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-068,"your driving license points, settle the fine at gov-pay-ticket.xyz",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-069,"i'm at the airport and my card declined, apple cash 180 please",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-070,"microsoft 365 admin, your tenant is compromised, share screen",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-071,"we mirrored your wallet, sign this typed data to revoke the thief",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-072,"your pet insurance lapsed, reactivate with card at petsure-pay.info",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-073,"onlyfans leak warning, pay removal fee here",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-074,"family group: dad's in a meeting, send the code from the bank sms to me",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-075,your airline booking needs extra baggage fee at airline-pay-extra.top,1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-076,"kyc refresh for the broker, upload passport plus a utility bill now",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-077,"i'll trade you rare skins, first send the items i'll send payment after",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-078,"electric vehicle rebate, confirm bank details to receive it this week",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-079,"your icloud photos are public, lock them at apple-privacy-lock.com",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-080,"we need one more otp to stop a wire, text it back",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-081,"scholarship disbursement, pay a $49 clearance fee at grant-clear.info",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-082,"your cloud backup failed, re-enter password at backup-restore-now.net",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-083,"this invoice from your printer vendor is overdue, pay immediately at bill-pay.click",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-084,"your social media brand deal, we need your login to schedule posts",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-085,"refund waiting, confirm identity at tax-refund-check.xyz",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-086,"i'm a soldier overseas, need itunes cards to call family",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-087,"your home security system expires, renew at adt-billing-secure.com",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-088,"we duplicated your keys from a photo, pay to stop distribution",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-089,binance support: freeze will lift after you send 0.2 eth to the safety wallet,1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-090,"your child's school portal, confirm current password to keep grades visible",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-091,"limited beta of the bank app, install this apk and log in",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-092,"you were caught on a speeding cam, discount if you pay in 15 minutes",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-093,we will list your house unless you verify owner details at title-check.top,1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-094,"your paypal goods hold, upload card photos to release funds",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-095,"hey, can you authorize this new device, reply with the 6-digit code",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-096,"investment club weekly 25 percent, send usdt to stay in the pool",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-097,"your esim will deactivate, re-register passport at carrier-verify.xyz",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-098,"i have a video of you, pay btc or it goes to your contacts",1,scam_chat,chat_style_eval_v1,eval_only
+chat-eval-scam-099,"your mailbox is full, log in at https://192.0.2.55/webmail/login",1,scam_chat,chat_style_eval_v1,eval_only

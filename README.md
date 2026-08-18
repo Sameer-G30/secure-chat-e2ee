@@ -200,26 +200,27 @@ uv run python scripts/download_kaggle_phishing.py  # requires ml/data/raw/Phishi
 uv run jupyter lab
 ```
 
-Raw downloaded datasets and generated model weights remain untracked. Open `notebooks/01_eda.ipynb` for SMS-only EDA or `notebooks/02_eda_all_corpora.ipynb` for the multi-corpus report.
+Raw downloaded datasets, rewritten `data/processed_chat/` CSVs, and generated model weights remain untracked. Open `notebooks/01_eda.ipynb` for SMS-only EDA or `notebooks/02_eda_all_corpora.ipynb` for the multi-corpus report.
 
-### Training the TF-IDF baseline
-
-```bash
-cd ml
-uv run python scripts/train_baseline.py
-```
-
-This combines every downloaded corpus in `data/processed/`, deduplicates and drops empty rows, takes a stratified 80/20 train/test split (seeded, `random_state=42`), fits `TfidfVectorizer` (unigrams+bigrams, `sublinear_tf`) → `LogisticRegression` (`class_weight="balanced"`), and writes `reports/baseline_metrics.json` plus `reports/confusion_matrix.png`. `uv run pytest` exercises the same pipeline against tiny synthetic data so CI never needs the multi-gigabyte raw corpora.
-
-### Chat-style out-of-domain evaluation (Slice 3)
+### Chat-register rewrite, training, and locked chat eval
 
 ```bash
 cd ml
-uv run python scripts/build_chat_style_eval_set.py    # writes data/chat_eval/chat_style_eval_v1.csv
-uv run python scripts/evaluate_chat_style_eval.py      # writes reports/chat_style_eval_metrics.json
+uv run python scripts/rewrite_chat_register.py         # data/processed → data/processed_chat (rule_based_v1)
+uv run python scripts/train_baseline.py                # default: data/processed_chat, 70/20/10, val-only tuning
+uv run python scripts/build_chat_style_eval_set.py     # writes data/chat_eval/chat_style_eval_v1.csv (200 rows)
+uv run python scripts/evaluate_chat_style_eval.py      # frozen C/threshold; never fits the 200-row file
+uv run pytest
+uv run ruff check scripts src tests
 ```
 
-`build_chat_style_eval_set.py` writes out 80 hand-authored, chat-register messages (40 ordinary DM-style texts, 40 scam/phishing DM-style texts covering romance, crypto, prize, "hi mom/it's me," fake-support, and phishing-link patterns) — none of it scraped, all of it written or reviewed for this project. Per `data/label-schema.yaml`'s `evaluation_policy`, `evaluate_chat_style_eval.py` only ever calls `.predict()` on this set; it fits the pipeline once on the full in-domain corpus first.
+`rewrite_chat_register.py` turns email/SMS bodies into short WhatsApp/DM-style lines (`rewrite_method = rule_based_v1`): strip remaining headers/disclaimers/unsubscribes, informalize with contractions, keep original URLs, copy labels unchanged, cap length at 400 characters, skip empty rows, and deduplicate rewritten text the same way `load_processed_corpora` does. It never reads or writes `data/chat_eval/`. A full-corpus LLM rewrite is out of scope; nothing in this pipeline sends rewritten text or URLs to an external API.
+
+`train_baseline.py` defaults to `data/processed_chat`. Pass `--processed-dir data/processed` to train on original email/SMS for comparison. It takes a stratified 70% train / 20% validation / 10% test split (`random_state=42`), fits TF-IDF + local URL features + `LogisticRegression` on TRAIN only, searches `C ∈ {0.25, 1.0, 4.0}` and `predict_proba[:, scam]` thresholds `0.30, 0.35, …, 0.70` on VALIDATION only, freezes those choices, and scores TEST once. Reported numbers in `reports/baseline_metrics.json` are TEST; `reports/val_metrics.json` is the audit of the operating point. Use `--no-tune-threshold` to keep `C=1.0` and threshold `0.5`.
+
+`build_chat_style_eval_set.py` writes 200 hand-authored DM-style messages (100 legitimate, 100 scam covering romance, crypto, prize, "hi mom/it's me," fake-support, KYC, seed-phrase, and phishing-link patterns), including some ordinary https links so "has a URL" is not treated as automatic scam. None of it is scraped. Per `data/label-schema.yaml` `evaluation_policy.chat_style_eval_training_allowed: false`, that file is never fitted, never used to tune the threshold, and never rewritten into training. `evaluate_chat_style_eval.py` fits on TRAIN+VAL of `processed_chat` and only calls `.predict` / `predict_proba` on the 200 rows, applying the frozen threshold from `reports/baseline_metrics.json`.
+
+`uv run pytest` exercises the same pipeline against tiny synthetic data so CI never needs the multi-gigabyte raw corpora or a full rewrite.
 
 ## Testing
 
@@ -239,13 +240,13 @@ Slice 3 added:
 
 - **Backend:** `POST /auth/login` (Argon2id verify, rate-limited); PyJWT access tokens (15 min) and single-use, rotate-on-refresh refresh tokens with theft/replay detection (`POST /auth/refresh`); `POST /auth/logout`; a migrated `refresh_tokens` table (hash-only, `created_at`/`revoked_at`/`UNIQUE(token_hash)`); authenticated `POST /keys/me` and `GET /keys/{username}`; 19 new backend tests covering login, rotation, reuse detection, key upload/lookup validation, and rate limits.
 - **Frontend:** `AuthScreen` wired to real login; a new `crypto/keyVault.ts` (IndexedDB, Argon2id-sealed private key); `crypto/identitySetup.ts` reconciling server/local key state on every login; an in-memory-only `AuthContext` (no tokens in `localStorage`); a minimal protected `ChatScreen` shown once a session exists.
-- **ML:** the hand-curated, evaluation-only chat-style set (`ml/data/chat_eval/chat_style_eval_v1.csv`, 80 rows) and its out-of-domain evaluation report, discussed below.
+- **ML:** the hand-curated, evaluation-only chat-style set (`ml/data/chat_eval/chat_style_eval_v1.csv`; 80 rows in Slice 3, now 200) and its out-of-domain evaluation report, discussed below.
 
 Slice 4 adds:
 
 - **Backend:** migrated `conversations` (`UNIQUE (user_a_id, user_b_id)`, `CHECK (user_a_id < user_b_id)`, `current_epoch` default 0) and `messages` (ciphertext/nonce BYTEA, `key_epoch`, index on `(conversation_id, created_at DESC)`); `POST /conversations` start-or-fetch; `GET /conversations/{id}` membership-gated fetch; `GET /conversations/{id}/epoch` plus spec alias `GET /keys/conversations/{id}/epoch`; authenticated `WS /ws/conversations/{id}` ciphertext relay that never decrypts; rejection of missing public keys, non-members, spoofed `sender_id`, cross-conversation `conversation_id`, and future `key_epoch`; 48 backend tests including a grep/AST sweep that the server never names decrypt/private-key/plaintext identifiers.
 - **Frontend:** `ChatScreen` beyond the placeholder — peer username, `GET /keys/{username}`, `deriveSessionKeys` / lexicographic `crypto_kx` roles, epoch fetch, WebSocket send/receive, XChaCha20-Poly1305 + associated data, and a **message failed verification** state that never renders corrupted plaintext.
-- **ML:** unchanged from Slice 3. DistilBERT / ONNX Runtime Web are still later slices. The chat-style eval numbers below still apply.
+- **ML:** Slice 3 numbers are superseded by the current offline `ml/` protocol below (chat-register rewrite, 70/20/10 split, validation-only threshold tuning, local URL features, 200-row locked chat eval). DistilBERT / ONNX Runtime Web / the chat UI warning banner are still later slices.
 
 ## E2EE and client-side AI
 
@@ -253,39 +254,39 @@ The sender encrypts before network transmission. The server stores and relays on
 
 ## ML evaluation
 
-The baseline and DistilBERT tracks report precision, recall, F1, confusion matrices, selected thresholds, model size, and browser latency. Accuracy alone is insufficient for the imbalanced and harm-sensitive classification task.
+The baseline and DistilBERT tracks report precision, recall, F1, confusion matrices, selected thresholds, model size, and browser latency. Accuracy alone is insufficient for the imbalanced and harm-sensitive classification task. Final reported baseline numbers come from TEST after freezing validation choices. The locked chat-style eval set is never used to fit or to tune a threshold.
 
-### TF-IDF + Logistic Regression baseline (Slice 2)
+### TF-IDF + local URL features + Logistic Regression (current)
 
-Trained on 50,793 rows and evaluated on a held-out stratified test split of 12,699 rows, combining UCI SMS Spam, Enron-Spam, SpamAssassin, Nazario phishing, and the Kaggle phishing-email compilation (`ml/reports/baseline_metrics.json`, regenerate with `uv run python scripts/train_baseline.py`):
+Training text is the `rule_based_v1` chat-register rewrite of UCI SMS Spam, Enron-Spam, SpamAssassin, Nazario phishing, and the Kaggle phishing-email compilation (`data/processed_chat/`, 58,377 rows after empty-drop and exact-text dedup). The pipeline is `FeatureUnion(TfidfVectorizer(unigrams+bigrams, sublinear_tf), StandardScaler(URL features))` → `LogisticRegression(class_weight="balanced")`. URL features are on-device lexical/structural only: `has_url`, `url_count`, `uses_https`, `host_is_ip`, `has_at_sign`, `num_dots`, `num_hyphens`, `num_digits`, `url_length`, `path_length`, `num_subdomains`, `is_known_shortener` (frozen list: bit.ly, t.co, tinyurl, goo.gl, ow.ly, …), `suspicious_tld` (frozen list), `path_has_login_verify_update_password_keywords`, `punycode_xn`, `digits_in_host`, plus max/mean aggregates. There is **no live URL reputation**: no HTTP fetch, no shortener resolve, no VirusTotal / Safe Browsing / PhishTank. A message with no URL gets a zero URL vector (`has_url=0`); the text model still runs. A present https link is not automatic evidence of a scam.
+
+Stratified 70/20/10 split (`random_state=42`): 40,863 train / 11,676 validation / 5,838 test. Fit on TRAIN only. On VALIDATION, search `C ∈ {0.25, 1.0, 4.0}` and decision thresholds `0.30 … 0.70` (step 0.05). **Selection rule:** maximize scam recall subject to legitimate precision ≥ 0.90 (warn, don't block). If that floor is infeasible, pick the point with best scam F1 and say so. Chosen operating point (`ml/reports/val_metrics.json`): **C = 4.0**, **threshold = 0.30**, reason `max_scam_recall_subject_to_legit_precision_floor` (floor feasible; validation legitimate precision 0.999, scam recall 0.999). Those choices are frozen, then TEST is scored once (`ml/reports/baseline_metrics.json`):
 
 | Class | Precision | Recall | F1 |
 | --- | --- | --- | --- |
-| legitimate | 0.979 | 0.974 | 0.977 |
-| scam | 0.968 | 0.974 | 0.971 |
+| legitimate | 0.997 | 0.976 | 0.987 |
+| scam | 0.968 | 0.996 | 0.982 |
 
 ![Baseline confusion matrix](ml/reports/confusion_matrix.png)
 
-**Threshold:** the default `predict_proba >= 0.5` decision boundary from `LogisticRegression`, with `class_weight="balanced"` compensating for the roughly 55/45 legitimate/scam split rather than a hand-tuned threshold shift.
+TEST confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[3293, 81], [9, 2455]]` — 81 false positives out of 3,374 legitimate test rows and 9 missed scams out of 2,464 scam test rows.
 
-**Precision/recall trade-off reasoning:** false negatives (a scam shown with no warning) and false positives (a legitimate message flagged) are both costly, but not symmetrically — a missed scam can cause real harm, while an over-flagged legitimate message only costs the recipient a moment's doubt because the spec requires the warning to be non-blocking (§7: never hide, block, or auto-delete the message). At the default threshold, recall on the scam class (0.974) is already slightly higher than precision (0.968), which is the right side to lean toward for a "warn, don't block" UX. We keep the default threshold for this baseline rather than shifting it further toward recall, because that would sacrifice more legitimate-message precision than the current false-positive rate (183 of 7,013 legitimate test rows) justifies; this will be revisited once the hand-curated chat-style evaluation set (Slice 3+) shows how the threshold behaves outside email/SMS-register text.
+**Threshold reasoning:** the product UX is a non-blocking warning, so missed scams are costlier than extra warnings. The 0.90 legitimate-precision floor keeps the warning from becoming noisy on ordinary messages. On this chat-register training distribution the floor was easy to meet, so the search selected the most recall-oriented feasible point (lowest threshold 0.30 and least-regularized C 4.0). TEST confirms that choice still holds legitimate precision at 0.997. Validation metrics are reported separately so this search stays auditable; TEST was not used to pick C or the threshold. The locked 200-row chat eval set was not used either.
 
-**Known limitation, stated plainly:** every row the baseline was *trained* on comes from email and SMS corpora, not real chat messages. The out-of-domain check below exists precisely because that limitation is real, not hypothetical.
+**Known limitation, stated plainly:** even after the rule-based rewrite, every *training* row still originates in email or SMS corpora. The rewrite shortens and informalizes those bodies; it does not invent WhatsApp conversations. The out-of-domain check below exists because that limitation is still real.
 
-### Out-of-domain check: the hand-curated chat-style eval set (Slice 3)
+### Out-of-domain check: locked 200-row chat-style eval set
 
-`data/label-schema.yaml`'s `evaluation_policy` reserves this 80-row hand-authored set (`ml/data/chat_eval/chat_style_eval_v1.csv`, built by `scripts/build_chat_style_eval_set.py`) exclusively for evaluation; `scripts/evaluate_chat_style_eval.py` fits the same pipeline on the full in-domain corpus and only ever calls `.predict()` on this set (`ml/reports/chat_style_eval_metrics.json`):
+`data/label-schema.yaml`'s `evaluation_policy` reserves `ml/data/chat_eval/chat_style_eval_v1.csv` (200 hand-authored rows: 100 legitimate, 100 scam) exclusively for evaluation. `scripts/evaluate_chat_style_eval.py` fits the same pipeline on TRAIN+VAL of `processed_chat` (52,539 rows; in-domain TEST stays held out) and only ever calls `.predict` / `predict_proba` on the 200 rows, using the frozen C=4.0 and threshold=0.30. It does not retune on this file (`ml/reports/chat_style_eval_metrics.json`):
 
 | Class | Precision | Recall | F1 |
 | --- | --- | --- | --- |
-| legitimate | 0.830 | 0.975 | 0.897 |
-| scam | 0.970 | 0.800 | 0.877 |
+| legitimate | 0.686 | 0.960 | 0.800 |
+| scam | 0.933 | 0.560 | 0.700 |
 
-Confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[39, 1], [8, 32]]` — 1 false positive out of 40 ordinary chat messages, but 8 missed scams out of 40 hand-authored scam-style chat messages.
+Confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[96, 4], [44, 56]]` — 4 false positives out of 100 ordinary chat messages, and 44 missed scams out of 100 hand-authored scam-style chat messages.
 
-**This confirms the register-shift risk the Slice 2 README already flagged in advance:** scam recall drops from 0.974 in-domain to 0.800 out-of-domain — the model misses 1 in 5 chat-style scams, mostly ones that lack the email/SMS corpora's characteristic boilerplate ("verify your account," "click here," dollar amounts with urgency framing) and instead use short, casual phrasing ("hey it's me, I lost my phone, can you send money"). Precision stays high (0.970): when the baseline does flag a chat message as a scam, it is very rarely wrong.
-
-**Threshold selection, revisited with this data:** the spec's "warn, don't block" UX (§7) means a false positive costs a moment of doubt while a false negative gives zero warning at all — the two error types are not symmetric, and recall matters more. We are **not** shifting the baseline's `predict_proba >= 0.5` threshold down in Slice 3, for two reasons: (1) with only 80 hand-labeled rows, tuning a threshold against this exact set would overfit to our own 40 examples rather than generalize; (2) the deeper fix for a register mismatch is more representative training data or a model better suited to short informal text (DistilBERT, A6), not a threshold shift on the same TF-IDF features. This eval set's job is to *measure* the gap honestly, which it now does; closing it is explicit future work for the DistilBERT track and/or a larger chat-style corpus, not a Slice 3 deliverable.
+**Register shift, measured on a harder set than Slice 3:** in-domain TEST scam recall is 0.996; on this locked chat set it is 0.560. When the model does warn, it is usually right (scam precision 0.933). The previous Slice 3 figure of 0.800 scam recall was on 80 rows (40 scam). The same original 80 rows, scored with the current frozen operating point and not used for any selection, yield scam recall 0.750 — slightly worse than 0.800, not better. Expanding to 200 rows (more seed-phrase, KYC, airdrop, and short "it's me" fraud with less email boilerplate) shows the gap was understated at 80 rows. Closing it still means better chat-like training data or a model suited to short informal text (DistilBERT, A6), **not** fitting or retuning on this locked file.
 
 ## Deployment
 

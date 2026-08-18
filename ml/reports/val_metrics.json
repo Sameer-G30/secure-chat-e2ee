@@ -1,0 +1,71 @@
+{
+  "selection_rule": "maximize scam recall subject to legitimate precision >= 0.90",
+  "selection_reason": "max_scam_recall_subject_to_legit_precision_floor",
+  "legit_precision_floor": 0.9,
+  "floor_feasible": true,
+  "chosen_C": 4.0,
+  "chosen_threshold": 0.3,
+  "grid_C": [
+    0.25,
+    1.0,
+    4.0
+  ],
+  "grid_thresholds": [
+    0.3,
+    0.35,
+    0.4,
+    0.45,
+    0.5,
+    0.55,
+    0.6,
+    0.65,
+    0.7
+  ],
+  "val_rows": 11676,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.9990884229717412,
+      "recall": 0.974510966212211,
+      "f1-score": 0.9866466616654164,
+      "support": 6748.0
+    },
+    "scam": {
+      "precision": 0.9662347860227719,
+      "recall": 0.9987824675324676,
+      "f1-score": 0.9822390740371183,
+      "support": 4928.0
+    },
+    "accuracy": 0.9847550531003768,
+    "macro avg": {
+      "precision": 0.9826616044972565,
+      "recall": 0.9866467168723393,
+      "f1-score": 0.9844428678512673,
+      "support": 11676.0
+    },
+    "weighted avg": {
+      "precision": 0.985222139751073,
+      "recall": 0.9847550531003768,
+      "f1-score": 0.9847863848726575,
+      "support": 11676.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      6576,
+      172
+    ],
+    [
+      6,
+      4922
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "random_state": 42,
+  "tune_threshold": true,
+  "live_url_reputation": false,
+  "url_features": true,
+  "chat_style_eval_used_for_tuning": false
+}
