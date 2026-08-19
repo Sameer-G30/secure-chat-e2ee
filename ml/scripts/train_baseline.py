@@ -1,12 +1,15 @@
 """CLI entry point: train the TF-IDF + URL baseline and write metrics reports.
 
-Fits on TRAIN only, tunes C and the decision threshold on VALIDATION only,
-then scores TEST once. Default training text is the chat-register rewrite
-in data/processed_chat; pass --processed-dir data/processed to compare
-against original email/SMS.
+Fits on TRAIN only, tunes C and the decision threshold on VALIDATION only
+(max scam recall subject to legitimate recall >= 0.85), then scores TEST
+once. Default training text is the intent-preserving LLM rewrite in
+data/processed_chat_llm; pass --processed-dir data/processed_chat for
+rule_based_v1 or --processed-dir data/processed for original email/SMS.
 
 Usage (from ml/):
-    uv run python scripts/train_baseline.py
+    uv run python scripts/train_baseline.py --processed-dir data/processed_chat_llm
+    uv run python scripts/train_baseline.py --processed-dir data/processed_chat
+    uv run python scripts/train_baseline.py --processed-dir data/processed
 """
 
 # Import argparse to expose the tunable knobs a reviewer might want to vary.
@@ -21,20 +24,21 @@ from pathlib import Path
 # Import the testable training/evaluation logic this script only orchestrates.
 from secure_chat_ml.baseline import (
     DEFAULT_C_GRID,
-    DEFAULT_LEGIT_PRECISION_FLOOR,
+    DEFAULT_LEGIT_RECALL_FLOOR,
     DEFAULT_THRESHOLD_GRID,
     ThresholdTuningResult,
     build_pipeline,
     evaluate,
     evaluate_external,
+    infer_rewrite_method,
     load_processed_corpora,
     save_confusion_matrix_plot,
     stratified_split,
     tune_on_validation,
 )
 
-# Default to chat-register training text after scripts/rewrite_chat_register.py has been run.
-_DEFAULT_PROCESSED_DIR = Path("data/processed_chat")
+# Default to LLM chat-register training text after scripts/rewrite_chat_register_llm.py.
+_DEFAULT_PROCESSED_DIR = Path("data/processed_chat_llm")
 # Default to the repository-relative reports directory every other ml/ script already uses.
 _DEFAULT_REPORTS_DIR = Path("reports")
 
@@ -89,8 +93,8 @@ def parse_args() -> argparse.Namespace:
         default=_DEFAULT_PROCESSED_DIR,
         help=(
             "Directory containing normalized per-corpus CSVs "
-            "(default: data/processed_chat). Pass data/processed to train on "
-            "original email/SMS for comparison."
+            "(default: data/processed_chat_llm). Pass data/processed_chat for "
+            "rule_based_v1 or data/processed to train on original email/SMS."
         ),
     )
     # Write TEST metrics, VAL metrics, and the confusion-matrix figure here.
@@ -154,7 +158,7 @@ def _val_metrics_payload(tuning: ThresholdTuningResult, args: argparse.Namespace
     return {
         "selection_rule": tuning.selection_rule,
         "selection_reason": tuning.selection_reason,
-        "legit_precision_floor": tuning.legit_precision_floor,
+        "legit_recall_floor": tuning.legit_recall_floor,
         "floor_feasible": tuning.floor_feasible,
         "chosen_C": tuning.C,
         "chosen_threshold": tuning.threshold,
@@ -198,7 +202,7 @@ def main() -> None:
             max_features=args.max_features,
             C_grid=DEFAULT_C_GRID,
             threshold_grid=DEFAULT_THRESHOLD_GRID,
-            legit_precision_floor=DEFAULT_LEGIT_PRECISION_FLOOR,
+            legit_recall_floor=DEFAULT_LEGIT_RECALL_FLOOR,
             random_state=args.random_state,
         )
     else:
@@ -214,7 +218,7 @@ def main() -> None:
             threshold=0.5,
             selection_reason="default_no_tune",
             selection_rule="operator disabled tuning; C=1.0 and threshold=0.5",
-            legit_precision_floor=DEFAULT_LEGIT_PRECISION_FLOOR,
+            legit_recall_floor=DEFAULT_LEGIT_RECALL_FLOOR,
             floor_feasible=False,
             classification_report=val_eval.classification_report,
             confusion_matrix=val_eval.confusion_matrix,
@@ -242,7 +246,7 @@ def main() -> None:
                 "chosen_threshold": tuning.threshold,
                 "selection_reason": tuning.selection_reason,
                 "selection_rule": tuning.selection_rule,
-                "legit_precision_floor": tuning.legit_precision_floor,
+                "legit_recall_floor": tuning.legit_recall_floor,
                 "floor_feasible": tuning.floor_feasible,
                 "classification_report": _jsonify(result.classification_report),
                 "confusion_matrix": result.confusion_matrix,
@@ -254,9 +258,7 @@ def main() -> None:
                 "test_size": args.test_size,
                 "max_features": args.max_features,
                 "processed_dir": str(args.processed_dir),
-                "rewrite_method": "rule_based_v1"
-                if "processed_chat" in Path(args.processed_dir).parts
-                else "none",
+                "rewrite_method": infer_rewrite_method(args.processed_dir),
                 "url_features": True,
                 "live_url_reputation": False,
                 "chat_style_eval_used_for_training": False,

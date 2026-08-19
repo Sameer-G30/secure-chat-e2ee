@@ -8,10 +8,11 @@ synthetic data without requiring the multi-gigabyte raw datasets.
 Training protocol:
 1. Fit the feature union and classifier on TRAIN only (never val/test).
 2. Search a small C grid and a decision-threshold grid on VALIDATION only.
-3. Selection rule: maximize scam recall subject to legitimate precision
-   staying at or above a floor (default 0.90), matching the product UX of
-   "warn, don't block". If that floor is infeasible, pick the threshold
-   with the best scam F1 and record that fallback.
+3. Selection rule: maximize scam recall subject to legitimate recall
+   staying at or above a floor (default 0.85), so most ordinary messages
+   are not warned. A few false alarms are acceptable; flooding ham is not.
+   If that floor is infeasible, pick the threshold with the best scam F1
+   and record that fallback.
 4. Freeze C and the threshold, then score TEST once for reported metrics.
 """
 
@@ -65,8 +66,8 @@ DEFAULT_C_GRID: tuple[float, ...] = (0.25, 1.0, 4.0)
 # Default decision thresholds on predict_proba[:, scam], inclusive of 0.30 and 0.70.
 DEFAULT_THRESHOLD_GRID: tuple[float, ...] = tuple(i / 100 for i in range(30, 71, 5))
 
-# Legitimate-precision floor used by the "warn, don't block" selection rule.
-DEFAULT_LEGIT_PRECISION_FLOOR = 0.90
+# Legitimate-recall floor: warn on at most ~15% of real ham (default 0.85).
+DEFAULT_LEGIT_RECALL_FLOOR = 0.85
 
 
 # Bundle the numbers a portfolio reviewer actually needs to see, together.
@@ -105,9 +106,9 @@ class ThresholdTuningResult:
     selection_reason: str
     # Record the human-readable selection rule applied.
     selection_rule: str
-    # Record the legitimate-precision floor used during selection.
-    legit_precision_floor: float
-    # Record whether any grid point met the legitimate-precision floor.
+    # Record the legitimate-recall floor used during selection.
+    legit_recall_floor: float
+    # Record whether any grid point met the legitimate-recall floor.
     floor_feasible: bool
     # Record the validation classification_report at the chosen operating point.
     classification_report: dict[str, Any]
@@ -132,7 +133,8 @@ def load_processed_corpora(processed_dir: Path) -> pd.DataFrame:
         raise FileNotFoundError(
             f"No processed corpus CSVs found under {processed_dir}. "
             "Run the ml/scripts/download_*.py scripts first, then "
-            "scripts/rewrite_chat_register.py for data/processed_chat."
+            "scripts/rewrite_chat_register_llm.py for data/processed_chat_llm "
+            "or scripts/rewrite_chat_register.py for data/processed_chat."
         )
     # Refuse to load the locked chat-style eval set even if a path is mis-pointed.
     if "chat_eval" in processed_dir.parts:
@@ -151,6 +153,28 @@ def load_processed_corpora(processed_dir: Path) -> pd.DataFrame:
     combined = combined.drop_duplicates(subset="text", keep="first")
     # Reset the index so downstream positional operations behave predictably.
     return combined.reset_index(drop=True)
+
+
+# Infer rewrite_method from a processed-corpora directory name (never from chat_eval).
+def infer_rewrite_method(processed_dir: Path) -> str:
+    """Return llm_intent_v1, rule_based_v1, none, or unknown from the directory name."""
+
+    # Use the final path component so relative and absolute paths both work.
+    name = Path(processed_dir).name
+    # LLM intent-preserving DMs live under data/processed_chat_llm.
+    if name == "processed_chat_llm":
+        # Stamp reports with the documented LLM rewrite identifier.
+        return "llm_intent_v1"
+    # Deterministic strip/shorten DMs live under data/processed_chat.
+    if name == "processed_chat":
+        # Stamp reports with the documented rule-based rewrite identifier.
+        return "rule_based_v1"
+    # Original email/SMS corpora live under data/processed.
+    if name == "processed":
+        # No rewrite was applied.
+        return "none"
+    # Unknown directory names stay explicit so a typo cannot look like a known method.
+    return "unknown"
 
 
 # Split the combined corpus into stratified train, validation, and test partitions.
@@ -356,16 +380,17 @@ def tune_on_validation(
     max_features: int = 50_000,
     C_grid: tuple[float, ...] = DEFAULT_C_GRID,
     threshold_grid: tuple[float, ...] = DEFAULT_THRESHOLD_GRID,
-    legit_precision_floor: float = DEFAULT_LEGIT_PRECISION_FLOOR,
+    legit_recall_floor: float = DEFAULT_LEGIT_RECALL_FLOOR,
     random_state: int = 42,
 ) -> ThresholdTuningResult:
     """Return the frozen C and threshold chosen on the validation split.
 
     Features are fit on TRAIN only. For each C a logistic head is fit on the
     already-transformed TRAIN matrix, then every threshold is scored on VAL.
-    Selection maximizes scam recall among points whose legitimate precision is
-    at least `legit_precision_floor`. If none qualify, the point with the best
-    scam F1 is chosen and `selection_reason` records the fallback.
+    Selection maximizes scam recall among points whose legitimate recall is
+    at least `legit_recall_floor` (at most ~15% of ham warned at the default).
+    If none qualify, the point with the best scam F1 is chosen and
+    `selection_reason` records the fallback.
     """
 
     # Fit the FeatureUnion on TRAIN text only so validation cannot leak into IDF or scaling.
@@ -412,32 +437,33 @@ def tune_on_validation(
                         y_val, y_pred, labels=[LEGITIMATE_LABEL, SCAM_LABEL]
                     ).tolist(),
                     "legit_precision": float(report["legitimate"]["precision"]),
+                    "legit_recall": float(report["legitimate"]["recall"]),
                     "scam_recall": float(report["scam"]["recall"]),
                     "scam_f1": float(report["scam"]["f1-score"]),
                 }
             )
     # Document the selection rule in the result so reports stay auditable.
     selection_rule = (
-        f"maximize scam recall subject to legitimate precision >= {legit_precision_floor:.2f}"
+        f"maximize scam recall subject to legitimate recall >= {legit_recall_floor:.2f}"
     )
-    # Restrict to operating points that respect the "warn, don't block" precision floor.
-    feasible = [row for row in candidates if row["legit_precision"] >= legit_precision_floor]
+    # Restrict to operating points that leave most real ham unwarned.
+    feasible = [row for row in candidates if row["legit_recall"] >= legit_recall_floor]
     # Prefer the feasible set; fall back to the full grid when the floor is infeasible.
     if feasible:
-        # Maximize scam recall; break ties on scam F1 then on the lower (more-recall) threshold.
+        # Maximize scam recall; among ties keep more ham, then the higher threshold.
         chosen = max(
             feasible,
-            key=lambda row: (row["scam_recall"], row["scam_f1"], -row["threshold"]),
+            key=lambda row: (row["scam_recall"], row["legit_recall"], row["threshold"]),
         )
-        # Record that the floor was met.
-        selection_reason = "max_scam_recall_subject_to_legit_precision_floor"
+        # Record that the ham-recall floor was met.
+        selection_reason = "max_scam_recall_subject_to_legit_recall_floor"
         # Mark the floor as feasible for the JSON report.
         floor_feasible = True
     else:
         # No point met the floor; pick the best scam F1 on the full grid as specified.
         chosen = max(candidates, key=lambda row: (row["scam_f1"], row["scam_recall"]))
         # Record the documented fallback so the README can say so honestly.
-        selection_reason = "legit_precision_floor_infeasible_max_scam_f1"
+        selection_reason = "legit_recall_floor_infeasible_max_scam_f1"
         # Mark the floor as infeasible for the JSON report.
         floor_feasible = False
     # Bundle the frozen choices and the validation metrics at that operating point.
@@ -446,7 +472,7 @@ def tune_on_validation(
         threshold=float(chosen["threshold"]),
         selection_reason=selection_reason,
         selection_rule=selection_rule,
-        legit_precision_floor=float(legit_precision_floor),
+        legit_recall_floor=float(legit_recall_floor),
         floor_feasible=floor_feasible,
         classification_report=chosen["report"],
         confusion_matrix=chosen["matrix"],

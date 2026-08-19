@@ -1,0 +1,3 @@
+message_id,text,label,original_label,source,split,source_message_id,rewrite_method,urls_json
+syn-0,"want to get lunch tomorrow at noon? thinking the usual cafe",0,ham,synthetic_test_corpus,unassigned,syn-0,llm_intent_v1,[]
+syn-1,"hey can you open this https://evil.example/login i think my login expired",1,spam,synthetic_test_corpus,unassigned,syn-1,llm_intent_v1,"[""https://evil.example/login""]"

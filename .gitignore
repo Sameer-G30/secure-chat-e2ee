@@ -22,6 +22,7 @@ coverage/
 ml/data/raw/
 ml/data/processed/
 ml/data/processed_chat/
+ml/data/processed_chat_llm/
 ml/models/
 .ipynb_checkpoints/
 

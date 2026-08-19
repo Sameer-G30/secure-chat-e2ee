@@ -1,48 +1,48 @@
 {
-  "train_rows": 40863,
-  "val_rows": 11676,
-  "test_rows": 5838,
+  "train_rows": 6990,
+  "val_rows": 1998,
+  "test_rows": 999,
   "chosen_C": 4.0,
   "chosen_threshold": 0.3,
-  "selection_reason": "max_scam_recall_subject_to_legit_precision_floor",
-  "selection_rule": "maximize scam recall subject to legitimate precision >= 0.90",
-  "legit_precision_floor": 0.9,
+  "selection_reason": "max_scam_recall_subject_to_legit_recall_floor",
+  "selection_rule": "maximize scam recall subject to legitimate recall >= 0.85",
+  "legit_recall_floor": 0.85,
   "floor_feasible": true,
   "classification_report": {
     "legitimate": {
-      "precision": 0.997274379164143,
-      "recall": 0.9759928867812685,
-      "f1-score": 0.9865188735769922,
-      "support": 3374.0
+      "precision": 0.9891540130151844,
+      "recall": 0.890625,
+      "f1-score": 0.9373072970195272,
+      "support": 512.0
     },
     "scam": {
-      "precision": 0.9680599369085173,
-      "recall": 0.9963474025974026,
-      "f1-score": 0.982,
-      "support": 2464.0
+      "precision": 0.895910780669145,
+      "recall": 0.9897330595482546,
+      "f1-score": 0.9404878048780487,
+      "support": 487.0
     },
-    "accuracy": 0.9845837615621789,
+    "accuracy": 0.938938938938939,
     "macro avg": {
-      "precision": 0.9826671580363302,
-      "recall": 0.9861701446893356,
-      "f1-score": 0.984259436788496,
-      "support": 5838.0
+      "precision": 0.9425323968421646,
+      "recall": 0.9401790297741273,
+      "f1-score": 0.938897550948788,
+      "support": 999.0
     },
     "weighted avg": {
-      "precision": 0.9849440630082914,
-      "recall": 0.9845837615621789,
-      "f1-score": 0.9846116271751922,
-      "support": 5838.0
+      "precision": 0.9436991039536016,
+      "recall": 0.938938938938939,
+      "f1-score": 0.9388577548044121,
+      "support": 999.0
     }
   },
   "confusion_matrix": [
     [
-      3293,
-      81
+      456,
+      56
     ],
     [
-      9,
-      2455
+      5,
+      482
     ]
   ],
   "confusion_matrix_labels": [
@@ -50,19 +50,19 @@
     "scam"
   ],
   "source_counts_in_test_split": {
-    "enron_spam": 2581,
-    "kaggle_phishing": 1688,
-    "uci_sms_spam": 546,
-    "nazario": 533,
-    "spamassassin": 490
+    "enron_spam": 448,
+    "kaggle_phishing": 272,
+    "nazario": 110,
+    "spamassassin": 96,
+    "uci_sms_spam": 73
   },
   "random_state": 42,
   "train_size": 0.7,
   "val_size": 0.2,
   "test_size": 0.1,
   "max_features": 50000,
-  "processed_dir": "data/processed_chat",
-  "rewrite_method": "rule_based_v1",
+  "processed_dir": "data/processed_chat_llm",
+  "rewrite_method": "llm_intent_v1",
   "url_features": true,
   "live_url_reputation": false,
   "chat_style_eval_used_for_training": false,

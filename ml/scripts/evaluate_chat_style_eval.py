@@ -1,7 +1,7 @@
 """Score the trained baseline out-of-domain on the locked chat-style eval set.
 
 Fits the same TF-IDF + URL + Logistic Regression pipeline on TRAIN+VAL of
-the chat-register training data (never on data/chat_eval/chat_style_eval_v1.csv;
+the LLM chat-register training data (never on data/chat_eval/chat_style_eval_v1.csv;
 see data/label-schema.yaml evaluation_policy.chat_style_eval_training_allowed:
 false). Applies the FROZEN C and decision threshold from
 reports/baseline_metrics.json; does not retune on the locked 200 rows.
@@ -25,13 +25,14 @@ import pandas as pd
 from secure_chat_ml.baseline import (
     build_pipeline,
     evaluate_external,
+    infer_rewrite_method,
     load_chat_style_eval_set,
     load_processed_corpora,
     stratified_split,
 )
 
-# Default to rewritten chat-register CSVs, matching train_baseline.py.
-_DEFAULT_PROCESSED_DIR = Path("data/processed_chat")
+# Default to LLM chat-register CSVs, matching train_baseline.py.
+_DEFAULT_PROCESSED_DIR = Path("data/processed_chat_llm")
 # The locked evaluation-only file; never passed to Pipeline.fit.
 _DEFAULT_CHAT_EVAL_PATH = Path("data/chat_eval/chat_style_eval_v1.csv")
 # Read frozen C/threshold from the TEST report written by train_baseline.py.
@@ -96,7 +97,7 @@ def load_frozen_choices(reports_dir: Path) -> dict:
     return payload
 
 
-# Fit on TRAIN+VAL of processed_chat, then score the locked eval set only.
+# Fit on TRAIN+VAL of the training-text directory, then score the locked eval set only.
 def main() -> None:
     """Train on in-domain TRAIN+VAL, then score the locked chat-style eval set."""
 
@@ -159,7 +160,11 @@ def main() -> None:
         json.dumps(
             {
                 "trained_on_rows": len(fit_df),
-                "trained_on": "train_plus_val_processed_chat",
+                "trained_on": f"train_plus_val_{processed_dir.name}",
+                "processed_dir": str(processed_dir),
+                "rewrite_method": frozen.get(
+                    "rewrite_method", infer_rewrite_method(processed_dir)
+                ),
                 "held_out_in_domain_test_rows": len(test_df),
                 "chat_eval_rows": result.test_rows,
                 "chosen_C": chosen_C,

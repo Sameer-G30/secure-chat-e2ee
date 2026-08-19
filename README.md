@@ -200,27 +200,36 @@ uv run python scripts/download_kaggle_phishing.py  # requires ml/data/raw/Phishi
 uv run jupyter lab
 ```
 
-Raw downloaded datasets, rewritten `data/processed_chat/` CSVs, and generated model weights remain untracked. Open `notebooks/01_eda.ipynb` for SMS-only EDA or `notebooks/02_eda_all_corpora.ipynb` for the multi-corpus report.
+Raw downloaded datasets, rewritten `data/processed_chat/` and `data/processed_chat_llm/` CSVs, and generated model weights remain untracked. Open `notebooks/01_eda.ipynb` for SMS-only EDA or `notebooks/02_eda_all_corpora.ipynb` for the multi-corpus report.
 
 ### Chat-register rewrite, training, and locked chat eval
 
 ```bash
 cd ml
-uv run python scripts/rewrite_chat_register.py         # data/processed → data/processed_chat (rule_based_v1)
-uv run python scripts/train_baseline.py                # default: data/processed_chat, 70/20/10, val-only tuning
-uv run python scripts/build_chat_style_eval_set.py     # writes data/chat_eval/chat_style_eval_v1.csv (200 rows)
-uv run python scripts/evaluate_chat_style_eval.py      # frozen C/threshold; never fits the 200-row file
+uv run python scripts/rewrite_chat_register.py              # data/processed → data/processed_chat (rule_based_v1)
+uv run python scripts/rewrite_chat_register_llm.py --no-resume   # data/processed → data/processed_chat_llm (llm_intent_v1, local Ollama)
+uv run python scripts/rewrite_chat_register_llm.py --resume      # after a crash; skips finished checkpoint rows
+# optional: --limit 20  |  --stratified-sample 10000  |  --model llama3.2:latest
+uv run python scripts/train_baseline.py --processed-dir data/processed_chat_llm
+# comparison flags: --processed-dir data/processed_chat  (rule_based_v1)
+#                   --processed-dir data/processed       (original email/SMS)
+uv run python scripts/build_chat_style_eval_set.py          # writes data/chat_eval/chat_style_eval_v1.csv (200 rows)
+uv run python scripts/evaluate_chat_style_eval.py           # frozen C/threshold; never fits the 200-row file
 uv run pytest
 uv run ruff check scripts src tests
 ```
 
-`rewrite_chat_register.py` turns email/SMS bodies into short WhatsApp/DM-style lines (`rewrite_method = rule_based_v1`): strip remaining headers/disclaimers/unsubscribes, informalize with contractions, keep original URLs, copy labels unchanged, cap length at 400 characters, skip empty rows, and deduplicate rewritten text the same way `load_processed_corpora` does. It never reads or writes `data/chat_eval/`. A full-corpus LLM rewrite is out of scope; nothing in this pipeline sends rewritten text or URLs to an external API.
+`rewrite_chat_register.py` is the deterministic `rule_based_v1` path: strip remaining headers/disclaimers/unsubscribes, informalize with contractions, keep original URLs, copy labels unchanged, cap length at 400 characters, skip empty rows, and deduplicate rewritten text the same way `load_processed_corpora` does. It is kept for comparison.
 
-`train_baseline.py` defaults to `data/processed_chat`. Pass `--processed-dir data/processed` to train on original email/SMS for comparison. It takes a stratified 70% train / 20% validation / 10% test split (`random_state=42`), fits TF-IDF + local URL features + `LogisticRegression` on TRAIN only, searches `C ∈ {0.25, 1.0, 4.0}` and `predict_proba[:, scam]` thresholds `0.30, 0.35, …, 0.70` on VALIDATION only, freezes those choices, and scores TEST once. Reported numbers in `reports/baseline_metrics.json` are TEST; `reports/val_metrics.json` is the audit of the operating point. Use `--no-tune-threshold` to keep `C=1.0` and threshold `0.5`.
+`rewrite_chat_register_llm.py` is the intent-preserving path (`rewrite_method = llm_intent_v1` when the model writes a real DM, `rule_based_v1_fallback` when it refuses twice). A local Ollama model (default **llama3.2:latest**, Llama 3.2 3B instruct, already pulled on this machine) reads each source message and writes a new 1–3 sentence WhatsApp/iMessage/DM with the same intent, facts, and binary label. Target length is about 40–600 characters of chat prose (`num_predict=400`; the LLM-only cap is 600). URLs may make the stored DM longer and are never sliced. This is not header-stripping plus truncation. Python post-conditions re-attach any original URL the model omitted (verbatim; no shorten/resolve/replace). Legitimate rows cannot gain phishing verbs that were absent from the source. Llama safety refusals are retried once with a research/register-only prompt, then that row falls back to `rule_based_v1` so labeled scams are not dropped. Refusal strings are never stored as training text. The locked file `data/chat_eval/chat_style_eval_v1.csv` is never read, rewritten, or merged. Corpus text is sent only to `http://127.0.0.1:11434` (WSL2 Ollama); cloud LLM APIs are refused.
 
-`build_chat_style_eval_set.py` writes 200 hand-authored DM-style messages (100 legitimate, 100 scam covering romance, crypto, prize, "hi mom/it's me," fake-support, KYC, seed-phrase, and phishing-link patterns), including some ordinary https links so "has a URL" is not treated as automatic scam. None of it is scraped. Per `data/label-schema.yaml` `evaluation_policy.chat_style_eval_training_allowed: false`, that file is never fitted, never used to tune the threshold, and never rewritten into training. `evaluate_chat_style_eval.py` fits on TRAIN+VAL of `processed_chat` and only calls `.predict` / `predict_proba` on the 200 rows, applying the frozen threshold from `reports/baseline_metrics.json`.
+Checkpointing uses `data/processed_chat_llm/_rewrite_checkpoint.sqlite` so a crash can `--resume` without redoing finished rows. Runtime on this WSL2 box (RTX 4060 8GB, llama3.2:latest): ~0.4–0.8s/row after GPU warmup. Full processed corpora (~71k rows) ≈ 8–12 hours; default still attempts the full set. `--limit N` is a smoke run. `--stratified-sample 10000` is a label+source-stratified subset. Reported metrics below used that 10k sample (`random_state=42`) with the refusal-fallback path. Every non-empty source row was kept through the LLM or fallback (`llm_failed=0`); exact-text dedup dropped 13 rows (**9,987** left: 9,898 `llm_intent_v1`, 89 `rule_based_v1_fallback`). A crash at 5,300 rows was resumed from the SQLite sidecar. The previous 10k pass stored some refusals as `status=ok` and later filtered 1,577 of them at CSV write (8,337 rows); that cull is gone.
 
-`uv run pytest` exercises the same pipeline against tiny synthetic data so CI never needs the multi-gigabyte raw corpora or a full rewrite.
+`train_baseline.py` defaults to `data/processed_chat_llm`. Pass `--processed-dir data/processed_chat` for rule_based_v1 or `--processed-dir data/processed` for original email/SMS. It takes a stratified 70% train / 20% validation / 10% test split (`random_state=42`), fits TF-IDF + local URL features + `LogisticRegression` on TRAIN only, searches `C ∈ {0.25, 1.0, 4.0}` and `predict_proba[:, scam]` thresholds `0.30, 0.35, …, 0.70` on VALIDATION only, **maximizes scam recall subject to legitimate recall ≥ 0.85** (at most ~15% of real ham warned), freezes those choices, and scores TEST once. Reported numbers in `reports/baseline_metrics.json` are TEST; `reports/val_metrics.json` is the audit of the operating point. Use `--no-tune-threshold` to keep `C=1.0` and threshold `0.5`. `live_url_reputation` remains false.
+
+`build_chat_style_eval_set.py` writes 200 hand-authored DM-style messages (100 legitimate, 100 scam covering romance, crypto, prize, "hi mom/it's me," fake-support, KYC, seed-phrase, and phishing-link patterns), including some ordinary https links so "has a URL" is not treated as automatic scam. None of it is scraped. Per `data/label-schema.yaml` `evaluation_policy.chat_style_eval_training_allowed: false`, that file is never fitted, never used to tune the threshold, and never rewritten into training. `evaluate_chat_style_eval.py` fits on TRAIN+VAL of `processed_chat_llm` (or whichever directory `baseline_metrics.json` recorded) and only calls `.predict` / `predict_proba` on the 200 rows, applying the frozen threshold from `reports/baseline_metrics.json`.
+
+`uv run pytest` exercises the same pipeline against tiny synthetic data (fake LLM callback, no Ollama, no downloads) so CI never needs the multi-gigabyte raw corpora or a full rewrite.
 
 ## Testing
 
@@ -246,7 +255,7 @@ Slice 4 adds:
 
 - **Backend:** migrated `conversations` (`UNIQUE (user_a_id, user_b_id)`, `CHECK (user_a_id < user_b_id)`, `current_epoch` default 0) and `messages` (ciphertext/nonce BYTEA, `key_epoch`, index on `(conversation_id, created_at DESC)`); `POST /conversations` start-or-fetch; `GET /conversations/{id}` membership-gated fetch; `GET /conversations/{id}/epoch` plus spec alias `GET /keys/conversations/{id}/epoch`; authenticated `WS /ws/conversations/{id}` ciphertext relay that never decrypts; rejection of missing public keys, non-members, spoofed `sender_id`, cross-conversation `conversation_id`, and future `key_epoch`; 48 backend tests including a grep/AST sweep that the server never names decrypt/private-key/plaintext identifiers.
 - **Frontend:** `ChatScreen` beyond the placeholder — peer username, `GET /keys/{username}`, `deriveSessionKeys` / lexicographic `crypto_kx` roles, epoch fetch, WebSocket send/receive, XChaCha20-Poly1305 + associated data, and a **message failed verification** state that never renders corrupted plaintext.
-- **ML:** Slice 3 numbers are superseded by the current offline `ml/` protocol below (chat-register rewrite, 70/20/10 split, validation-only threshold tuning, local URL features, 200-row locked chat eval). DistilBERT / ONNX Runtime Web / the chat UI warning banner are still later slices.
+- **ML:** Slice 3 numbers are superseded by the current offline `ml/` protocol below (intent-preserving LLM chat-register rewrite, 70/20/10 split, validation-only threshold tuning, local URL features, 200-row locked chat eval). DistilBERT / ONNX Runtime Web / the chat UI warning banner are still later slices.
 
 ## E2EE and client-side AI
 
@@ -258,35 +267,49 @@ The baseline and DistilBERT tracks report precision, recall, F1, confusion matri
 
 ### TF-IDF + local URL features + Logistic Regression (current)
 
-Training text is the `rule_based_v1` chat-register rewrite of UCI SMS Spam, Enron-Spam, SpamAssassin, Nazario phishing, and the Kaggle phishing-email compilation (`data/processed_chat/`, 58,377 rows after empty-drop and exact-text dedup). The pipeline is `FeatureUnion(TfidfVectorizer(unigrams+bigrams, sublinear_tf), StandardScaler(URL features))` → `LogisticRegression(class_weight="balanced")`. URL features are on-device lexical/structural only: `has_url`, `url_count`, `uses_https`, `host_is_ip`, `has_at_sign`, `num_dots`, `num_hyphens`, `num_digits`, `url_length`, `path_length`, `num_subdomains`, `is_known_shortener` (frozen list: bit.ly, t.co, tinyurl, goo.gl, ow.ly, …), `suspicious_tld` (frozen list), `path_has_login_verify_update_password_keywords`, `punycode_xn`, `digits_in_host`, plus max/mean aggregates. There is **no live URL reputation**: no HTTP fetch, no shortener resolve, no VirusTotal / Safe Browsing / PhishTank. A message with no URL gets a zero URL vector (`has_url=0`); the text model still runs. A present https link is not automatic evidence of a scam.
+Training text is the `llm_intent_v1` rewrite of UCI SMS Spam, Enron-Spam, SpamAssassin, Nazario phishing, and the Kaggle phishing-email compilation, with `rule_based_v1_fallback` only on rows where Llama refused twice. Local Ollama **llama3.2:latest** (Llama 3.2 3B instruct, already pulled) paraphrased each source into a new WhatsApp/iMessage/DM with the same intent, facts, and binary label (`num_predict=400`, LLM cap 600 characters of prose; URLs extra and never sliced). This is not header-stripping plus truncation. Python post-conditions copy every original URL character-for-character (the rewrite log records 1,226 URL re-attachments; every original URL still appears in the stored DM). Labels are never flipped. `data/chat_eval/chat_style_eval_v1.csv` is never read. Assistant refusals ("I cannot write a message that could be used in a scam") are retried, then rewritten with `rule_based_v1` for that row; they are never stored as training DMs.
 
-Stratified 70/20/10 split (`random_state=42`): 40,863 train / 11,676 validation / 5,838 test. Fit on TRAIN only. On VALIDATION, search `C ∈ {0.25, 1.0, 4.0}` and decision thresholds `0.30 … 0.70` (step 0.05). **Selection rule:** maximize scam recall subject to legitimate precision ≥ 0.90 (warn, don't block). If that floor is infeasible, pick the point with best scam F1 and say so. Chosen operating point (`ml/reports/val_metrics.json`): **C = 4.0**, **threshold = 0.30**, reason `max_scam_recall_subject_to_legit_precision_floor` (floor feasible; validation legitimate precision 0.999, scam recall 0.999). Those choices are frozen, then TEST is scored once (`ml/reports/baseline_metrics.json`):
+The default CLI still attempts the full processed corpora (~71,813 rows). These reported numbers used `--stratified-sample 10000` (`random_state=42`) because a full GPU run is ~8–12 hours. After exact-text dedup only: **9,987** rows in `data/processed_chat_llm/` (5,121 legitimate / 4,866 scam; 9,898 LLM + 89 fallback). Checkpoint totals before dedup: 9,910 `llm_ok` and 90 `llm_refused_then_fallback` (`llm_failed=0`, `dropped_empty=0`). See `ml/reports/rewrite_chat_register_llm_log.json`. Refusals no longer cull labeled scams (the previous 10k pass dropped 1,577 refusal strings at CSV write and kept 8,337 rows, which was ham-heavy because explicit scams were the rows Llama refused).
+
+The classifier is unchanged: `FeatureUnion(TfidfVectorizer(unigrams+bigrams, sublinear_tf), StandardScaler(URL features))` → `LogisticRegression(class_weight="balanced")`. URL features are on-device lexical/structural only: `has_url`, `url_count`, `uses_https`, `host_is_ip`, `has_at_sign`, `num_dots`, `num_hyphens`, `num_digits`, `url_length`, `path_length`, `num_subdomains`, `is_known_shortener` (frozen list: bit.ly, t.co, tinyurl, goo.gl, ow.ly, …), `suspicious_tld` (frozen list), `path_has_login_verify_update_password_keywords`, `punycode_xn`, `digits_in_host`, plus max/mean aggregates. There is **no live URL reputation**: no HTTP fetch, no shortener resolve, no VirusTotal / Safe Browsing / PhishTank. A message with no URL gets a zero URL vector (`has_url=0`); the text model still runs. A present https link is not automatic evidence of a scam.
+
+Stratified 70/20/10 split (`random_state=42`): 6,990 train / 1,998 validation / 999 test. Fit on TRAIN only. On VALIDATION, search `C ∈ {0.25, 1.0, 4.0}` and decision thresholds `0.30 … 0.70` (step 0.05). **Selection rule:** maximize scam recall subject to legitimate recall ≥ 0.85 (warn on at most ~15% of real ham; a few false alarms are acceptable, flooding ham is not). If that floor is infeasible, pick the point with best scam F1 and say so. Chosen operating point (`ml/reports/val_metrics.json`): **C = 4.0**, **threshold = 0.30**, reason `max_scam_recall_subject_to_legit_recall_floor` (floor feasible; validation legitimate recall 0.879, scam recall 0.978). Those choices are frozen, then TEST is scored once (`ml/reports/baseline_metrics.json`):
 
 | Class | Precision | Recall | F1 |
 | --- | --- | --- | --- |
-| legitimate | 0.997 | 0.976 | 0.987 |
-| scam | 0.968 | 0.996 | 0.982 |
+| legitimate | 0.989 | 0.891 | 0.937 |
+| scam | 0.896 | 0.990 | 0.940 |
 
 ![Baseline confusion matrix](ml/reports/confusion_matrix.png)
 
-TEST confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[3293, 81], [9, 2455]]` — 81 false positives out of 3,374 legitimate test rows and 9 missed scams out of 2,464 scam test rows.
+TEST confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[456, 56], [5, 482]]` — 56 false positives out of 512 legitimate test rows and 5 missed scams out of 487 scam test rows.
 
-**Threshold reasoning:** the product UX is a non-blocking warning, so missed scams are costlier than extra warnings. The 0.90 legitimate-precision floor keeps the warning from becoming noisy on ordinary messages. On this chat-register training distribution the floor was easy to meet, so the search selected the most recall-oriented feasible point (lowest threshold 0.30 and least-regularized C 4.0). TEST confirms that choice still holds legitimate precision at 0.997. Validation metrics are reported separately so this search stays auditable; TEST was not used to pick C or the threshold. The locked 200-row chat eval set was not used either.
+**Threshold reasoning:** the product UX is a non-blocking warning, so missed scams are costlier than extra warnings, but most ordinary messages must still go through unwarned. The previous legitimate-*precision* floor (≥ 0.90) only required that "predicted legitimate" be trustworthy; it was feasible at C=0.25 / threshold=0.30 while warning on ~34% of in-domain ham and 86/100 locked chat ham. Switching the VAL floor to legitimate *recall* ≥ 0.85 rejects that over-regularized point. C=4.0 at the same threshold 0.30 still meets the ham-recall floor (VAL 0.879) and keeps scam recall high (VAL 0.978, TEST 0.990). TEST legitimate recall is 0.891 (56 extra warnings). Validation metrics are reported separately so this search stays auditable; TEST was not used to pick C or the threshold. The locked 200-row chat eval set was not used either.
 
-**Known limitation, stated plainly:** even after the rule-based rewrite, every *training* row still originates in email or SMS corpora. The rewrite shortens and informalizes those bodies; it does not invent WhatsApp conversations. The out-of-domain check below exists because that limitation is still real.
+**Comparison vs previous 8,337-row LLM-DM point** (same VAL rule, C=4.0, threshold=0.30, refusals dropped): TEST scam recall 0.990 vs 0.975; scam precision 0.896 vs 0.882; legitimate recall 0.891 vs 0.918. Fewer missed scams (5/487 vs 8/323) after keeping refused scam rows via retry+fallback. Ham false positives rose (56/512 vs 42/511) because the new 10k set is class-balanced (4,866 scam / 5,121 ham) instead of ham-heavy. Chat-eval went from 96/100 scams caught and 43/100 ham warned to **99/100** scams caught and **56/100** ham warned.
+
+**Comparison vs previous LLM-DM precision-floor point** (8,337 rows, C=0.25, threshold=0.30, legit-*precision* floor): TEST scam recall 0.990 vs 0.994; scam precision 0.896 vs 0.647; legitimate recall 0.891 vs 0.658.
+
+**Comparison vs `rule_based_v1` TEST** (C=4.0, threshold=0.30, 58,377 rows): scam recall 0.990 vs 0.996; scam precision 0.896 vs 0.968; legitimate recall 0.891 vs 0.976. Intent-preserving generation plus the ham-recall floor no longer wrecks in-domain precision the way the precision-floor point did.
 
 ### Out-of-domain check: locked 200-row chat-style eval set
 
-`data/label-schema.yaml`'s `evaluation_policy` reserves `ml/data/chat_eval/chat_style_eval_v1.csv` (200 hand-authored rows: 100 legitimate, 100 scam) exclusively for evaluation. `scripts/evaluate_chat_style_eval.py` fits the same pipeline on TRAIN+VAL of `processed_chat` (52,539 rows; in-domain TEST stays held out) and only ever calls `.predict` / `predict_proba` on the 200 rows, using the frozen C=4.0 and threshold=0.30. It does not retune on this file (`ml/reports/chat_style_eval_metrics.json`):
+`data/label-schema.yaml`'s `evaluation_policy` reserves `ml/data/chat_eval/chat_style_eval_v1.csv` (200 hand-authored rows: 100 legitimate, 100 scam) exclusively for evaluation. `scripts/evaluate_chat_style_eval.py` fits the same pipeline on TRAIN+VAL of `processed_chat_llm` (8,988 rows; in-domain TEST stays held out) and only ever calls `.predict` / `predict_proba` on the 200 rows, using the frozen C=4.0 and threshold=0.30. It does not retune on this file (`ml/reports/chat_style_eval_metrics.json`):
 
 | Class | Precision | Recall | F1 |
 | --- | --- | --- | --- |
-| legitimate | 0.686 | 0.960 | 0.800 |
-| scam | 0.933 | 0.560 | 0.700 |
+| legitimate | 0.978 | 0.440 | 0.607 |
+| scam | 0.639 | 0.990 | 0.776 |
 
-Confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[96, 4], [44, 56]]` — 4 false positives out of 100 ordinary chat messages, and 44 missed scams out of 100 hand-authored scam-style chat messages.
+Confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[44, 56], [1, 99]]` — 56 false positives out of 100 ordinary chat messages, and 1 missed scam out of 100 hand-authored scam-style chat messages.
 
-**Register shift, measured on a harder set than Slice 3:** in-domain TEST scam recall is 0.996; on this locked chat set it is 0.560. When the model does warn, it is usually right (scam precision 0.933). The previous Slice 3 figure of 0.800 scam recall was on 80 rows (40 scam). The same original 80 rows, scored with the current frozen operating point and not used for any selection, yield scam recall 0.750 — slightly worse than 0.800, not better. Expanding to 200 rows (more seed-phrase, KYC, airdrop, and short "it's me" fraud with less email boilerplate) shows the gap was understated at 80 rows. Closing it still means better chat-like training data or a model suited to short informal text (DistilBERT, A6), **not** fitting or retuning on this locked file.
+**Did generative rewrite help OOD?** Chat-eval scam recall is **0.990**, above `rule_based_v1`'s **0.560**, above the original Slice 3 80-row figure of **0.800**, and above the previous 8,337-row LLM-DM figure of **0.960**. False alarms are **56/100**, worse than that previous 43/100 but still far below **86/100** at the legit-*precision* floor. That is "catch almost every scam, warn on more than half of ham" — still too noisy for a shipping warning. In-domain TEST is usable (scam recall 0.990, 56/512 ham warned). Closing the remaining chat false-alarm gap still wants a model suited to short informal text (DistilBERT, A6), **not** fitting or retuning on this locked file.
+
+Previous 8,337-row LLM-DM chat-eval (C=4.0, threshold=0.30, refusals dropped): legitimate P/R/F1 0.934 / 0.570 / 0.708; scam 0.691 / 0.960 / 0.803; matrix `[[57, 43], [4, 96]]`.
+
+Previous LLM-DM chat-eval at the precision-floor point (C=0.25, threshold=0.30): legitimate P/R/F1 1.000 / 0.140 / 0.246; scam 0.538 / 1.000 / 0.699; matrix `[[14, 86], [0, 100]]`.
+
+Previous `rule_based_v1` chat-eval (C=4.0, threshold=0.30, TRAIN+VAL of `processed_chat`): legitimate P/R/F1 0.686 / 0.960 / 0.800; scam 0.933 / 0.560 / 0.700; matrix `[[96, 4], [44, 56]]`.
 
 ## Deployment
 

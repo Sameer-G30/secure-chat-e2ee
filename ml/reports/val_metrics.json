@@ -1,7 +1,7 @@
 {
-  "selection_rule": "maximize scam recall subject to legitimate precision >= 0.90",
-  "selection_reason": "max_scam_recall_subject_to_legit_precision_floor",
-  "legit_precision_floor": 0.9,
+  "selection_rule": "maximize scam recall subject to legitimate recall >= 0.85",
+  "selection_reason": "max_scam_recall_subject_to_legit_recall_floor",
+  "legit_recall_floor": 0.85,
   "floor_feasible": true,
   "chosen_C": 4.0,
   "chosen_threshold": 0.3,
@@ -21,42 +21,42 @@
     0.65,
     0.7
   ],
-  "val_rows": 11676,
+  "val_rows": 1998,
   "classification_report": {
     "legitimate": {
-      "precision": 0.9990884229717412,
-      "recall": 0.974510966212211,
-      "f1-score": 0.9866466616654164,
-      "support": 6748.0
+      "precision": 0.9772234273318872,
+      "recall": 0.8790243902439024,
+      "f1-score": 0.9255264509501797,
+      "support": 1025.0
     },
     "scam": {
-      "precision": 0.9662347860227719,
-      "recall": 0.9987824675324676,
-      "f1-score": 0.9822390740371183,
-      "support": 4928.0
+      "precision": 0.8847583643122676,
+      "recall": 0.9784172661870504,
+      "f1-score": 0.9292337725719864,
+      "support": 973.0
     },
-    "accuracy": 0.9847550531003768,
+    "accuracy": 0.9274274274274275,
     "macro avg": {
-      "precision": 0.9826616044972565,
-      "recall": 0.9866467168723393,
-      "f1-score": 0.9844428678512673,
-      "support": 11676.0
+      "precision": 0.9309908958220774,
+      "recall": 0.9287208282154764,
+      "f1-score": 0.927380111761083,
+      "support": 1998.0
     },
     "weighted avg": {
-      "precision": 0.985222139751073,
-      "recall": 0.9847550531003768,
-      "f1-score": 0.9847863848726575,
-      "support": 11676.0
+      "precision": 0.9321941448904008,
+      "recall": 0.9274274274274275,
+      "f1-score": 0.927331868336575,
+      "support": 1998.0
     }
   },
   "confusion_matrix": [
     [
-      6576,
-      172
+      901,
+      124
     ],
     [
-      6,
-      4922
+      21,
+      952
     ]
   ],
   "confusion_matrix_labels": [

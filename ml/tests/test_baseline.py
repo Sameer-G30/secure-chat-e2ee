@@ -19,6 +19,7 @@ from secure_chat_ml.baseline import (
     DEFAULT_THRESHOLD_GRID,
     build_pipeline,
     evaluate,
+    infer_rewrite_method,
     load_processed_corpora,
     predict_with_threshold,
     save_confusion_matrix_plot,
@@ -233,7 +234,7 @@ def test_tune_on_validation_returns_grid_values(synthetic_processed_dir: Path) -
         max_features=1000,
         C_grid=DEFAULT_C_GRID,
         threshold_grid=DEFAULT_THRESHOLD_GRID,
-        legit_precision_floor=0.90,
+        legit_recall_floor=0.85,
         random_state=42,
     )
     # The frozen C must be one of the searched values.
@@ -242,11 +243,36 @@ def test_tune_on_validation_returns_grid_values(synthetic_processed_dir: Path) -
     assert tuning.threshold in DEFAULT_THRESHOLD_GRID
     # Validation row count must match the val split, never a chat-eval size.
     assert tuning.val_rows == len(val_df)
+    # The recorded floor must match the ham-recall cap used for selection.
+    assert tuning.legit_recall_floor == 0.85
     # The selection reason must be one of the two documented outcomes.
     assert tuning.selection_reason in {
-        "max_scam_recall_subject_to_legit_precision_floor",
-        "legit_precision_floor_infeasible_max_scam_f1",
+        "max_scam_recall_subject_to_legit_recall_floor",
+        "legit_recall_floor_infeasible_max_scam_f1",
     }
+
+
+# Confirm an impossible ham-recall floor falls back to best scam F1.
+def test_tune_on_validation_falls_back_when_recall_floor_is_infeasible(
+    synthetic_processed_dir: Path,
+) -> None:
+    """Assert legit_recall_floor=1.01 records the documented F1 fallback."""
+
+    combined = load_processed_corpora(synthetic_processed_dir)
+    train_df, val_df, _test_df = stratified_split(combined, random_state=42)
+    tuning = tune_on_validation(
+        train_df,
+        val_df,
+        max_features=1000,
+        C_grid=DEFAULT_C_GRID,
+        threshold_grid=DEFAULT_THRESHOLD_GRID,
+        legit_recall_floor=1.01,
+        random_state=42,
+    )
+    # No classifier can achieve recall above 1.0, so the floor must be infeasible.
+    assert tuning.floor_feasible is False
+    # The fallback reason must name the ham-recall floor, not the old precision floor.
+    assert tuning.selection_reason == "legit_recall_floor_infeasible_max_scam_f1"
 
 
 # Confirm the confusion-matrix plot writes a real, non-empty image file.
@@ -265,3 +291,17 @@ def test_save_confusion_matrix_plot_writes_a_file(
 
     assert output_path.exists()
     assert output_path.stat().st_size > 0
+
+
+# Confirm training-dir names map onto the documented rewrite_method identifiers.
+def test_infer_rewrite_method_from_directory_name(tmp_path: Path) -> None:
+    """Assert processed_chat_llm / processed_chat / processed map correctly."""
+
+    # LLM intent-preserving DMs.
+    assert infer_rewrite_method(tmp_path / "processed_chat_llm") == "llm_intent_v1"
+    # Deterministic rule-based DMs.
+    assert infer_rewrite_method(Path("data/processed_chat")) == "rule_based_v1"
+    # Original email/SMS with no rewrite.
+    assert infer_rewrite_method(Path("data/processed")) == "none"
+    # A typo must not be silently treated as rule_based_v1.
+    assert infer_rewrite_method(Path("data/processed_chat_old")) == "unknown"
