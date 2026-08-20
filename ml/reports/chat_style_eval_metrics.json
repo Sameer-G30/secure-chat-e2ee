@@ -1,50 +1,50 @@
 {
-  "trained_on_rows": 8988,
+  "trained_on_rows": 64233,
   "trained_on": "train_plus_val_processed_chat_llm",
   "processed_dir": "data/processed_chat_llm",
   "rewrite_method": "llm_intent_v1",
-  "held_out_in_domain_test_rows": 999,
+  "held_out_in_domain_test_rows": 7137,
   "chat_eval_rows": 200,
-  "chosen_C": 4.0,
+  "chosen_C": 0.25,
   "chosen_threshold": 0.3,
   "threshold_source": "reports/baseline_metrics.json (validation-frozen)",
   "retuned_on_chat_eval": false,
   "chat_style_eval_training_allowed": false,
   "classification_report": {
     "legitimate": {
-      "precision": 0.9777777777777777,
-      "recall": 0.44,
-      "f1-score": 0.6068965517241379,
+      "precision": 1.0,
+      "recall": 0.3,
+      "f1-score": 0.46153846153846156,
       "support": 100.0
     },
     "scam": {
-      "precision": 0.6387096774193548,
-      "recall": 0.99,
-      "f1-score": 0.7764705882352941,
+      "precision": 0.5882352941176471,
+      "recall": 1.0,
+      "f1-score": 0.7407407407407407,
       "support": 100.0
     },
-    "accuracy": 0.715,
+    "accuracy": 0.65,
     "macro avg": {
-      "precision": 0.8082437275985663,
-      "recall": 0.715,
-      "f1-score": 0.691683569979716,
+      "precision": 0.7941176470588236,
+      "recall": 0.65,
+      "f1-score": 0.6011396011396011,
       "support": 200.0
     },
     "weighted avg": {
-      "precision": 0.8082437275985663,
-      "recall": 0.715,
-      "f1-score": 0.6916835699797161,
+      "precision": 0.7941176470588235,
+      "recall": 0.65,
+      "f1-score": 0.6011396011396012,
       "support": 200.0
     }
   },
   "confusion_matrix": [
     [
-      44,
-      56
+      30,
+      70
     ],
     [
-      1,
-      99
+      0,
+      100
     ]
   ],
   "confusion_matrix_labels": [

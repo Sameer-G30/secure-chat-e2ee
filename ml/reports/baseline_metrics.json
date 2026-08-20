@@ -1,8 +1,8 @@
 {
-  "train_rows": 6990,
-  "val_rows": 1998,
-  "test_rows": 999,
-  "chosen_C": 4.0,
+  "train_rows": 49958,
+  "val_rows": 14275,
+  "test_rows": 7137,
+  "chosen_C": 0.25,
   "chosen_threshold": 0.3,
   "selection_reason": "max_scam_recall_subject_to_legit_recall_floor",
   "selection_rule": "maximize scam recall subject to legitimate recall >= 0.85",
@@ -10,39 +10,39 @@
   "floor_feasible": true,
   "classification_report": {
     "legitimate": {
-      "precision": 0.9891540130151844,
-      "recall": 0.890625,
-      "f1-score": 0.9373072970195272,
-      "support": 512.0
+      "precision": 0.9915651358950328,
+      "recall": 0.8665028665028665,
+      "f1-score": 0.9248251748251748,
+      "support": 3663.0
     },
     "scam": {
-      "precision": 0.895910780669145,
-      "recall": 0.9897330595482546,
-      "f1-score": 0.9404878048780487,
-      "support": 487.0
+      "precision": 0.8757621951219512,
+      "recall": 0.9922279792746114,
+      "f1-score": 0.9303643724696357,
+      "support": 3474.0
     },
-    "accuracy": 0.938938938938939,
+    "accuracy": 0.9277007145859605,
     "macro avg": {
-      "precision": 0.9425323968421646,
-      "recall": 0.9401790297741273,
-      "f1-score": 0.938897550948788,
-      "support": 999.0
+      "precision": 0.933663665508492,
+      "recall": 0.9293654228887389,
+      "f1-score": 0.9275947736474053,
+      "support": 7137.0
     },
     "weighted avg": {
-      "precision": 0.9436991039536016,
-      "recall": 0.938938938938939,
-      "f1-score": 0.9388577548044121,
-      "support": 999.0
+      "precision": 0.9351969957457144,
+      "recall": 0.9277007145859605,
+      "f1-score": 0.9275214299207132,
+      "support": 7137.0
     }
   },
   "confusion_matrix": [
     [
-      456,
-      56
+      3174,
+      489
     ],
     [
-      5,
-      482
+      27,
+      3447
     ]
   ],
   "confusion_matrix_labels": [
@@ -50,11 +50,11 @@
     "scam"
   ],
   "source_counts_in_test_split": {
-    "enron_spam": 448,
-    "kaggle_phishing": 272,
-    "nazario": 110,
-    "spamassassin": 96,
-    "uci_sms_spam": 73
+    "enron_spam": 3293,
+    "kaggle_phishing": 1892,
+    "nazario": 840,
+    "spamassassin": 579,
+    "uci_sms_spam": 533
   },
   "random_state": 42,
   "train_size": 0.7,
