@@ -47,6 +47,9 @@ from secure_chat_ml.distilbert import (
     DEFAULT_MODEL_NAME,
     DEFAULT_NUM_TRAIN_EPOCHS,
     DEFAULT_TRAIN_BATCH_SIZE,
+    DEFAULT_WARMUP_RATIO,
+    DEFAULT_WEIGHT_DECAY,
+    DISTILBERT_EXPANDED_THRESHOLD_GRID,
     DistilBertHyperparameters,
     count_truncated_texts,
     evaluate_from_proba,
@@ -180,6 +183,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     # Documented epoch count (not searched on TEST).
     parser.add_argument("--epochs", type=int, default=DEFAULT_NUM_TRAIN_EPOCHS)
+    # Documented linear-warmup fraction of TRAIN optimizer steps.
+    parser.add_argument("--warmup-ratio", type=float, default=DEFAULT_WARMUP_RATIO)
+    # Documented AdamW weight decay (not searched on TEST).
+    parser.add_argument("--weight-decay", type=float, default=DEFAULT_WEIGHT_DECAY)
+    # Optional explicit VAL threshold list; overrides --use-expanded-threshold-grid.
+    parser.add_argument(
+        "--threshold-grid",
+        type=float,
+        nargs="+",
+        default=None,
+        help="VAL P(scam) thresholds to search (default: 0.30 0.35 ... 0.70).",
+    )
+    # Convenience flag used by the OFAT sweep so 0.20 and 0.25 are searched.
+    parser.add_argument(
+        "--use-expanded-threshold-grid",
+        action="store_true",
+        help="Search VAL thresholds 0.20, 0.25, ..., 0.70 instead of 0.30...0.70.",
+    )
     # Optional skip so an operator can train without the 200-row file present.
     parser.add_argument(
         "--skip-chat-eval",
@@ -204,8 +225,36 @@ def _hyperparams_from_args(
         eval_batch_size=args.eval_batch_size,
         learning_rate=args.learning_rate,
         num_train_epochs=args.epochs,
+        warmup_ratio=args.warmup_ratio,
+        weight_decay=args.weight_decay,
         seed=args.random_state,
     )
+
+
+# Resolve the VAL threshold list from CLI flags without mutating TF-IDF defaults.
+def _resolve_threshold_grid(args: argparse.Namespace) -> tuple[float, ...]:
+    """Return the VAL P(scam) grid actually searched for this run."""
+
+    # An explicit list always wins so a sweep can pass a custom grid.
+    if args.threshold_grid is not None:
+        # Keep order stable and drop accidental duplicates.
+        unique: list[float] = []
+        # Walk values in the order the operator typed them.
+        for value in args.threshold_grid:
+            # Cast through float so JSON later stores plain numbers.
+            as_float = float(value)
+            # Skip duplicates while preserving the first occurrence.
+            if as_float not in unique:
+                # Queue this cut for VAL search.
+                unique.append(as_float)
+        # Sort low-to-high so reports stay comparable across runs.
+        return tuple(sorted(unique))
+    # The OFAT sweep uses this flag so 0.20 and 0.25 are included.
+    if args.use_expanded_threshold_grid:
+        # Reuse the module-level expanded grid (0.20 ... 0.70 step 0.05).
+        return DISTILBERT_EXPANDED_THRESHOLD_GRID
+    # Documented Slice 5 default remains 0.30 ... 0.70 so README numbers stay valid.
+    return DEFAULT_THRESHOLD_GRID
 
 
 # Write a small JSON file describing torch/CUDA/fp16 on this machine.
@@ -288,10 +337,10 @@ def _fine_tune_with_oom_retry(
 
     # Build the retry ladder from the requested size down, without duplicates.
     candidates: list[int] = []
-    # Always try the operator-requested size first.
-    for size in (args.batch_size, 8, 4):
-        # Skip non-positive or already-queued sizes.
-        if size >= 1 and size not in candidates:
+    # Always try the operator-requested size first, then 16/8/4 if those are smaller.
+    for size in (args.batch_size, 16, 8, 4):
+        # Skip non-positive, already-queued, or larger-than-requested sizes.
+        if size >= 1 and size not in candidates and size <= args.batch_size:
             # Queue this batch size as a fallback.
             candidates.append(size)
     # Remember the last CUDA OOM so we can re-raise if every size fails.
@@ -374,6 +423,8 @@ def main() -> None:
 
     # Parse CLI arguments (defaults match the documented from-ml/ command).
     args = parse_args()
+    # Freeze the VAL threshold list before any probabilities are scored.
+    threshold_grid = _resolve_threshold_grid(args)
     # Resolve CUDA vs CPU and whether fp16 will actually run.
     device, used_fp16, fp16_reason = resolve_training_device()
     # Print the device story before the Hub download so OOM notes are in context.
@@ -427,7 +478,7 @@ def main() -> None:
     tuning = tune_threshold_on_validation(
         val_df["label"],
         val_proba,
-        threshold_grid=DEFAULT_THRESHOLD_GRID,
+        threshold_grid=threshold_grid,
         legit_recall_floor=DEFAULT_LEGIT_RECALL_FLOOR,
     )
     # Show the frozen operating point before TEST is touched.
@@ -574,7 +625,7 @@ def main() -> None:
             "held_out_in_domain_val_rows": len(val_df),
             "chat_eval_rows": chat_eval.test_rows,
             "chosen_threshold": tuning.threshold,
-            "threshold_source": "reports/distilbert/val_metrics.json (validation-frozen)",
+            "threshold_source": f"{val_path.as_posix()} (validation-frozen)",
             "retuned_on_chat_eval": False,
             "chat_style_eval_training_allowed": False,
             "classification_report": _jsonify(chat_eval.classification_report),

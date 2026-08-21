@@ -1,0 +1,96 @@
+{
+  "train_rows": 49958,
+  "val_rows": 14275,
+  "test_rows": 7137,
+  "chosen_threshold": 0.2,
+  "selection_reason": "max_scam_recall_subject_to_legit_recall_floor",
+  "selection_rule": "maximize scam recall subject to legitimate recall >= 0.85",
+  "legit_recall_floor": 0.85,
+  "floor_feasible": true,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.9841400054689636,
+      "recall": 0.9825279825279826,
+      "f1-score": 0.9833333333333333,
+      "support": 3663.0
+    },
+    "scam": {
+      "precision": 0.9816091954022989,
+      "recall": 0.9833045480713875,
+      "f1-score": 0.9824561403508771,
+      "support": 3474.0
+    },
+    "accuracy": 0.9829059829059829,
+    "macro avg": {
+      "precision": 0.9828746004356312,
+      "recall": 0.982916265299685,
+      "f1-score": 0.9828947368421053,
+      "support": 7137.0
+    },
+    "weighted avg": {
+      "precision": 0.9829081105310915,
+      "recall": 0.9829059829059829,
+      "f1-score": 0.9829063516293888,
+      "support": 7137.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      3599,
+      64
+    ],
+    [
+      58,
+      3416
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "source_counts_in_test_split": {
+    "enron_spam": 3293,
+    "kaggle_phishing": 1892,
+    "nazario": 840,
+    "spamassassin": 579,
+    "uci_sms_spam": 533
+  },
+  "random_state": 42,
+  "train_size": 0.7,
+  "val_size": 0.2,
+  "test_size": 0.1,
+  "processed_dir": "data/processed_chat_llm",
+  "rewrite_method": "llm_intent_v1",
+  "truncated_train_rows": 297,
+  "max_length": 256,
+  "hyperparameters": {
+    "model_name": "distilbert-base-uncased",
+    "max_length": 256,
+    "train_batch_size": 16,
+    "eval_batch_size": 32,
+    "learning_rate": 2e-05,
+    "num_train_epochs": 3,
+    "warmup_ratio": 0.0,
+    "weight_decay": 0.01,
+    "seed": 42
+  },
+  "training_env": {
+    "torch_version": "2.8.0+cu128",
+    "transformers_version": "4.57.6",
+    "cuda_available": true,
+    "fp16": true,
+    "fp16_reason": "cuda_fp16",
+    "live_url_reputation": false,
+    "onnx_exported": false,
+    "frontend_wired": false,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cuda_device_total_memory_bytes": 8585216000
+  },
+  "model_dir": "models/distilbert_param_sweep/12_warmup_ratio_0",
+  "url_features": false,
+  "live_url_reputation": false,
+  "onnx_exported": false,
+  "chat_style_eval_used_for_training": false,
+  "chat_style_eval_used_for_tuning": false,
+  "fitted_on": "train_only"
+}

@@ -29,6 +29,7 @@ from transformers import (
 
 from secure_chat_ml.baseline import DEFAULT_THRESHOLD_GRID
 from secure_chat_ml.distilbert import (
+    DISTILBERT_EXPANDED_THRESHOLD_GRID,
     DistilBertHyperparameters,
     as_label_list,
     as_text_list,
@@ -214,6 +215,26 @@ def test_count_truncated_texts_detects_overflow(tiny_classifier) -> None:
     long_text = "urgent account verify password click prize bank locked gift"
     assert count_truncated_texts(tokenizer, [long_text], max_length=4) == 1
     assert count_truncated_texts(tokenizer, ["hi"], max_length=32) == 0
+
+
+# Confirm the DistilBERT sweep grid adds 0.20 and 0.25 below the TF-IDF default.
+def test_expanded_threshold_grid_includes_0_20_and_0_25() -> None:
+    """Assert 0.20 and 0.25 are searched in addition to the documented 0.30..0.70 cuts."""
+
+    # The expanded grid must be a strict superset of the TF-IDF / Slice 5 default.
+    assert set(DEFAULT_THRESHOLD_GRID).issubset(set(DISTILBERT_EXPANDED_THRESHOLD_GRID))
+    # 20/100 and 25/100 are the two extra operating points requested for this sweep.
+    assert 0.20 in DISTILBERT_EXPANDED_THRESHOLD_GRID
+    # Keep 0.25 as an explicit member, not only 0.20.
+    assert 0.25 in DISTILBERT_EXPANDED_THRESHOLD_GRID
+    # Step size stays 0.05 so VAL search remains comparable to the published reports.
+    expanded = DISTILBERT_EXPANDED_THRESHOLD_GRID
+    steps = [
+        round(expanded[index + 1] - expanded[index], 2)
+        for index in range(len(expanded) - 1)
+    ]
+    # Every adjacent pair must be 0.05 apart.
+    assert set(steps) == {0.05}
 
 
 # Confirm VAL threshold selection returns a documented grid value.

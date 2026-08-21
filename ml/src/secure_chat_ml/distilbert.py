@@ -87,6 +87,11 @@ DEFAULT_WARMUP_RATIO = 0.1
 # Light AdamW decay, matching common DistilBERT classification recipes.
 DEFAULT_WEIGHT_DECAY = 0.01
 
+# VAL P(scam) grid for DistilBERT sweeps: documented 0.30..0.70 plus 0.20 and 0.25.
+DISTILBERT_EXPANDED_THRESHOLD_GRID: tuple[float, ...] = tuple(
+    i / 100 for i in range(20, 71, 5)
+)
+
 # Map integer labels onto the shared schema names stored in the HF config.
 ID2LABEL = {LEGITIMATE_LABEL: CLASS_NAMES[0], SCAM_LABEL: CLASS_NAMES[1]}
 

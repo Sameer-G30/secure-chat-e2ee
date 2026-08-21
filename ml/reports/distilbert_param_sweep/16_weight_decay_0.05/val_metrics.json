@@ -1,0 +1,88 @@
+{
+  "selection_rule": "maximize scam recall subject to legitimate recall >= 0.85",
+  "selection_reason": "max_scam_recall_subject_to_legit_recall_floor",
+  "legit_recall_floor": 0.85,
+  "floor_feasible": true,
+  "chosen_threshold": 0.2,
+  "grid_thresholds": [
+    0.2,
+    0.25,
+    0.3,
+    0.35,
+    0.4,
+    0.45,
+    0.5,
+    0.55,
+    0.6,
+    0.65,
+    0.7
+  ],
+  "val_rows": 14275,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.9851851851851852,
+      "recall": 0.9803439803439803,
+      "f1-score": 0.9827586206896551,
+      "support": 7326.0
+    },
+    "scam": {
+      "precision": 0.9793843951324266,
+      "recall": 0.984458195423802,
+      "f1-score": 0.981914740921487,
+      "support": 6949.0
+    },
+    "accuracy": 0.9823467600700525,
+    "macro avg": {
+      "precision": 0.9822847901588059,
+      "recall": 0.9824010878838911,
+      "f1-score": 0.9823366808055711,
+      "support": 14275.0
+    },
+    "weighted avg": {
+      "precision": 0.9823613890327074,
+      "recall": 0.9823467600700525,
+      "f1-score": 0.9823478241566254,
+      "support": 14275.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      7182,
+      144
+    ],
+    [
+      108,
+      6841
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "random_state": 42,
+  "hyperparameters": {
+    "model_name": "distilbert-base-uncased",
+    "max_length": 256,
+    "train_batch_size": 16,
+    "eval_batch_size": 32,
+    "learning_rate": 2e-05,
+    "num_train_epochs": 3,
+    "warmup_ratio": 0.1,
+    "weight_decay": 0.05,
+    "seed": 42
+  },
+  "training_env": {
+    "torch_version": "2.8.0+cu128",
+    "transformers_version": "4.57.6",
+    "cuda_available": true,
+    "fp16": true,
+    "fp16_reason": "cuda_fp16",
+    "live_url_reputation": false,
+    "onnx_exported": false,
+    "frontend_wired": false,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cuda_device_total_memory_bytes": 8585216000
+  },
+  "chat_style_eval_used_for_tuning": false,
+  "live_url_reputation": false
+}

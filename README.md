@@ -2,7 +2,7 @@
 
 Secure Chat is a portfolio-grade real-time messaging system designed so the server stores and relays ciphertext but never receives message plaintext or private/symmetric key material. Decrypted messages are classified for phishing and scam indicators locally in the recipient's browser.
 
-> Status: Slice 5. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. DistilBERT is fine-tuned offline on the full 71,370-row LLM rewrite (fp16 on the RTX 4060); it is not loaded in the browser yet. Client-side ONNX Runtime Web and the scam warning banner still arrive in later reviewed slices.
+> Status: Slice 5. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. DistilBERT is fine-tuned offline on the full 71,370-row LLM rewrite (fp16 on the RTX 4060); it is not loaded in the browser yet. A later one-at-a-time hyperparameter sweep lives under `ml/reports/distilbert_param_sweep/` and does **not** replace the Slice 5 default (`max_length` 256) until ONNX Runtime Web cost is measured. Client-side ONNX Runtime Web and the scam warning banner still arrive in later reviewed slices.
 
 ## Architecture
 
@@ -215,8 +215,9 @@ uv run python scripts/train_baseline.py --processed-dir data/processed_chat_llm
 #                   --processed-dir data/processed       (original email/SMS)
 uv run python scripts/build_chat_style_eval_set.py          # writes data/chat_eval/chat_style_eval_v1.csv (200 rows)
 uv run python scripts/evaluate_chat_style_eval.py           # frozen C/threshold; never fits the 200-row file
-uv run python scripts/train_distilbert.py                   # DistilBERT; writes reports/distilbert/ (does not overwrite TF-IDF reports)
+uv run python scripts/train_distilbert.py                   # DistilBERT Slice 5 default (max_length 256); writes reports/distilbert/
 uv run python scripts/evaluate_chat_style_eval_distilbert.py  # frozen DistilBERT threshold; never fits the 200-row file
+uv run python scripts/sweep_distilbert_params.py            # optional OFAT retrain; writes reports/distilbert_param_sweep/ (does not overwrite Slice 5)
 uv run pytest
 uv run ruff check scripts src tests
 ```
@@ -231,7 +232,7 @@ Checkpointing uses `data/processed_chat_llm/_rewrite_checkpoint.sqlite` so a cra
 
 `build_chat_style_eval_set.py` writes 200 hand-authored DM-style messages (100 legitimate, 100 scam covering romance, crypto, prize, "hi mom/it's me," fake-support, KYC, seed-phrase, and phishing-link patterns), including some ordinary https links so "has a URL" is not treated as automatic scam. None of it is scraped. Per `data/label-schema.yaml` `evaluation_policy.chat_style_eval_training_allowed: false`, that file is never fitted, never used to tune the threshold, and never rewritten into training. `evaluate_chat_style_eval.py` fits on TRAIN+VAL of `processed_chat_llm` (or whichever directory `baseline_metrics.json` recorded) and only calls `.predict` / `predict_proba` on the 200 rows, applying the frozen threshold from `reports/baseline_metrics.json`.
 
-`train_distilbert.py` uses the **same** 71,370-row `llm_intent_v1` corpus, **same** 70/20/10 split (`random_state=42`), and **same** VAL rule. It fine-tunes `distilbert-base-uncased` on TRAIN only (HuggingFace + PyTorch, fp16 on this RTX 4060 8 GB). Documented hyperparameters — not searched on TEST or chat_eval — are max_length 256, batch 16, lr `2e-5`, 3 epochs, warmup 0.1, AdamW weight decay 0.01, balanced class weights. Only the decision threshold is searched on VAL (`0.30 … 0.70` step 0.05). TEST is scored once; the locked 200-row file is predict-only. Reports go to `ml/reports/distilbert/` so they never overwrite `ml/reports/baseline_metrics.json`. Weights land in `ml/models/distilbert/` (gitignored). This slice does **not** export ONNX and does **not** load the model in the browser.
+`train_distilbert.py` uses the **same** 71,370-row `llm_intent_v1` corpus, **same** 70/20/10 split (`random_state=42`), and **same** VAL rule. It fine-tunes `distilbert-base-uncased` on TRAIN only (HuggingFace + PyTorch, fp16 on this RTX 4060 8 GB). Documented hyperparameters — not searched on TEST or chat_eval — are max_length 256, batch 16, lr `2e-5`, 3 epochs, warmup 0.1, AdamW weight decay 0.01, balanced class weights. Only the decision threshold is searched on VAL (`0.30 … 0.70` step 0.05). TEST is scored once; the locked 200-row file is predict-only. Reports go to `ml/reports/distilbert/` so they never overwrite `ml/reports/baseline_metrics.json`. Weights land in `ml/models/distilbert/` (gitignored). This slice does **not** export ONNX and does **not** load the model in the browser. A later one-at-a-time sweep (expanded VAL grid including 0.20/0.25) is documented under **DistilBERT one-at-a-time parameter sweep** below and writes `ml/reports/distilbert_param_sweep/` without replacing this default.
 
 `uv run pytest` exercises the same pipeline against tiny synthetic data (fake LLM callback, no Ollama, no downloads, a 1-layer random DistilBERT from a local vocab file) so CI never needs the multi-gigabyte raw corpora, a Hub download, or a full rewrite.
 
@@ -264,7 +265,7 @@ Slice 4 adds:
 Slice 5 adds:
 
 - **Backend / frontend:** none. E2EE, WebSocket relay, `ChatScreen`, and auth are unchanged.
-- **ML:** DistilBERT-base fine-tuned offline on the full 71,370-row `llm_intent_v1` rewrite with the same split/seed and VAL rule as the TF-IDF baseline. Metrics live in `ml/reports/distilbert/`. No ONNX export, no `onnxruntime-web`, no scam banner.
+- **ML:** DistilBERT-base fine-tuned offline on the full 71,370-row `llm_intent_v1` rewrite with the same split/seed and VAL rule as the TF-IDF baseline. Slice 5 numbers live in `ml/reports/distilbert/` (`max_length` 256, threshold 0.30). A later one-at-a-time parameter sweep is documented separately under `ml/reports/distilbert_param_sweep/` and is **not** the browser/ONNX default until sequence-length cost is measured. No ONNX export, no `onnxruntime-web`, no scam banner.
 
 ## E2EE and client-side AI
 
@@ -361,6 +362,43 @@ The Slice 5 goal was to cut chat ham false alarms **below 70/100** without givin
 
 No ONNX export in this slice. A6 lazy-load in the browser is Slice 6+.
 
+### DistilBERT one-at-a-time parameter sweep (offline; not the browser default)
+
+This is a **separate** experiment from the Slice 5 DistilBERT point above. It does **not** overwrite `ml/reports/distilbert/` or `ml/models/distilbert/`. Keep those as the **switch-back default** if `max_length` 512 is too heavy for ONNX Runtime Web (longer sequences mean more memory and latency in the browser). Until that cost is measured, treat Slice 5 (`max_length` 256, threshold 0.30) as the recipe to export.
+
+**Protocol.** Same 71,370-row `llm_intent_v1` corpus, same 70/20/10 split (`random_state=42`), same VAL rule (maximize scam recall subject to legitimate recall ≥ 0.85). Eighteen full TRAIN-only retrains on the RTX 4060 (~3.1 h). One run is the documented recipe with an **expanded VAL threshold grid** `0.20, 0.25, …, 0.70`. Each other run changes **exactly one** training knob from that recipe:
+
+| Group | Documented default | Values tried (one at a time) |
+| --- | --- | --- |
+| learning rate | `2e-5` | `1e-5`, `3e-5`, `5e-5` |
+| epochs | 3 | 2, 4, 5 |
+| max_length | 256 | 128, 384, **512** |
+| train batch size | 16 | 8, 32 |
+| warmup ratio | 0.1 | 0.0, 0.06, 0.2 |
+| weight decay | 0.01 | 0.0, 0.05, 0.1 |
+
+Driver: `ml/scripts/sweep_distilbert_params.py`. Per-run reports: `ml/reports/distilbert_param_sweep/<run_id>/`. Checkpoints (gitignored): `ml/models/distilbert_param_sweep/<run_id>/`. Ranking JSON: `ml/reports/distilbert_param_sweep/ranking.json`.
+
+**What we found.** Once 0.20 and 0.25 were on the VAL grid, **17 of 18** retrains froze **threshold = 0.20**; `learning_rate=5e-5` froze **0.25**. None froze 0.30 or higher. The expanded-grid retrain of the Slice 5 recipe already beat the published 0.30-grid point on TEST scam recall (54 vs 60 misses) and chat-eval (10 vs 12 misses). Among **training** knobs, **`max_length=512`** was the only change that clearly beat that expanded-grid baseline on TEST scam recall (49 vs 54 misses). Five epochs and `learning_rate=3e-5` did not help. This was one-factor-at-a-time, not a full factorial: 512 was not combined with batch 32, four epochs, etc.
+
+**Top 3 by combined TEST score.** Rank by the equal-weight mean of **scam recall**, **ham (legitimate) precision**, and **overall accuracy** on the 7,137-row TEST set (VAL-frozen threshold; chat eval not used to pick the ranking):
+
+| Rank | Run | What changed | Thr | TEST scam recall | TEST ham precision | TEST accuracy | Combined mean | TEST missed / ham warned | Chat missed / ham warned |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `09_max_length_512` | max_length **512** | 0.20 | 0.9859 | 0.9866 | 0.9837 | **0.9854** | 49 / 67 | 8 / 6 |
+| 2 | `11_batch_size_32` | batch **32** (still 256 tokens) | 0.20 | 0.9856 | 0.9863 | 0.9837 | **0.9852** | 50 / 66 | 10 / 6 |
+| 3 | `05_epochs_4` | **4** epochs (still 256 tokens) | 0.20 | 0.9847 | 0.9855 | 0.9846 | **0.9849** | 53 / 57 | 10 / 6 |
+| Slice 5 default (kept) | `reports/distilbert/` | max_length 256, grid 0.30–0.70 | 0.30 | 0.9827 | 0.9836 | 0.9823 | 0.9829 | 60 / 66 | 12 / 9 |
+
+**Offline quality candidate:** rank 1, `max_length=512`, other knobs at documented defaults, threshold 0.20. Reports: `ml/reports/distilbert_param_sweep/09_max_length_512/`. Weights: `ml/models/distilbert_param_sweep/09_max_length_512/`.
+
+**If 512 tokens is too heavy for ONNX Runtime Web, switch back (do not delete Slice 5):**
+
+1. **First fallback (published Slice 5):** `max_length` 256, threshold 0.30, `ml/reports/distilbert/` and `ml/models/distilbert/`. This is what `scripts/train_distilbert.py` still trains by default. Shortest sequences; safest for a first browser export.
+2. **Second fallback (still 256 tokens, better combined TEST score than Slice 5):** rank 2, batch 32, `ml/reports/distilbert_param_sweep/11_batch_size_32/`. Same truncation length as Slice 5, so browser sequence cost stays 256; only the training batch size differed.
+
+Do not retune the threshold on the locked 200-row chat file to close the remaining chat-eval gap.
+
 ### How to retrain DistilBERT
 
 The 71k `llm_intent_v1` rewrite is already complete — do not run `rewrite_chat_register_llm.py` again, and do not pass `--no-resume`. From `ml/`, with the RTX 4060 visible to WSL2:
@@ -368,11 +406,22 @@ The 71k `llm_intent_v1` rewrite is already complete — do not run `rewrite_chat
 ```bash
 cd ml
 uv sync
+# Slice 5 default (max_length 256, VAL grid 0.30…0.70). Overwrites reports/distilbert/ only.
 uv run python scripts/train_distilbert.py
 uv run python scripts/evaluate_chat_style_eval_distilbert.py  # optional re-score; training already wrote this
+
+# Optional: reproduce the OFAT sweep (does not overwrite Slice 5). Resume skips finished run folders.
+uv run python scripts/sweep_distilbert_params.py
+
+# Optional: retrain only the quality candidate (max_length 512, expanded VAL grid including 0.20/0.25).
+# Point --reports-dir/--model-dir away from reports/distilbert/ so the 256-token default stays intact.
+uv run python scripts/train_distilbert.py \
+  --max-length 512 --use-expanded-threshold-grid \
+  --reports-dir reports/distilbert_param_sweep/09_max_length_512 \
+  --model-dir models/distilbert_param_sweep/09_max_length_512
 ```
 
-`train_distilbert.py` downloads `distilbert-base-uncased` once into the HuggingFace cache, writes `ml/models/distilbert/` (gitignored) and `ml/reports/distilbert/`. Re-running overwrites those DistilBERT artifacts only. pytest does not train this model.
+`train_distilbert.py` downloads `distilbert-base-uncased` once into the HuggingFace cache, writes `ml/models/distilbert/` (gitignored) and `ml/reports/distilbert/` when using defaults. Re-running the **default** command overwrites those Slice 5 DistilBERT artifacts only. The sweep writes separate folders. pytest does not train this model.
 
 ## Deployment
 
