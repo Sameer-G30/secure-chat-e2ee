@@ -1,0 +1,86 @@
+{
+  "selection_rule": "maximize scam recall subject to legitimate recall >= 0.85",
+  "selection_reason": "max_scam_recall_subject_to_legit_recall_floor",
+  "legit_recall_floor": 0.85,
+  "floor_feasible": true,
+  "chosen_threshold": 0.3,
+  "grid_thresholds": [
+    0.3,
+    0.35,
+    0.4,
+    0.45,
+    0.5,
+    0.55,
+    0.6,
+    0.65,
+    0.7
+  ],
+  "val_rows": 14275,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.985981308411215,
+      "recall": 0.9792519792519793,
+      "f1-score": 0.9826051225859471,
+      "support": 7326.0
+    },
+    "scam": {
+      "precision": 0.978282611801686,
+      "recall": 0.9853216290113685,
+      "f1-score": 0.9817895038715228,
+      "support": 6949.0
+    },
+    "accuracy": 0.9822066549912434,
+    "macro avg": {
+      "precision": 0.9821319601064504,
+      "recall": 0.9822868041316739,
+      "f1-score": 0.9821973132287349,
+      "support": 14275.0
+    },
+    "weighted avg": {
+      "precision": 0.9822336206536236,
+      "recall": 0.9822066549912434,
+      "f1-score": 0.9822080833952966,
+      "support": 14275.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      7174,
+      152
+    ],
+    [
+      102,
+      6847
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "random_state": 42,
+  "hyperparameters": {
+    "model_name": "distilbert-base-uncased",
+    "max_length": 256,
+    "train_batch_size": 16,
+    "eval_batch_size": 32,
+    "learning_rate": 2e-05,
+    "num_train_epochs": 3,
+    "warmup_ratio": 0.1,
+    "weight_decay": 0.01,
+    "seed": 42
+  },
+  "training_env": {
+    "torch_version": "2.8.0+cu128",
+    "transformers_version": "4.57.6",
+    "cuda_available": true,
+    "fp16": true,
+    "fp16_reason": "cuda_fp16",
+    "live_url_reputation": false,
+    "onnx_exported": false,
+    "frontend_wired": false,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cuda_device_total_memory_bytes": 8585216000
+  },
+  "chat_style_eval_used_for_tuning": false,
+  "live_url_reputation": false
+}

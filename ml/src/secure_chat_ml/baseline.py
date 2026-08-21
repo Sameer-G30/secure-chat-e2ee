@@ -69,6 +69,11 @@ DEFAULT_THRESHOLD_GRID: tuple[float, ...] = tuple(i / 100 for i in range(30, 71,
 # Legitimate-recall floor: warn on at most ~15% of real ham (default 0.85).
 DEFAULT_LEGIT_RECALL_FLOOR = 0.85
 
+# Human-readable copy of the default selection rule, shared with DistilBERT reports.
+DEFAULT_SELECTION_RULE = (
+    f"maximize scam recall subject to legitimate recall >= {DEFAULT_LEGIT_RECALL_FLOOR:.2f}"
+)
+
 
 # Bundle the numbers a portfolio reviewer actually needs to see, together.
 @dataclass
@@ -372,6 +377,89 @@ def evaluate(
     )
 
 
+# Score a frozen probability vector at every documented decision threshold.
+def score_threshold_grid(
+    y_true: np.ndarray,
+    y_proba: np.ndarray,
+    threshold_grid: tuple[float, ...] = DEFAULT_THRESHOLD_GRID,
+    *,
+    C: float = 0.0,
+) -> list[dict[str, Any]]:
+    """Return one metrics dict per threshold without fitting a classifier.
+
+    DistilBERT and the TF-IDF baseline share this helper so the VAL grid and
+    the reported confusion-matrix orientation stay identical.
+    """
+
+    # Accumulate every (threshold, precision/recall/F1) point for later selection.
+    candidates: list[dict[str, Any]] = []
+    # Cast labels and probabilities so list callers and numpy callers both work.
+    y_true_array = np.asarray(y_true)
+    # Cast probabilities to float so the threshold comparison is vectorized.
+    y_proba_array = np.asarray(y_proba, dtype=float)
+    # Sweep the documented grid; probabilities are already computed.
+    for threshold in threshold_grid:
+        # Convert scam probabilities into hard labels at this operating point.
+        y_pred = (y_proba_array >= threshold).astype(int)
+        # Compute the full report so precision/recall/F1 are all available.
+        report = classification_report(
+            y_true_array,
+            y_pred,
+            target_names=list(CLASS_NAMES),
+            output_dict=True,
+            zero_division=0,
+        )
+        # Store the point for the later selection pass.
+        candidates.append(
+            {
+                "C": float(C),
+                "threshold": float(threshold),
+                "report": report,
+                "matrix": confusion_matrix(
+                    y_true_array, y_pred, labels=[LEGITIMATE_LABEL, SCAM_LABEL]
+                ).tolist(),
+                "legit_precision": float(report["legitimate"]["precision"]),
+                "legit_recall": float(report["legitimate"]["recall"]),
+                "scam_recall": float(report["scam"]["recall"]),
+                "scam_f1": float(report["scam"]["f1-score"]),
+            }
+        )
+    # Return the full grid so callers can apply the shared selection rule.
+    return candidates
+
+
+# Apply the documented VAL selection rule to an already-scored threshold grid.
+def pick_operating_point(
+    candidates: list[dict[str, Any]],
+    legit_recall_floor: float = DEFAULT_LEGIT_RECALL_FLOOR,
+) -> tuple[dict[str, Any], str, bool]:
+    """Return (chosen_row, selection_reason, floor_feasible) from scored candidates.
+
+    Maximizes scam recall among points whose legitimate recall is at least
+    `legit_recall_floor`. If none qualify, picks the best scam F1 instead.
+    """
+
+    # Fail loudly on an empty grid rather than inventing a threshold.
+    if not candidates:
+        # A missing grid is a caller bug, not a feasible fallback.
+        raise ValueError("Cannot pick an operating point from an empty candidate list.")
+    # Restrict to operating points that leave most real ham unwarned.
+    feasible = [row for row in candidates if row["legit_recall"] >= legit_recall_floor]
+    # Prefer the feasible set; fall back to the full grid when the floor is infeasible.
+    if feasible:
+        # Maximize scam recall; among ties keep more ham, then the higher threshold.
+        chosen = max(
+            feasible,
+            key=lambda row: (row["scam_recall"], row["legit_recall"], row["threshold"]),
+        )
+        # Record that the ham-recall floor was met.
+        return chosen, "max_scam_recall_subject_to_legit_recall_floor", True
+    # No point met the floor; pick the best scam F1 on the full grid as specified.
+    chosen = max(candidates, key=lambda row: (row["scam_f1"], row["scam_recall"]))
+    # Record the documented fallback so the README can say so honestly.
+    return chosen, "legit_recall_floor_infeasible_max_scam_f1", False
+
+
 # Search C and the decision threshold on VALIDATION only, never on test or chat eval.
 def tune_on_validation(
     train_df: pd.DataFrame,
@@ -415,57 +503,18 @@ def tune_on_validation(
         classifier.fit(X_train, y_train)
         # Score scam probabilities on VALIDATION only.
         val_proba = classifier.predict_proba(X_val)[:, SCAM_LABEL]
-        # Sweep the decision threshold without refitting.
-        for threshold in threshold_grid:
-            # Convert probabilities into hard labels at this operating point.
-            y_pred = (val_proba >= threshold).astype(int)
-            # Compute the full report so precision/recall/F1 are all available.
-            report = classification_report(
-                y_val,
-                y_pred,
-                target_names=list(CLASS_NAMES),
-                output_dict=True,
-                zero_division=0,
-            )
-            # Store the point for the later selection pass.
-            candidates.append(
-                {
-                    "C": float(C),
-                    "threshold": float(threshold),
-                    "report": report,
-                    "matrix": confusion_matrix(
-                        y_val, y_pred, labels=[LEGITIMATE_LABEL, SCAM_LABEL]
-                    ).tolist(),
-                    "legit_precision": float(report["legitimate"]["precision"]),
-                    "legit_recall": float(report["legitimate"]["recall"]),
-                    "scam_recall": float(report["scam"]["recall"]),
-                    "scam_f1": float(report["scam"]["f1-score"]),
-                }
-            )
+        # Reuse the shared threshold scorer so DistilBERT and TF-IDF share one grid.
+        candidates.extend(
+            score_threshold_grid(y_val, val_proba, threshold_grid, C=float(C))
+        )
     # Document the selection rule in the result so reports stay auditable.
     selection_rule = (
         f"maximize scam recall subject to legitimate recall >= {legit_recall_floor:.2f}"
     )
-    # Restrict to operating points that leave most real ham unwarned.
-    feasible = [row for row in candidates if row["legit_recall"] >= legit_recall_floor]
-    # Prefer the feasible set; fall back to the full grid when the floor is infeasible.
-    if feasible:
-        # Maximize scam recall; among ties keep more ham, then the higher threshold.
-        chosen = max(
-            feasible,
-            key=lambda row: (row["scam_recall"], row["legit_recall"], row["threshold"]),
-        )
-        # Record that the ham-recall floor was met.
-        selection_reason = "max_scam_recall_subject_to_legit_recall_floor"
-        # Mark the floor as feasible for the JSON report.
-        floor_feasible = True
-    else:
-        # No point met the floor; pick the best scam F1 on the full grid as specified.
-        chosen = max(candidates, key=lambda row: (row["scam_f1"], row["scam_recall"]))
-        # Record the documented fallback so the README can say so honestly.
-        selection_reason = "legit_recall_floor_infeasible_max_scam_f1"
-        # Mark the floor as infeasible for the JSON report.
-        floor_feasible = False
+    # Apply the same floor-then-F1-fallback rule DistilBERT uses on VAL.
+    chosen, selection_reason, floor_feasible = pick_operating_point(
+        candidates, legit_recall_floor=legit_recall_floor
+    )
     # Bundle the frozen choices and the validation metrics at that operating point.
     return ThresholdTuningResult(
         C=float(chosen["C"]),
@@ -533,7 +582,11 @@ def evaluate_external(
 
 
 # Render the confusion matrix as an annotated heatmap saved to disk.
-def save_confusion_matrix_plot(evaluation: BaselineEvaluation, output_path: Path) -> None:
+def save_confusion_matrix_plot(
+    evaluation: BaselineEvaluation,
+    output_path: Path,
+    title: str = "TF-IDF + URL features + Logistic Regression (test)",
+) -> None:
     """Save a labeled confusion-matrix heatmap for the README and reports."""
 
     # Ensure the parent directory exists before writing the figure.
@@ -553,7 +606,8 @@ def save_confusion_matrix_plot(evaluation: BaselineEvaluation, output_path: Path
     # Label axes so the plot is self-explanatory outside this notebook/script.
     axis.set_xlabel("Predicted label")
     axis.set_ylabel("True label")
-    axis.set_title("TF-IDF + URL features + Logistic Regression (test)")
+    # Use the caller-provided title so DistilBERT reports are not mislabeled TF-IDF.
+    axis.set_title(title)
     # Save without extra whitespace so the image embeds cleanly in the README.
     figure.tight_layout()
     figure.savefig(output_path, dpi=150)

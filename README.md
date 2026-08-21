@@ -2,7 +2,7 @@
 
 Secure Chat is a portfolio-grade real-time messaging system designed so the server stores and relays ciphertext but never receives message plaintext or private/symmetric key material. Decrypted messages are classified for phishing and scam indicators locally in the recipient's browser.
 
-> Status: Slice 4. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can now hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. Client-side scam classification still arrives in later reviewed slices.
+> Status: Slice 5. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. DistilBERT is fine-tuned offline on the full 71,370-row LLM rewrite (fp16 on the RTX 4060); it is not loaded in the browser yet. Client-side ONNX Runtime Web and the scam warning banner still arrive in later reviewed slices.
 
 ## Architecture
 
@@ -191,7 +191,7 @@ There is no `plaintext` / `body` / `private_key` column. `GET /keys/conversation
 
 ```bash
 cd ml
-uv sync
+uv sync   # first DistilBERT install: CUDA torch is large; if extract times out, UV_HTTP_TIMEOUT=600 uv sync
 uv run python scripts/download_sms_spam.py
 uv run python scripts/download_enron_spam.py
 uv run python scripts/download_spamassassin.py
@@ -215,6 +215,8 @@ uv run python scripts/train_baseline.py --processed-dir data/processed_chat_llm
 #                   --processed-dir data/processed       (original email/SMS)
 uv run python scripts/build_chat_style_eval_set.py          # writes data/chat_eval/chat_style_eval_v1.csv (200 rows)
 uv run python scripts/evaluate_chat_style_eval.py           # frozen C/threshold; never fits the 200-row file
+uv run python scripts/train_distilbert.py                   # DistilBERT; writes reports/distilbert/ (does not overwrite TF-IDF reports)
+uv run python scripts/evaluate_chat_style_eval_distilbert.py  # frozen DistilBERT threshold; never fits the 200-row file
 uv run pytest
 uv run ruff check scripts src tests
 ```
@@ -229,7 +231,9 @@ Checkpointing uses `data/processed_chat_llm/_rewrite_checkpoint.sqlite` so a cra
 
 `build_chat_style_eval_set.py` writes 200 hand-authored DM-style messages (100 legitimate, 100 scam covering romance, crypto, prize, "hi mom/it's me," fake-support, KYC, seed-phrase, and phishing-link patterns), including some ordinary https links so "has a URL" is not treated as automatic scam. None of it is scraped. Per `data/label-schema.yaml` `evaluation_policy.chat_style_eval_training_allowed: false`, that file is never fitted, never used to tune the threshold, and never rewritten into training. `evaluate_chat_style_eval.py` fits on TRAIN+VAL of `processed_chat_llm` (or whichever directory `baseline_metrics.json` recorded) and only calls `.predict` / `predict_proba` on the 200 rows, applying the frozen threshold from `reports/baseline_metrics.json`.
 
-`uv run pytest` exercises the same pipeline against tiny synthetic data (fake LLM callback, no Ollama, no downloads) so CI never needs the multi-gigabyte raw corpora or a full rewrite.
+`train_distilbert.py` uses the **same** 71,370-row `llm_intent_v1` corpus, **same** 70/20/10 split (`random_state=42`), and **same** VAL rule. It fine-tunes `distilbert-base-uncased` on TRAIN only (HuggingFace + PyTorch, fp16 on this RTX 4060 8 GB). Documented hyperparameters — not searched on TEST or chat_eval — are max_length 256, batch 16, lr `2e-5`, 3 epochs, warmup 0.1, AdamW weight decay 0.01, balanced class weights. Only the decision threshold is searched on VAL (`0.30 … 0.70` step 0.05). TEST is scored once; the locked 200-row file is predict-only. Reports go to `ml/reports/distilbert/` so they never overwrite `ml/reports/baseline_metrics.json`. Weights land in `ml/models/distilbert/` (gitignored). This slice does **not** export ONNX and does **not** load the model in the browser.
+
+`uv run pytest` exercises the same pipeline against tiny synthetic data (fake LLM callback, no Ollama, no downloads, a 1-layer random DistilBERT from a local vocab file) so CI never needs the multi-gigabyte raw corpora, a Hub download, or a full rewrite.
 
 ## Testing
 
@@ -255,15 +259,20 @@ Slice 4 adds:
 
 - **Backend:** migrated `conversations` (`UNIQUE (user_a_id, user_b_id)`, `CHECK (user_a_id < user_b_id)`, `current_epoch` default 0) and `messages` (ciphertext/nonce BYTEA, `key_epoch`, index on `(conversation_id, created_at DESC)`); `POST /conversations` start-or-fetch; `GET /conversations/{id}` membership-gated fetch; `GET /conversations/{id}/epoch` plus spec alias `GET /keys/conversations/{id}/epoch`; authenticated `WS /ws/conversations/{id}` ciphertext relay that never decrypts; rejection of missing public keys, non-members, spoofed `sender_id`, cross-conversation `conversation_id`, and future `key_epoch`; 48 backend tests including a grep/AST sweep that the server never names decrypt/private-key/plaintext identifiers.
 - **Frontend:** `ChatScreen` beyond the placeholder — peer username, `GET /keys/{username}`, `deriveSessionKeys` / lexicographic `crypto_kx` roles, epoch fetch, WebSocket send/receive, XChaCha20-Poly1305 + associated data, and a **message failed verification** state that never renders corrupted plaintext.
-- **ML:** Slice 3 numbers are superseded by the current offline `ml/` protocol below (intent-preserving LLM chat-register rewrite, 70/20/10 split, validation-only threshold tuning, local URL features, 200-row locked chat eval). DistilBERT / ONNX Runtime Web / the chat UI warning banner are still later slices.
+- **ML:** Slice 3 numbers are superseded by the current offline `ml/` protocol below (intent-preserving LLM chat-register rewrite, 70/20/10 split, validation-only threshold tuning, local URL features, 200-row locked chat eval). DistilBERT training is Slice 5. ONNX Runtime Web and the chat UI warning banner are still later slices.
+
+Slice 5 adds:
+
+- **Backend / frontend:** none. E2EE, WebSocket relay, `ChatScreen`, and auth are unchanged.
+- **ML:** DistilBERT-base fine-tuned offline on the full 71,370-row `llm_intent_v1` rewrite with the same split/seed and VAL rule as the TF-IDF baseline. Metrics live in `ml/reports/distilbert/`. No ONNX export, no `onnxruntime-web`, no scam banner.
 
 ## E2EE and client-side AI
 
-The sender encrypts before network transmission. The server stores and relays only an authenticated encrypted envelope. The recipient verifies and decrypts locally. Scam classification on the recovered plaintext in ONNX Runtime Web is still a later slice; Slice 4 stops at verified plaintext in the message list.
+The sender encrypts before network transmission. The server stores and relays only an authenticated encrypted envelope. The recipient verifies and decrypts locally. DistilBERT is trained offline in Slice 5; scam classification on recovered plaintext in ONNX Runtime Web is still a later slice. Slice 4 stops at verified plaintext in the message list.
 
 ## ML evaluation
 
-The baseline and DistilBERT tracks report precision, recall, F1, confusion matrices, selected thresholds, model size, and browser latency. Accuracy alone is insufficient for the imbalanced and harm-sensitive classification task. Final reported baseline numbers come from TEST after freezing validation choices. The locked chat-style eval set is never used to fit or to tune a threshold.
+The baseline and DistilBERT tracks report precision, recall, F1, confusion matrices, and the selected threshold. Accuracy alone is insufficient for the imbalanced and harm-sensitive classification task. Final reported numbers come from TEST after freezing validation choices. The locked chat-style eval set is never used to fit or to tune a threshold. Model size, ONNX export, and browser latency are later-slice deliverables (A5/A6 client load).
 
 ### TF-IDF + local URL features + Logistic Regression (current)
 
@@ -305,7 +314,7 @@ TEST confusion matrix (rows = true, columns = predicted, order `[legitimate, sca
 
 Confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[30, 70], [0, 100]]` — 70 false positives out of 100 ordinary chat messages, and 0 missed scams out of 100 hand-authored scam-style chat messages.
 
-**Did generative rewrite help OOD?** Chat-eval scam recall is **1.000**, above `rule_based_v1`'s **0.560**, above the original Slice 3 80-row figure of **0.800**, and above the 10k LLM-DM figure of **0.990**. False alarms are **70/100**, noisier than the 10k C=4.0 point (56/100) because the same VAL rule now selects C=0.25 on the full set. That is "catch every locked chat scam, warn on 70% of ordinary DMs" — still too noisy for a shipping warning. In-domain TEST is usable (scam recall 0.992, 489/3,663 ham warned). Closing the remaining chat false-alarm gap still wants a model suited to short informal text (DistilBERT, A6), **not** fitting or retuning on this locked file.
+**Did generative rewrite help OOD?** Chat-eval scam recall is **1.000**, above `rule_based_v1`'s **0.560**, above the original Slice 3 80-row figure of **0.800**, and above the 10k LLM-DM figure of **0.990**. False alarms are **70/100**, noisier than the 10k C=4.0 point (56/100) because the same VAL rule now selects C=0.25 on the full set. That is "catch every locked chat scam, warn on 70% of ordinary DMs" — still too noisy for a shipping warning. In-domain TEST is usable (scam recall 0.992, 489/3,663 ham warned). Closing that chat false-alarm gap is what Slice 5 DistilBERT is for — **not** fitting or retuning on this locked file.
 
 Previous 9,987-row LLM-DM chat-eval (C=4.0, threshold=0.30): legitimate P/R/F1 0.978 / 0.440 / 0.607; scam 0.639 / 0.990 / 0.776; matrix `[[44, 56], [1, 99]]`.
 
@@ -314,6 +323,56 @@ Previous 8,337-row LLM-DM chat-eval (C=4.0, threshold=0.30, refusals dropped): l
 Previous LLM-DM chat-eval at the precision-floor point (C=0.25, threshold=0.30): legitimate P/R/F1 1.000 / 0.140 / 0.246; scam 0.538 / 1.000 / 0.699; matrix `[[14, 86], [0, 100]]`.
 
 Previous `rule_based_v1` chat-eval (C=4.0, threshold=0.30, TRAIN+VAL of `processed_chat`): legitimate P/R/F1 0.686 / 0.960 / 0.800; scam 0.933 / 0.560 / 0.700; matrix `[[96, 4], [44, 56]]`.
+
+### DistilBERT-base (Slice 5, offline; not loaded in the browser)
+
+Same full `llm_intent_v1` corpus (71,370 rows), same stratified 70/20/10 split (`random_state=42`: 49,958 train / 14,275 val / 7,137 test), same VAL rule. Fine-tune `distilbert-base-uncased` on TRAIN only with documented defaults: max_length 256 (297 TRAIN rows truncated), batch 16, lr `2e-5`, 3 epochs, warmup 0.1, weight decay 0.01, sklearn-balanced class weights, fp16. Pins that actually ran on this WSL2 RTX 4060 8 GB: **torch 2.8.0+cu128**, **transformers 4.57.6**, **accelerate 1.14.0**. fp16 fit; training wall-clock ~9.0 min (540.7 s, ~17.3 steps/s). No URL-feature branch — DistilBERT reads the raw DM, including any URL string.
+
+Threshold search is VAL-only on `0.30 … 0.70` step 0.05. Chosen operating point (`ml/reports/distilbert/val_metrics.json`): **threshold = 0.30**, reason `max_scam_recall_subject_to_legit_recall_floor` (floor feasible; VAL legitimate recall 0.979, scam recall 0.985). TEST once (`ml/reports/distilbert/test_metrics.json`):
+
+| Class | Precision | Recall | F1 |
+| --- | --- | --- | --- |
+| legitimate | 0.984 | 0.982 | 0.983 |
+| scam | 0.981 | 0.983 | 0.982 |
+
+![DistilBERT confusion matrix](ml/reports/distilbert/confusion_matrix.png)
+
+TEST confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[3597, 66], [60, 3414]]` — 66 false positives out of 3,663 legitimate test rows and 60 missed scams out of 3,474 scam test rows.
+
+Locked chat eval is predict-only with that TRAIN-fitted checkpoint and the VAL-frozen threshold (`ml/reports/distilbert/chat_style_eval_metrics.json`). It is **not** refit on TRAIN+VAL (TF-IDF chat eval was, because logistic regression is cheap). DistilBERT therefore scores the 200 rows after seeing 49,958 TRAIN rows, not 64,233 TRAIN+VAL:
+
+| Class | Precision | Recall | F1 |
+| --- | --- | --- | --- |
+| legitimate | 0.883 | 0.910 | 0.897 |
+| scam | 0.907 | 0.880 | 0.893 |
+
+Chat-eval confusion matrix: `[[91, 9], [12, 88]]` — 9 false positives out of 100 ordinary chat messages, and 12 missed scams out of 100 hand-authored scam-style chat messages.
+
+**DistilBERT vs current full-corpus TF-IDF (C=0.25, t=0.30)** — not vs the old 10k C=4.0 point:
+
+| Set | Model | Scam recall | Ham warned | Scams missed |
+| --- | --- | --- | --- | --- |
+| TEST (7,137) | TF-IDF | 0.992 | 489 / 3,663 | 27 / 3,474 |
+| TEST (7,137) | DistilBERT | 0.983 | 66 / 3,663 | 60 / 3,474 |
+| Chat eval (200) | TF-IDF | 1.000 | 70 / 100 | 0 / 100 |
+| Chat eval (200) | DistilBERT | 0.880 | 9 / 100 | 12 / 100 |
+
+The Slice 5 goal was to cut chat ham false alarms **below 70/100** without giving up ~0.99 in-domain / 1.00 chat-eval scam recall. DistilBERT **met the false-alarm goal** (9/100 chat ham warned; 66 vs 489 in-domain). In-domain scam recall stayed near 0.99 (0.983 vs 0.992: 33 extra TEST misses). Chat-eval scam recall **did drop** (0.880 vs 1.000: 12 misses). That is the honest VAL-frozen trade-off, not a reason to hunt 0.15 / 0.11 on the 200-row file. Side-by-side JSON: `ml/reports/distilbert/comparison_vs_tfidf.json`.
+
+No ONNX export in this slice. A6 lazy-load in the browser is Slice 6+.
+
+### How to retrain DistilBERT
+
+The 71k `llm_intent_v1` rewrite is already complete — do not run `rewrite_chat_register_llm.py` again, and do not pass `--no-resume`. From `ml/`, with the RTX 4060 visible to WSL2:
+
+```bash
+cd ml
+uv sync
+uv run python scripts/train_distilbert.py
+uv run python scripts/evaluate_chat_style_eval_distilbert.py  # optional re-score; training already wrote this
+```
+
+`train_distilbert.py` downloads `distilbert-base-uncased` once into the HuggingFace cache, writes `ml/models/distilbert/` (gitignored) and `ml/reports/distilbert/`. Re-running overwrites those DistilBERT artifacts only. pytest does not train this model.
 
 ## Deployment
 

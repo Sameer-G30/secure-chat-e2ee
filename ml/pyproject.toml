@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Offline scam-detection data preparation, evaluation, and ONNX export"
 # Use the project-wide Python patch version.
 requires-python = "==3.11.9"
-# Declare exploratory data-analysis dependencies for Slice 1.
+# Declare exploratory data-analysis and DistilBERT-training dependencies.
 dependencies = [
     # Provide notebook execution and interactive research tools.
     "jupyterlab>=4.4,<5",
@@ -20,6 +20,28 @@ dependencies = [
     "scikit-learn>=1.7,<2",
     # Build readable statistical plots on Matplotlib.
     "seaborn>=0.13,<1",
+    # Fine-tune DistilBERT on the RTX 4060 (CUDA 12.8 wheels; driver is 13.3).
+    "torch>=2.8.0,<2.9",
+    # HuggingFace Trainer + DistilBERT-base sequence classification (v4, not v5).
+    "transformers>=4.57.3,<4.58",
+    # Required by transformers.Trainer for the PyTorch training loop.
+    "accelerate>=1.6,<2",
+]
+
+# Pull GPU-enabled torch from the CUDA 12.8 index on Linux/Windows only.
+[[tool.uv.index]]
+# Name the explicit PyTorch CUDA index so generic deps stay on PyPI.
+name = "pytorch-cu128"
+# Host CUDA 12.8 wheels that run on this WSL2 RTX 4060 (sm_89).
+url = "https://download.pytorch.org/whl/cu128"
+# Do not use this index for pandas/sklearn/transformers themselves.
+explicit = true
+
+# Pin torch to the CUDA index; macOS would fall back to PyPI CPU wheels.
+[tool.uv.sources]
+# Use +cu128 wheels on the platforms that publish them.
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 # Keep test and lint tools separate from notebook runtime dependencies.

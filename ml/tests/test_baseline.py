@@ -21,8 +21,10 @@ from secure_chat_ml.baseline import (
     evaluate,
     infer_rewrite_method,
     load_processed_corpora,
+    pick_operating_point,
     predict_with_threshold,
     save_confusion_matrix_plot,
+    score_threshold_grid,
     stratified_split,
     tune_on_validation,
 )
@@ -305,3 +307,79 @@ def test_infer_rewrite_method_from_directory_name(tmp_path: Path) -> None:
     assert infer_rewrite_method(Path("data/processed")) == "none"
     # A typo must not be silently treated as rule_based_v1.
     assert infer_rewrite_method(Path("data/processed_chat_old")) == "unknown"
+
+
+# Confirm an empty candidate list fails instead of inventing a threshold.
+def test_pick_operating_point_rejects_an_empty_grid() -> None:
+    """Assert pick_operating_point raises when no VAL grid points exist."""
+
+    with pytest.raises(ValueError, match="empty candidate list"):
+        pick_operating_point([])
+
+
+# Confirm the shared VAL rule prefers max scam recall among floor-feasible points.
+def test_pick_operating_point_maximizes_scam_recall_when_floor_is_met() -> None:
+    """Assert a high-scam-recall feasible point beats a higher-F1 infeasible one."""
+
+    candidates = [
+        {
+            "threshold": 0.30,
+            "legit_recall": 0.86,
+            "scam_recall": 0.99,
+            "scam_f1": 0.90,
+        },
+        {
+            "threshold": 0.50,
+            "legit_recall": 0.92,
+            "scam_recall": 0.95,
+            "scam_f1": 0.93,
+        },
+        {
+            "threshold": 0.30,
+            "legit_recall": 0.70,
+            "scam_recall": 1.00,
+            "scam_f1": 0.80,
+        },
+    ]
+    chosen, reason, feasible = pick_operating_point(candidates, legit_recall_floor=0.85)
+    assert feasible is True
+    assert chosen["scam_recall"] == 0.99
+    assert chosen["threshold"] == 0.30
+    assert reason == "max_scam_recall_subject_to_legit_recall_floor"
+
+
+# Confirm the shared VAL rule falls back to max scam F1 when the floor is impossible.
+def test_pick_operating_point_falls_back_to_scam_f1_when_floor_infeasible() -> None:
+    """Assert every point below the ham-recall floor yields the F1 fallback reason."""
+
+    candidates = [
+        {
+            "threshold": 0.30,
+            "legit_recall": 0.40,
+            "scam_recall": 1.00,
+            "scam_f1": 0.70,
+        },
+        {
+            "threshold": 0.50,
+            "legit_recall": 0.60,
+            "scam_recall": 0.90,
+            "scam_f1": 0.80,
+        },
+    ]
+    chosen, reason, feasible = pick_operating_point(candidates, legit_recall_floor=0.85)
+    assert feasible is False
+    assert chosen["scam_f1"] == 0.80
+    assert reason == "legit_recall_floor_infeasible_max_scam_f1"
+
+
+# Confirm score_threshold_grid emits one candidate per documented threshold.
+def test_score_threshold_grid_matches_the_documented_grid_length() -> None:
+    """Assert the shared scorer walks DEFAULT_THRESHOLD_GRID exactly once each."""
+
+    y_true = [0, 0, 1, 1]
+    y_proba = [0.1, 0.4, 0.6, 0.9]
+    candidates = score_threshold_grid(y_true, y_proba, DEFAULT_THRESHOLD_GRID, C=0.25)
+    assert len(candidates) == len(DEFAULT_THRESHOLD_GRID)
+    assert {row["threshold"] for row in candidates} == set(DEFAULT_THRESHOLD_GRID)
+    assert all(row["C"] == 0.25 for row in candidates)
+

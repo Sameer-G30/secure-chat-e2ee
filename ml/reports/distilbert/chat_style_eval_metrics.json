@@ -1,0 +1,57 @@
+{
+  "trained_on_rows": 49958,
+  "trained_on": "train_only_processed_chat_llm",
+  "processed_dir": "data/processed_chat_llm",
+  "rewrite_method": "llm_intent_v1",
+  "held_out_in_domain_test_rows": 7137,
+  "held_out_in_domain_val_rows": 14275,
+  "chat_eval_rows": 200,
+  "chosen_threshold": 0.3,
+  "threshold_source": "reports/distilbert/val_metrics.json (validation-frozen)",
+  "retuned_on_chat_eval": false,
+  "chat_style_eval_training_allowed": false,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.883495145631068,
+      "recall": 0.91,
+      "f1-score": 0.896551724137931,
+      "support": 100.0
+    },
+    "scam": {
+      "precision": 0.9072164948453608,
+      "recall": 0.88,
+      "f1-score": 0.8934010152284264,
+      "support": 100.0
+    },
+    "accuracy": 0.895,
+    "macro avg": {
+      "precision": 0.8953558202382144,
+      "recall": 0.895,
+      "f1-score": 0.8949763696831787,
+      "support": 200.0
+    },
+    "weighted avg": {
+      "precision": 0.8953558202382144,
+      "recall": 0.895,
+      "f1-score": 0.8949763696831787,
+      "support": 200.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      91,
+      9
+    ],
+    [
+      12,
+      88
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "live_url_reputation": false,
+  "onnx_exported": false,
+  "model_dir": "models/distilbert"
+}
