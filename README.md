@@ -217,6 +217,8 @@ uv run python scripts/build_chat_style_eval_set.py          # writes data/chat_e
 uv run python scripts/evaluate_chat_style_eval.py           # frozen C/threshold; never fits the 200-row file
 uv run python scripts/train_distilbert.py                   # DistilBERT Slice 5 default (max_length 256); writes reports/distilbert/
 uv run python scripts/evaluate_chat_style_eval_distilbert.py  # frozen DistilBERT threshold; never fits the 200-row file
+uv run python scripts/train_lstm.py                         # word BiLSTM + URL concat; writes reports/lstm/ (does not overwrite TF-IDF or DistilBERT)
+uv run python scripts/evaluate_chat_style_eval_lstm.py      # frozen LSTM threshold; never fits the 200-row file
 uv run python scripts/sweep_distilbert_params.py            # optional OFAT retrain; writes reports/distilbert_param_sweep/ (does not overwrite Slice 5)
 uv run python scripts/sweep_baseline_params.py              # optional OFAT retrain; writes reports/baseline_param_sweep/ (does not overwrite published TF-IDF)
 uv run pytest
@@ -235,7 +237,9 @@ Checkpointing uses `data/processed_chat_llm/_rewrite_checkpoint.sqlite` so a cra
 
 `train_distilbert.py` uses the **same** 71,370-row `llm_intent_v1` corpus, **same** 70/20/10 split (`random_state=42`), and **same** VAL rule. It fine-tunes `distilbert-base-uncased` on TRAIN only (HuggingFace + PyTorch, fp16 on this RTX 4060 8 GB). Documented hyperparameters — not searched on TEST or chat_eval — are max_length 256, batch 16, lr `2e-5`, 3 epochs, warmup 0.1, AdamW weight decay 0.01, balanced class weights. Only the decision threshold is searched on VAL (`0.30 … 0.70` step 0.05). TEST is scored once; the locked 200-row file is predict-only. Reports go to `ml/reports/distilbert/` so they never overwrite `ml/reports/baseline_metrics.json`. Weights land in `ml/models/distilbert/` (gitignored). This slice does **not** export ONNX and does **not** load the model in the browser. A later one-at-a-time sweep (expanded VAL grid including 0.20/0.25) is documented under **DistilBERT one-at-a-time parameter sweep** below and writes `ml/reports/distilbert_param_sweep/` without replacing this default.
 
-`uv run pytest` exercises the same pipeline against tiny synthetic data (fake LLM callback, no Ollama, no downloads, a 1-layer random DistilBERT from a local vocab file) so CI never needs the multi-gigabyte raw corpora, a Hub download, or a full rewrite.
+`train_lstm.py` is a third offline track, not a Slice 5/6 replacement: same corpus, same split/seed, same VAL rule, TRAIN-only fit, TEST once, chat-eval predict-only (DistilBERT-style; not refit on TRAIN+VAL). It learns a word vocabulary from TRAIN (whitespace + punctuation split; UNK for OOV; pad/truncate at 128 tokens), a from-scratch embedding, a 1-layer BiLSTM pooled as last-forward + last-backward hidden, then concatenates the TRAIN-fitted `StandardScaler` URL feature vector (`url_features.py`; zeros when there is no link) before a 2-logit head. No C grid. Reports go to `ml/reports/lstm/` so they never overwrite TF-IDF or DistilBERT JSON. Weights land in `ml/models/lstm/` (gitignored). No ONNX, no browser wiring, no character-level LSTM (see **Word BiLSTM + URL concat** below).
+
+`uv run pytest` exercises the same pipeline against tiny synthetic data (fake LLM callback, no Ollama, no downloads, a 1-layer random DistilBERT from a local vocab file, a tiny word BiLSTM whose vocab is built from those strings) so CI never needs the multi-gigabyte raw corpora, a Hub download, or a full rewrite.
 
 ## Testing
 
@@ -496,6 +500,61 @@ uv run python scripts/train_distilbert.py \
 ```
 
 `train_distilbert.py` downloads `distilbert-base-uncased` once into the HuggingFace cache, writes `ml/models/distilbert/` (gitignored) and `ml/reports/distilbert/` when using defaults. Re-running the **default** command overwrites those Slice 5 DistilBERT artifacts only. The sweep writes separate folders. pytest does not train this model.
+
+### Word BiLSTM + URL concat (offline research baseline; not Slice 6)
+
+Same full `llm_intent_v1` corpus (71,370 rows), same stratified 70/20/10 split (`random_state=42`: 49,958 train / 14,275 val / 7,137 test), same VAL rule. Word tokenizer: lowercase, then alphanumeric runs and each punctuation character as its own token (URLs explode into short pieces and OOV hosts become UNK — that is why the scaled URL vector is concatenated). TRAIN-only vocab cap 25,000 plus PAD/UNK. Learned embedding 128 → 1-layer BiLSTM hidden 128, dropout 0.3, pooling = last forward hidden ∥ last backward hidden, then concat 20 TRAIN-scaled URL features (`has_url=0` zero vector when there is no link; `live_url_reputation` false). Linear head, TRAIN-balanced class weights, Adam `1e-3`, batch 128, 4 epochs, seed 42. **fp32 on CUDA** (AMP/fp16 skipped as unstable for this LSTM; the network is small enough that fp32 took **39.5 s** on the RTX 4060). 930 TRAIN rows truncated at `max_tokens=128`. No C grid. Threshold search is VAL-only on `0.30 … 0.70` step 0.05.
+
+Chosen operating point (`ml/reports/lstm/val_metrics.json`): **threshold = 0.30**, reason `max_scam_recall_subject_to_legit_recall_floor` (floor feasible; VAL legitimate recall 0.947, scam recall 0.982). TEST once (`ml/reports/lstm/test_metrics.json`):
+
+| Class | Precision | Recall | F1 |
+| --- | --- | --- | --- |
+| legitimate | 0.986 | 0.945 | 0.965 |
+| scam | 0.945 | 0.986 | 0.965 |
+
+![Word BiLSTM confusion matrix](ml/reports/lstm/confusion_matrix.png)
+
+TEST confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[3463, 200], [49, 3425]]` — 200 false positives out of 3,663 legitimate test rows and 49 missed scams out of 3,474 scam test rows.
+
+Locked chat eval is predict-only with that TRAIN-fitted checkpoint and the VAL-frozen threshold (`ml/reports/lstm/chat_style_eval_metrics.json`). It is **not** refit on TRAIN+VAL (same as DistilBERT):
+
+| Class | Precision | Recall | F1 |
+| --- | --- | --- | --- |
+| legitimate | 0.844 | 0.760 | 0.800 |
+| scam | 0.782 | 0.860 | 0.819 |
+
+Chat-eval confusion matrix: `[[76, 24], [14, 86]]` — 24 false positives out of 100 ordinary chat messages, and 14 missed scams out of 100 hand-authored scam-style chat messages.
+
+**Word BiLSTM vs published TF-IDF (C=0.25, t=0.30) and Slice 5 DistilBERT (t=0.30):**
+
+| Set | Model | Scam recall | Ham warned | Scams missed |
+| --- | --- | --- | --- | --- |
+| TEST (7,137) | TF-IDF | 0.992 | 489 / 3,663 | 27 / 3,474 |
+| TEST (7,137) | DistilBERT | 0.983 | 66 / 3,663 | 60 / 3,474 |
+| TEST (7,137) | Word BiLSTM + URL | 0.986 | 200 / 3,663 | 49 / 3,474 |
+| Chat eval (200) | TF-IDF | 1.000 | 70 / 100 | 0 / 100 |
+| Chat eval (200) | DistilBERT | 0.880 | 9 / 100 | 12 / 100 |
+| Chat eval (200) | Word BiLSTM + URL | 0.860 | 24 / 100 | 14 / 100 |
+
+In-domain the LSTM sits between TF-IDF and DistilBERT on the VAL-frozen operating point: fewer ham warnings than TF-IDF (200 vs 489), more than DistilBERT (66), and slightly **fewer** TEST misses than DistilBERT (49 vs 60). Chat-eval is quieter than TF-IDF (24 vs 70 ham warned) without collapsing scam recall into something unusable (0.860). Side-by-side JSON: `ml/reports/lstm/comparison_vs_tfidf_and_distilbert.json`. Link slices: TEST URL-bearing scam recall **0.995** (4/786 FN); chat-eval URL-bearing scam recall **1.000** (0/6 FN). The 14 chat-eval misses are all no-URL social-engineering DMs.
+
+**Char LSTM: do not explore.** Criterion A is only weakly true on chat-eval (14 extra misses vs TF-IDF’s 0; TEST is *better* than DistilBERT). B is false (0/14 extra FNs are URL-bearing). C is false (URL concat already matches TF-IDF on URL scams). Misses are mostly no-URL social-engineering; DistilBERT is the semantic model for that gap. Decision file: `ml/reports/lstm/char_lstm_decision.md`.
+
+No ONNX export. Not loaded in the browser. This does **not** replace the published TF-IDF default or the Slice 5 DistilBERT default.
+
+### How to retrain the word BiLSTM
+
+The 71k `llm_intent_v1` rewrite is already complete — do not run `rewrite_chat_register_llm.py` again. From `ml/`, with the RTX 4060 visible to WSL2:
+
+```bash
+cd ml
+uv sync
+# Word BiLSTM + URL concat (VAL grid 0.30…0.70). Overwrites reports/lstm/ only.
+uv run python scripts/train_lstm.py
+uv run python scripts/evaluate_chat_style_eval_lstm.py  # optional re-score; training already wrote this
+```
+
+`train_lstm.py` writes `ml/models/lstm/` (gitignored) and `ml/reports/lstm/` when using defaults. Re-running overwrites those LSTM artifacts only. pytest does not train this model.
 
 ## Deployment
 
