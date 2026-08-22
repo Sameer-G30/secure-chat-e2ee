@@ -1,0 +1,110 @@
+{
+  "train_rows": 49958,
+  "val_rows": 14275,
+  "test_rows": 7137,
+  "chosen_threshold": 0.2,
+  "selection_reason": "max_scam_recall_subject_to_legit_recall_floor",
+  "selection_rule": "maximize scam recall subject to legitimate recall >= 0.85",
+  "legit_recall_floor": 0.85,
+  "floor_feasible": true,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.9862552594670406,
+      "recall": 0.9598689598689598,
+      "f1-score": 0.9728832318760376,
+      "support": 3663.0
+    },
+    "scam": {
+      "precision": 0.9588465845464725,
+      "recall": 0.985895221646517,
+      "f1-score": 0.9721827987510644,
+      "support": 3474.0
+    },
+    "accuracy": 0.9725374807342021,
+    "macro avg": {
+      "precision": 0.9725509220067565,
+      "recall": 0.9728820907577385,
+      "f1-score": 0.972533015313551,
+      "support": 7137.0
+    },
+    "weighted avg": {
+      "precision": 0.97291383636573,
+      "recall": 0.9725374807342021,
+      "f1-score": 0.9725422896487493,
+      "support": 7137.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      3516,
+      147
+    ],
+    [
+      49,
+      3425
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "source_counts_in_test_split": {
+    "enron_spam": 3293,
+    "kaggle_phishing": 1892,
+    "nazario": 840,
+    "spamassassin": 579,
+    "uci_sms_spam": 533
+  },
+  "random_state": 42,
+  "train_size": 0.7,
+  "val_size": 0.2,
+  "test_size": 0.1,
+  "processed_dir": "data/processed_chat_llm",
+  "rewrite_method": "llm_intent_v1",
+  "truncated_train_rows": 930,
+  "max_tokens": 128,
+  "vocab_size": 25000,
+  "train_wall_clock_seconds": 68.2642953550021,
+  "hyperparameters": {
+    "embed_dim": 128,
+    "hidden_size": 128,
+    "num_layers": 1,
+    "dropout": 0.3,
+    "max_tokens": 128,
+    "max_vocab_size": 25000,
+    "vocab_size": 25000,
+    "batch_size": 64,
+    "eval_batch_size": 256,
+    "learning_rate": 0.001,
+    "num_train_epochs": 4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.0,
+    "class_weight": "balanced",
+    "seed": 42,
+    "pooling": "last_forward_last_backward",
+    "tokenizer": "whitespace_and_punctuation",
+    "url_feature_concat": true,
+    "url_feature_count": 20
+  },
+  "training_env": {
+    "torch_version": "2.8.0+cu128",
+    "cuda_available": true,
+    "fp16": false,
+    "fp16_reason": "cuda_fp32_lstm_amp_unstable",
+    "url_features": true,
+    "url_feature_count": 20,
+    "live_url_reputation": false,
+    "onnx_exported": false,
+    "frontend_wired": false,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cuda_device_total_memory_bytes": 8585216000
+  },
+  "model_dir": "models/lstm_param_sweep/23_batch_size_64",
+  "url_features": true,
+  "live_url_reputation": false,
+  "onnx_exported": false,
+  "frontend_wired": false,
+  "chat_style_eval_used_for_training": false,
+  "chat_style_eval_used_for_tuning": false,
+  "fitted_on": "train_only"
+}

@@ -23,8 +23,9 @@ import pytest
 # Import torch to compare parameter tensors and pin tests to CPU.
 import torch
 
-from secure_chat_ml.baseline import DEFAULT_THRESHOLD_GRID
+from secure_chat_ml.baseline import DEFAULT_THRESHOLD_GRID, EXPANDED_THRESHOLD_GRID
 from secure_chat_ml.lstm import (
+    LSTM_EXPANDED_THRESHOLD_GRID,
     PAD_INDEX,
     UNK_INDEX,
     LstmHyperparameters,
@@ -204,6 +205,53 @@ def test_url_concat_shape_matches_feature_names() -> None:
     assert model.classifier.in_features == model.combined_dim
     # Two logits for legitimate vs scam.
     assert model.classifier.out_features == 2
+
+
+# Confirm ablating URL concat shrinks the linear head to pooled LSTM states only.
+def test_url_features_false_head_has_no_url_columns() -> None:
+    """Assert url_features=False builds a head of width 2 * hidden_size."""
+
+    # Tiny knobs with URL concat turned off.
+    hyperparams = LstmHyperparameters(
+        embed_dim=8,
+        hidden_size=4,
+        dropout=0.0,
+        url_features=False,
+    )
+    # Build through the production helper so url_dim follows the flag.
+    model = build_model(vocab_size=10, hyperparams=hyperparams)
+    # Pooled bidirectional last states only: 2 * 4 = 8.
+    assert model.combined_dim == 8
+    # The linear head must match that width.
+    assert model.classifier.in_features == 8
+    # An empty URL block of width 0 must still forward.
+    ids = torch.full((1, 3), 2, dtype=torch.long)
+    # Packing length matches the three real tokens.
+    lengths = torch.tensor([3], dtype=torch.long)
+    # Shape (1, 0) is the ablated URL concat.
+    empty_urls = torch.zeros(1, 0, dtype=torch.float32)
+    # Eval mode so dropout stays off.
+    model.eval()
+    # Forward must return two logits.
+    with torch.no_grad():
+        # Run the ablated head.
+        logits = model(ids, lengths, empty_urls)
+    # Batch of one, two classes.
+    assert logits.shape == (1, 2)
+
+
+# Confirm the OFAT VAL grid adds 0.20 and 0.25 without dropping the published cuts.
+def test_lstm_expanded_threshold_grid_includes_0_20_and_0_25() -> None:
+    """Assert LSTM_EXPANDED_THRESHOLD_GRID is the shared 0.20..0.70 grid."""
+
+    # The LSTM alias must not drift from baseline.EXPANDED_THRESHOLD_GRID.
+    assert LSTM_EXPANDED_THRESHOLD_GRID == EXPANDED_THRESHOLD_GRID
+    # The extra cuts the user asked to search.
+    assert 0.20 in LSTM_EXPANDED_THRESHOLD_GRID
+    # Second extra cut below the published 0.30 floor.
+    assert 0.25 in LSTM_EXPANDED_THRESHOLD_GRID
+    # Published 0.30..0.70 values must remain a subset.
+    assert set(DEFAULT_THRESHOLD_GRID).issubset(set(LSTM_EXPANDED_THRESHOLD_GRID))
 
 
 # Confirm URL features actually change logits for identical token ids.

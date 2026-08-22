@@ -1,0 +1,26 @@
+/home/sam/projects/Minor Project-II/ml/.venv/bin/python3 scripts/train_lstm.py --reports-dir reports/lstm_param_sweep/31_combo_epochs_8__learning_rate_5e-3 --model-dir models/lstm_param_sweep/31_combo_epochs_8__learning_rate_5e-3 --use-expanded-threshold-grid --embed-dim 128 --hidden-size 128 --num-layers 1 --dropout 0.3 --max-tokens 128 --max-vocab-size 25000 --batch-size 128 --learning-rate 0.005 --epochs 8 --weight-decay 0.0 --grad-clip 1.0 --class-weight balanced --eval-batch-size 256 --url-features
+
+Device: cuda  fp16: False (cuda_fp32_lstm_amp_unstable)
+Train rows: 49958  Val rows: 14275  Test rows: 7137
+TRAIN vocab_size=25000  rows truncated at max_tokens=128: 930
+train_model: epoch 1/8  mean_loss=0.1787
+train_model: epoch 2/8  mean_loss=0.0748
+train_model: epoch 3/8  mean_loss=0.0481
+train_model: epoch 4/8  mean_loss=0.0359
+train_model: epoch 5/8  mean_loss=0.0277
+train_model: epoch 6/8  mean_loss=0.0220
+train_model: epoch 7/8  mean_loss=0.0186
+train_model: epoch 8/8  mean_loss=0.0180
+TRAIN wall-clock seconds: 79.7
+Frozen threshold: 0.2  Reason: max_scam_recall_subject_to_legit_recall_floor  floor_feasible=True
+TEST scam class -> precision: 0.974  recall: 0.982  f1: 0.978
+TEST confusion matrix ([[TN, FP], [FN, TP]]): [[3573, 90], [61, 3413]]
+Wrote reports/lstm_param_sweep/31_combo_epochs_8__learning_rate_5e-3/test_metrics.json, reports/lstm_param_sweep/31_combo_epochs_8__learning_rate_5e-3/val_metrics.json, and reports/lstm_param_sweep/31_combo_epochs_8__learning_rate_5e-3/confusion_matrix.png
+Chat eval: 200 locked rows (threshold=0.2, fitted on 49958 TRAIN rows)
+Chat eval scam  -> precision: 0.811  recall: 0.860  f1: 0.835
+Chat eval legit -> precision: 0.851  recall: 0.800  f1: 0.825
+Chat eval confusion matrix ([[TN, FP], [FN, TP]]): [[80, 20], [14, 86]]
+Wrote reports/lstm_param_sweep/31_combo_epochs_8__learning_rate_5e-3/chat_style_eval_metrics.json and reports/lstm_param_sweep/31_combo_epochs_8__learning_rate_5e-3/chat_eval_confusion_matrix.png
+Wrote reports/lstm_param_sweep/31_combo_epochs_8__learning_rate_5e-3/comparison_vs_tfidf_and_distilbert.json
+Wrote reports/lstm_param_sweep/31_combo_epochs_8__learning_rate_5e-3/link_error_analysis.json
+Wrote reports/lstm_param_sweep/31_combo_epochs_8__learning_rate_5e-3/char_lstm_decision.md  verdict=do_not_explore_char_lstm

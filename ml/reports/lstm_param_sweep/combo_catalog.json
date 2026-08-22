@@ -1,0 +1,67 @@
+{
+  "protocol": "post_ofat_combos",
+  "groups": [
+    {
+      "parameter": "epochs",
+      "value": 8
+    },
+    {
+      "parameter": "learning_rate",
+      "value": 0.005
+    },
+    {
+      "parameter": "embed_dim",
+      "value": 256
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "31_combo_epochs_8__learning_rate_5e-3",
+      "changed_parameter": "combo",
+      "changed_value": {
+        "epochs": 8,
+        "learning_rate": 0.005
+      },
+      "values": {
+        "embed_dim": 128,
+        "hidden_size": 128,
+        "num_layers": 1,
+        "dropout": 0.3,
+        "max_tokens": 128,
+        "max_vocab_size": 25000,
+        "batch_size": 128,
+        "learning_rate": 0.005,
+        "epochs": 8,
+        "weight_decay": 0.0,
+        "grad_clip": 1.0,
+        "class_weight": "balanced",
+        "url_features": true
+      }
+    },
+    {
+      "run_id": "32_combo_epochs_8__learning_rate_5e-3__embed_dim_256",
+      "changed_parameter": "combo",
+      "changed_value": {
+        "epochs": 8,
+        "learning_rate": 0.005,
+        "embed_dim": 256
+      },
+      "values": {
+        "embed_dim": 256,
+        "hidden_size": 128,
+        "num_layers": 1,
+        "dropout": 0.3,
+        "max_tokens": 128,
+        "max_vocab_size": 25000,
+        "batch_size": 128,
+        "learning_rate": 0.005,
+        "epochs": 8,
+        "weight_decay": 0.0,
+        "grad_clip": 1.0,
+        "class_weight": "balanced",
+        "url_features": true
+      }
+    }
+  ],
+  "written_at_utc": "2026-08-22T16:04:06.076004+00:00"
+}

@@ -39,14 +39,18 @@ from secure_chat_ml.baseline import (
 )
 from secure_chat_ml.lstm import (
     DEFAULT_BATCH_SIZE,
+    DEFAULT_CLASS_WEIGHT,
     DEFAULT_EMBED_DIM,
     DEFAULT_EVAL_BATCH_SIZE,
+    DEFAULT_GRAD_CLIP,
     DEFAULT_HIDDEN_SIZE,
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MAX_VOCAB_SIZE,
     DEFAULT_NUM_LAYERS,
     DEFAULT_NUM_TRAIN_EPOCHS,
+    DEFAULT_WEIGHT_DECAY,
+    LSTM_EXPANDED_THRESHOLD_GRID,
     LstmHyperparameters,
     analyze_link_errors,
     assert_not_chat_eval_path,
@@ -189,6 +193,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     # Documented epoch count (not searched on TEST).
     parser.add_argument("--epochs", type=int, default=DEFAULT_NUM_TRAIN_EPOCHS)
+    # Documented Adam L2 penalty (published default is 0.0).
+    parser.add_argument("--weight-decay", type=float, default=DEFAULT_WEIGHT_DECAY)
+    # Documented gradient-norm clip after each TRAIN backward pass.
+    parser.add_argument("--grad-clip", type=float, default=DEFAULT_GRAD_CLIP)
+    # TRAIN class-weight mode; "none" is the OFAT ablation of balanced weights.
+    parser.add_argument(
+        "--class-weight",
+        choices=("balanced", "none"),
+        default=DEFAULT_CLASS_WEIGHT,
+        help="TRAIN CrossEntropyLoss weights (default: balanced).",
+    )
+    # URL-concat on/off; the published recipe concatenates the scaled URL vector.
+    parser.add_argument(
+        "--url-features",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Concatenate TRAIN-scaled URL features (default: on).",
+    )
     # Optional explicit VAL threshold list; default remains 0.30 … 0.70.
     parser.add_argument(
         "--threshold-grid",
@@ -196,6 +218,12 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=None,
         help="VAL P(scam) thresholds to search (default: 0.30 0.35 ... 0.70).",
+    )
+    # Convenience flag used by the OFAT sweep so 0.20 and 0.25 are searched.
+    parser.add_argument(
+        "--use-expanded-threshold-grid",
+        action="store_true",
+        help="Search VAL thresholds 0.20, 0.25, ..., 0.70 instead of 0.30...0.70.",
     )
     # Optional skip so an operator can train without the 200-row file present.
     parser.add_argument(
@@ -223,6 +251,10 @@ def _hyperparams_from_args(args: argparse.Namespace) -> LstmHyperparameters:
         eval_batch_size=args.eval_batch_size,
         learning_rate=args.learning_rate,
         num_train_epochs=args.epochs,
+        grad_clip=args.grad_clip,
+        weight_decay=args.weight_decay,
+        class_weight=args.class_weight,
+        url_features=bool(args.url_features),
         seed=args.random_state,
     )
 
@@ -245,22 +277,30 @@ def _resolve_threshold_grid(args: argparse.Namespace) -> tuple[float, ...]:
                 unique.append(as_float)
         # Sort low-to-high so reports stay comparable across runs.
         return tuple(sorted(unique))
+    # The OFAT sweep uses this flag so 0.20 and 0.25 are included.
+    if args.use_expanded_threshold_grid:
+        # Reuse the shared expanded grid (0.20 ... 0.70 step 0.05).
+        return LSTM_EXPANDED_THRESHOLD_GRID
     # Documented default remains 0.30 ... 0.70; this LSTM has no C grid.
     return DEFAULT_THRESHOLD_GRID
 
 
 # Write a small JSON file describing torch/CUDA/fp32 on this machine.
-def _training_env_payload(fp16_reason: str, used_fp16: bool) -> dict:
+def _training_env_payload(
+    fp16_reason: str, used_fp16: bool, *, url_features: bool
+) -> dict:
     """Return the environment block stored next to LSTM metrics."""
 
+    # Count URL columns actually concatenated (0 when the OFAT ablation is on).
+    url_count = len(URL_FEATURE_NAMES) if url_features else 0
     # Record library versions so a reviewer can reproduce the pin.
     payload = {
         "torch_version": torch.__version__,
         "cuda_available": bool(torch.cuda.is_available()),
         "fp16": bool(used_fp16),
         "fp16_reason": fp16_reason,
-        "url_features": True,
-        "url_feature_count": len(URL_FEATURE_NAMES),
+        "url_features": bool(url_features),
+        "url_feature_count": url_count,
         "live_url_reputation": False,
         "onnx_exported": False,
         "frontend_wired": False,
@@ -295,11 +335,15 @@ def _hyperparams_payload(hyperparams: LstmHyperparameters, vocab_size: int) -> d
         "learning_rate": hyperparams.learning_rate,
         "num_train_epochs": hyperparams.num_train_epochs,
         "grad_clip": hyperparams.grad_clip,
+        "weight_decay": hyperparams.weight_decay,
+        "class_weight": hyperparams.class_weight,
         "seed": hyperparams.seed,
         "pooling": hyperparams.pooling,
         "tokenizer": hyperparams.tokenizer,
-        "url_feature_concat": True,
-        "url_feature_count": len(URL_FEATURE_NAMES),
+        "url_feature_concat": bool(hyperparams.url_features),
+        "url_feature_count": (
+            len(URL_FEATURE_NAMES) if hyperparams.url_features else 0
+        ),
     }
 
 
@@ -328,8 +372,10 @@ def _val_metrics_payload(
         "confusion_matrix_labels": ["legitimate", "scam"],
         "random_state": args.random_state,
         "hyperparameters": _hyperparams_payload(hyperparams, vocab_size),
-        "training_env": _training_env_payload(fp16_reason, used_fp16),
-        "url_features": True,
+        "training_env": _training_env_payload(
+            fp16_reason, used_fp16, url_features=hyperparams.url_features
+        ),
+        "url_features": bool(hyperparams.url_features),
         "live_url_reputation": False,
         "onnx_exported": False,
         "frontend_wired": False,
@@ -540,9 +586,11 @@ def main() -> None:
         "vocab_size": vocab_size,
         "train_wall_clock_seconds": train_seconds,
         "hyperparameters": _hyperparams_payload(hyperparams, vocab_size),
-        "training_env": _training_env_payload(fp16_reason, used_fp16),
+        "training_env": _training_env_payload(
+            fp16_reason, used_fp16, url_features=hyperparams.url_features
+        ),
         "model_dir": str(args.model_dir),
-        "url_features": True,
+        "url_features": bool(hyperparams.url_features),
         "live_url_reputation": False,
         "onnx_exported": False,
         "frontend_wired": False,
@@ -638,7 +686,7 @@ def main() -> None:
             "classification_report": _jsonify(chat_eval.classification_report),
             "confusion_matrix": chat_eval.confusion_matrix,
             "confusion_matrix_labels": ["legitimate", "scam"],
-            "url_features": True,
+            "url_features": bool(hyperparams.url_features),
             "live_url_reputation": False,
             "onnx_exported": False,
             "frontend_wired": False,

@@ -2,7 +2,7 @@
 
 Secure Chat is a portfolio-grade real-time messaging system designed so the server stores and relays ciphertext but never receives message plaintext or private/symmetric key material. Decrypted messages are classified for phishing and scam indicators locally in the recipient's browser.
 
-> Status: Slice 5. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. DistilBERT is fine-tuned offline on the full 71,370-row LLM rewrite (fp16 on the RTX 4060); it is not loaded in the browser yet. A later DistilBERT one-at-a-time hyperparameter sweep lives under `ml/reports/distilbert_param_sweep/` and does **not** replace the Slice 5 default (`max_length` 256) until ONNX Runtime Web cost is measured. A matching TF-IDF one-at-a-time sweep lives under `ml/reports/baseline_param_sweep/` and does **not** replace the published TF-IDF default (50k terms, C=0.25, threshold 0.30) until the TypeScript TF-IDF + ONNX logistic-head path is measured. Client-side ONNX Runtime Web and the scam warning banner still arrive in later reviewed slices.
+> Status: Slice 5. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. DistilBERT is fine-tuned offline on the full 71,370-row LLM rewrite (fp16 on the RTX 4060); it is not loaded in the browser yet. A later DistilBERT one-at-a-time hyperparameter sweep lives under `ml/reports/distilbert_param_sweep/` and does **not** replace the Slice 5 default (`max_length` 256) until ONNX Runtime Web cost is measured. A matching TF-IDF one-at-a-time sweep lives under `ml/reports/baseline_param_sweep/` and does **not** replace the published TF-IDF default (50k terms, C=0.25, threshold 0.30) until the TypeScript TF-IDF + ONNX logistic-head path is measured. A matching word-BiLSTM one-at-a-time sweep lives under `ml/reports/lstm_param_sweep/` (quality candidate: 8 epochs, threshold 0.20) and does **not** replace the published LSTM default (4 epochs, threshold 0.30) until ONNX Runtime Web cost is measured — switch back to `ml/reports/lstm/` if that candidate is a poor browser fit. Client-side ONNX Runtime Web and the scam warning banner still arrive in later reviewed slices.
 
 ## Architecture
 
@@ -221,6 +221,7 @@ uv run python scripts/train_lstm.py                         # word BiLSTM + URL 
 uv run python scripts/evaluate_chat_style_eval_lstm.py      # frozen LSTM threshold; never fits the 200-row file
 uv run python scripts/sweep_distilbert_params.py            # optional OFAT retrain; writes reports/distilbert_param_sweep/ (does not overwrite Slice 5)
 uv run python scripts/sweep_baseline_params.py              # optional OFAT retrain; writes reports/baseline_param_sweep/ (does not overwrite published TF-IDF)
+uv run python scripts/sweep_lstm_params.py                  # optional OFAT retrain; writes reports/lstm_param_sweep/ (does not overwrite published LSTM)
 uv run pytest
 uv run ruff check scripts src tests
 ```
@@ -237,7 +238,7 @@ Checkpointing uses `data/processed_chat_llm/_rewrite_checkpoint.sqlite` so a cra
 
 `train_distilbert.py` uses the **same** 71,370-row `llm_intent_v1` corpus, **same** 70/20/10 split (`random_state=42`), and **same** VAL rule. It fine-tunes `distilbert-base-uncased` on TRAIN only (HuggingFace + PyTorch, fp16 on this RTX 4060 8 GB). Documented hyperparameters — not searched on TEST or chat_eval — are max_length 256, batch 16, lr `2e-5`, 3 epochs, warmup 0.1, AdamW weight decay 0.01, balanced class weights. Only the decision threshold is searched on VAL (`0.30 … 0.70` step 0.05). TEST is scored once; the locked 200-row file is predict-only. Reports go to `ml/reports/distilbert/` so they never overwrite `ml/reports/baseline_metrics.json`. Weights land in `ml/models/distilbert/` (gitignored). This slice does **not** export ONNX and does **not** load the model in the browser. A later one-at-a-time sweep (expanded VAL grid including 0.20/0.25) is documented under **DistilBERT one-at-a-time parameter sweep** below and writes `ml/reports/distilbert_param_sweep/` without replacing this default.
 
-`train_lstm.py` is a third offline track, not a Slice 5/6 replacement: same corpus, same split/seed, same VAL rule, TRAIN-only fit, TEST once, chat-eval predict-only (DistilBERT-style; not refit on TRAIN+VAL). It learns a word vocabulary from TRAIN (whitespace + punctuation split; UNK for OOV; pad/truncate at 128 tokens), a from-scratch embedding, a 1-layer BiLSTM pooled as last-forward + last-backward hidden, then concatenates the TRAIN-fitted `StandardScaler` URL feature vector (`url_features.py`; zeros when there is no link) before a 2-logit head. No C grid. Reports go to `ml/reports/lstm/` so they never overwrite TF-IDF or DistilBERT JSON. Weights land in `ml/models/lstm/` (gitignored). No ONNX, no browser wiring, no character-level LSTM (see **Word BiLSTM + URL concat** below).
+`train_lstm.py` is a third offline track, not a Slice 5/6 replacement: same corpus, same split/seed, same VAL rule, TRAIN-only fit, TEST once, chat-eval predict-only (DistilBERT-style; not refit on TRAIN+VAL). It learns a word vocabulary from TRAIN (whitespace + punctuation split; UNK for OOV; pad/truncate at 128 tokens), a from-scratch embedding, a 1-layer BiLSTM pooled as last-forward + last-backward hidden, then concatenates the TRAIN-fitted `StandardScaler` URL feature vector (`url_features.py`; zeros when there is no link) before a 2-logit head. No C grid. Reports go to `ml/reports/lstm/` so they never overwrite TF-IDF or DistilBERT JSON. Weights land in `ml/models/lstm/` (gitignored). No ONNX, no browser wiring, no character-level LSTM (see **Word BiLSTM + URL concat** below). A later one-at-a-time sweep (expanded VAL grid including 0.20/0.25, then two post-OFAT combos) is documented under **Word BiLSTM one-at-a-time parameter sweep** below; the 8-epoch / threshold-0.20 quality candidate writes `ml/reports/lstm_param_sweep/` and does **not** replace the published 4-epoch / 0.30 default until ONNX Runtime Web cost is measured.
 
 `uv run pytest` exercises the same pipeline against tiny synthetic data (fake LLM callback, no Ollama, no downloads, a 1-layer random DistilBERT from a local vocab file, a tiny word BiLSTM whose vocab is built from those strings) so CI never needs the multi-gigabyte raw corpora, a Hub download, or a full rewrite.
 
@@ -270,7 +271,7 @@ Slice 4 adds:
 Slice 5 adds:
 
 - **Backend / frontend:** none. E2EE, WebSocket relay, `ChatScreen`, and auth are unchanged.
-- **ML:** DistilBERT-base fine-tuned offline on the full 71,370-row `llm_intent_v1` rewrite with the same split/seed and VAL rule as the TF-IDF baseline. Slice 5 numbers live in `ml/reports/distilbert/` (`max_length` 256, threshold 0.30). A later DistilBERT one-at-a-time parameter sweep is documented separately under `ml/reports/distilbert_param_sweep/` and is **not** the browser/ONNX default until sequence-length cost is measured. A later TF-IDF one-at-a-time sweep is documented under `ml/reports/baseline_param_sweep/` and is **not** the published TF-IDF/ONNX default (50k terms, C=0.25, threshold 0.30) until TypeScript TF-IDF + logistic-head cost is measured. No ONNX export, no `onnxruntime-web`, no scam banner.
+- **ML:** DistilBERT-base fine-tuned offline on the full 71,370-row `llm_intent_v1` rewrite with the same split/seed and VAL rule as the TF-IDF baseline. Slice 5 numbers live in `ml/reports/distilbert/` (`max_length` 256, threshold 0.30). A later DistilBERT one-at-a-time parameter sweep is documented separately under `ml/reports/distilbert_param_sweep/` and is **not** the browser/ONNX default until sequence-length cost is measured. A later TF-IDF one-at-a-time sweep is documented under `ml/reports/baseline_param_sweep/` and is **not** the published TF-IDF/ONNX default (50k terms, C=0.25, threshold 0.30) until TypeScript TF-IDF + logistic-head cost is measured. A later word-BiLSTM one-at-a-time sweep is documented under `ml/reports/lstm_param_sweep/` and is **not** the first LSTM/ONNX default (4 epochs, threshold 0.30) until ONNX Runtime Web cost is measured. No ONNX export, no `onnxruntime-web`, no scam banner.
 
 ## E2EE and client-side AI
 
@@ -501,9 +502,11 @@ uv run python scripts/train_distilbert.py \
 
 `train_distilbert.py` downloads `distilbert-base-uncased` once into the HuggingFace cache, writes `ml/models/distilbert/` (gitignored) and `ml/reports/distilbert/` when using defaults. Re-running the **default** command overwrites those Slice 5 DistilBERT artifacts only. The sweep writes separate folders. pytest does not train this model.
 
-### Word BiLSTM + URL concat (offline research baseline; not Slice 6)
+### Word BiLSTM + URL concat (published default; ONNX switch-back; not Slice 6)
 
-Same full `llm_intent_v1` corpus (71,370 rows), same stratified 70/20/10 split (`random_state=42`: 49,958 train / 14,275 val / 7,137 test), same VAL rule. Word tokenizer: lowercase, then alphanumeric runs and each punctuation character as its own token (URLs explode into short pieces and OOV hosts become UNK — that is why the scaled URL vector is concatenated). TRAIN-only vocab cap 25,000 plus PAD/UNK. Learned embedding 128 → 1-layer BiLSTM hidden 128, dropout 0.3, pooling = last forward hidden ∥ last backward hidden, then concat 20 TRAIN-scaled URL features (`has_url=0` zero vector when there is no link; `live_url_reputation` false). Linear head, TRAIN-balanced class weights, Adam `1e-3`, batch 128, 4 epochs, seed 42. **fp32 on CUDA** (AMP/fp16 skipped as unstable for this LSTM; the network is small enough that fp32 took **39.5 s** on the RTX 4060). 930 TRAIN rows truncated at `max_tokens=128`. No C grid. Threshold search is VAL-only on `0.30 … 0.70` step 0.05.
+These numbers are the **kept 4-epoch / threshold 0.30 checkpoint** (`ml/reports/lstm/`, `ml/models/lstm/`). A later one-at-a-time sweep found a stronger offline point (8 epochs, threshold 0.20); that candidate is documented in the **next** subsection and does **not** replace this folder. If an 8-epoch / 0.20 export is a poor fit for ONNX Runtime Web, **switch back here** — do not delete these reports.
+
+Same full `llm_intent_v1` corpus (71,370 rows), same stratified 70/20/10 split (`random_state=42`: 49,958 train / 14,275 val / 7,137 test), same VAL rule. Word tokenizer: lowercase, then alphanumeric runs and each punctuation character as its own token (URLs explode into short pieces and OOV hosts become UNK — that is why the scaled URL vector is concatenated). TRAIN-only vocab cap 25,000 plus PAD/UNK. Learned embedding 128 → 1-layer BiLSTM hidden 128, dropout 0.3, pooling = last forward hidden ∥ last backward hidden, then concat 20 TRAIN-scaled URL features (`has_url=0` zero vector when there is no link; `live_url_reputation` false). Linear head, TRAIN-balanced class weights, Adam `1e-3`, batch 128, 4 epochs, seed 42. **fp32 on CUDA** (AMP/fp16 skipped as unstable for this LSTM; the network is small enough that fp32 took **39.5 s** on the RTX 4060). 930 TRAIN rows truncated at `max_tokens=128`. No C grid. Threshold search is VAL-only on `0.30 … 0.70` step 0.05. `scripts/train_lstm.py` with no extra flags still trains **this** recipe.
 
 Chosen operating point (`ml/reports/lstm/val_metrics.json`): **threshold = 0.30**, reason `max_scam_recall_subject_to_legit_recall_floor` (floor feasible; VAL legitimate recall 0.947, scam recall 0.982). TEST once (`ml/reports/lstm/test_metrics.json`):
 
@@ -540,7 +543,59 @@ In-domain the LSTM sits between TF-IDF and DistilBERT on the VAL-frozen operatin
 
 **Char LSTM: do not explore.** Criterion A is only weakly true on chat-eval (14 extra misses vs TF-IDF’s 0; TEST is *better* than DistilBERT). B is false (0/14 extra FNs are URL-bearing). C is false (URL concat already matches TF-IDF on URL scams). Misses are mostly no-URL social-engineering; DistilBERT is the semantic model for that gap. Decision file: `ml/reports/lstm/char_lstm_decision.md`.
 
-No ONNX export. Not loaded in the browser. This does **not** replace the published TF-IDF default or the Slice 5 DistilBERT default.
+No ONNX export. Not loaded in the browser. This published 4-epoch point does **not** replace the published TF-IDF default or the Slice 5 DistilBERT default.
+
+### Word BiLSTM one-at-a-time parameter sweep (offline quality candidate; not the ONNX default yet)
+
+This is a **separate** experiment from the published 4-epoch word-BiLSTM point above. It does **not** overwrite `ml/reports/lstm/` or `ml/models/lstm/`. Keep those as the **ONNX Runtime Web switch-back** if an 8-epoch / threshold-0.20 export is too aggressive, slower, or otherwise a poor fit in the browser. Until that cost is measured, treat the published recipe (4 epochs, VAL grid 0.30–0.70, threshold 0.30) as what `scripts/train_lstm.py` still trains by default.
+
+**What we did.** Same 71,370-row `llm_intent_v1` corpus, same 70/20/10 split (`random_state=42`), same VAL rule (maximize scam recall subject to legitimate recall ≥ 0.85). Driver: `ml/scripts/sweep_lstm_params.py`. **Thirty-one** full TRAIN-only retrains, then **two** post-OFAT combo retrains (~30.8 min on the RTX 4060). Every run searched an **expanded VAL threshold grid** `0.20, 0.25, …, 0.70` (the published grid started at 0.30). Run `00` is the published LSTM recipe with only that VAL grid changed. Each other OFAT run changes **exactly one** training knob from that recipe (not a full factorial — 8 epochs was not combined with embed 256 until the later combo jobs). After OFAT, two combo runs merged the best distinct groups (`epochs=8` + `learning_rate=5e-3`, then those plus `embed_dim=256`). TEST and the locked 200-row chat eval were scored only after the threshold was frozen; they were never used to pick knobs.
+
+Per-run reports: `ml/reports/lstm_param_sweep/<run_id>/` (`report.md`, TEST/VAL/chat-eval JSON, confusion matrix). Checkpoints (gitignored under `ml/models/`, ~14 MB each, ~480 MB for all 33): `ml/models/lstm_param_sweep/<run_id>/`. Ranking: `ml/reports/lstm_param_sweep/ranking.json`. Sweep index: `ml/reports/lstm_param_sweep/README.md`.
+
+Knobs tried, one group at a time:
+
+| Group | Documented default | Values tried (one at a time) |
+| --- | --- | --- |
+| learning rate | `1e-3` | `5e-4`, `2e-3`, `5e-3` |
+| epochs | 4 | 3, 5, 6, **8** |
+| max_tokens | 128 | 64, 192, 256 |
+| embed_dim | 128 | 64, **256** |
+| hidden_size | 128 | 64, 256 |
+| num_layers | 1 | 2, 3 |
+| dropout | 0.3 | 0.0, 0.2, 0.5 |
+| max_vocab_size | 25,000 | 10,000, 15,000, 50,000 |
+| batch_size | 128 | 64, 256 |
+| weight_decay | 0.0 | `1e-4`, `1e-3` |
+| grad_clip | 1.0 | 0.5, 2.0 |
+| class_weight | balanced | none |
+| url_features | True | False |
+
+**What we found.** Once 0.20 and 0.25 were on the VAL grid, **all 33 retrains** froze **threshold = 0.20**. None froze 0.25 or the published 0.30. The expanded-grid retrain of the published 4-epoch recipe (`00_baseline_expanded_grid`) already beat the published 0.30-grid point on combined TEST mean (0.9803 vs 0.9790) with fewer ham warnings (144 vs 200) but **more** TEST misses (55 vs 49) — the lower cut catches VAL scams at the ham-recall floor, then TEST pays a few extra FNs. Among **training** knobs, **`epochs=8`** was the change that clearly cut TEST misses without exploding ham warnings (30 vs 49 published; 179 vs 200 ham warned). `learning_rate=5e-3` was almost as good (31 misses). Combining those two winners (and adding `embed_dim=256`) **did not** beat 8 epochs alone: the combos were quieter on ham (90 and 87 TEST warnings) but missed more scams (61 and 67). Adam weight decay hurt. `epochs=5` had the fewest TEST misses (16) but warned on 385 ham rows, so it loses the combined-mean ranking.
+
+**Top 3 by combined TEST score.** Rank by the **equal-weight mean of scam recall, ham (legitimate) precision, and overall accuracy together** on the 7,137-row TEST set (VAL-frozen threshold; the locked 200-row chat eval was scored after freeze and was **not** used to pick the ranking):
+
+| Rank | Run | What changed | Thr | TEST scam recall | TEST ham precision | TEST accuracy | Combined mean | TEST missed / ham warned | Chat missed / ham warned |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `07_epochs_8` | **8** epochs | 0.20 | 0.9914 | 0.9915 | 0.9707 | **0.9845** | 30 / 179 | 11 / 29 |
+| 2 | `03_learning_rate_5e-3` | lr **5e-3** | 0.20 | 0.9911 | 0.9912 | 0.9710 | **0.9844** | 31 / 176 | 12 / 28 |
+| 3 | `12_embed_dim_256` | embed **256** | 0.20 | 0.9908 | 0.9908 | 0.9651 | **0.9822** | 32 / 217 | 6 / 33 |
+| Published (kept) | `reports/lstm/` | 4 epochs, grid 0.30–0.70 | 0.30 | 0.9859 | 0.9860 | 0.9651 | 0.9790 | 49 / 200 | 14 / 24 |
+
+**Offline quality candidate (first LSTM we would try to export):** rank 1, `epochs=8`, other knobs at documented defaults, threshold 0.20. Same embed/hidden/vocab/`max_tokens` as the published LSTM, so **inference size matches the 4-epoch checkpoint** (~14 MB); only TRAIN length and the probability cut differ. Reports: `ml/reports/lstm_param_sweep/07_epochs_8/`. Weights: `ml/models/lstm_param_sweep/07_epochs_8/`. TEST (`[[3484, 179], [30, 3444]]`):
+
+| Class | Precision | Recall | F1 |
+| --- | --- | --- | --- |
+| legitimate | 0.991 | 0.951 | 0.971 |
+| scam | 0.951 | 0.991 | 0.971 |
+
+Locked chat eval at that VAL-frozen 0.20 cut (`[[71, 29], [11, 89]]`): 11 missed scams and 29 ham warnings out of 100 (vs 14 / 24 published). `09_max_tokens_192` is quieter on locked-chat misses (4/100) but is rank 13 on TEST combined mean — do not retune the threshold on the 200-row file to chase that.
+
+**If the 8-epoch / 0.20 candidate is not suitable for ONNX Runtime Web, switch back (do not delete the published LSTM reports):**
+
+1. **First fallback (published default — safest first browser export):** 4 epochs, threshold 0.30, `ml/reports/lstm/` and `ml/models/lstm/`. This is what `scripts/train_lstm.py` still trains with no extra flags. Same architecture as the quality candidate; only epoch count and the 0.30-grid operating point differ. Use this if a 0.20 cut over-warns in the tab or the 8-epoch checkpoint is a poor ONNX fit.
+2. **Second fallback (still 4 epochs, only VAL grid changed):** run `00_baseline_expanded_grid`, threshold 0.20, `ml/reports/lstm_param_sweep/00_baseline_expanded_grid/`. Same 4-epoch weights recipe; only the probability cut differs from the published point.
+3. **Keep as offline quality candidate until measured:** rank 1, `epochs=8`, threshold 0.20, `ml/reports/lstm_param_sweep/07_epochs_8/`. Do not make this `train_lstm.py`'s default until ONNX Runtime Web latency and warning rate are measured. Rank 3 (`embed_dim=256`) is a **larger** inference graph — do not promote it as a first browser export.
 
 ### How to retrain the word BiLSTM
 
@@ -549,12 +604,22 @@ The 71k `llm_intent_v1` rewrite is already complete — do not run `rewrite_chat
 ```bash
 cd ml
 uv sync
-# Word BiLSTM + URL concat (VAL grid 0.30…0.70). Overwrites reports/lstm/ only.
+# Published default (4 epochs, VAL grid 0.30…0.70). Overwrites reports/lstm/ only.
 uv run python scripts/train_lstm.py
 uv run python scripts/evaluate_chat_style_eval_lstm.py  # optional re-score; training already wrote this
+
+# Optional: reproduce the OFAT sweep (does not overwrite the published LSTM JSON). Resume skips finished run folders.
+uv run python scripts/sweep_lstm_params.py
+
+# Optional: retrain only the quality candidate (8 epochs, expanded VAL grid including 0.20/0.25).
+# Point --reports-dir/--model-dir away from reports/lstm/ so the 4-epoch default stays intact.
+uv run python scripts/train_lstm.py \
+  --epochs 8 --use-expanded-threshold-grid \
+  --reports-dir reports/lstm_param_sweep/07_epochs_8 \
+  --model-dir models/lstm_param_sweep/07_epochs_8
 ```
 
-`train_lstm.py` writes `ml/models/lstm/` (gitignored) and `ml/reports/lstm/` when using defaults. Re-running overwrites those LSTM artifacts only. pytest does not train this model.
+`train_lstm.py` writes `ml/models/lstm/` (gitignored) and `ml/reports/lstm/` when using defaults. Re-running the **default** command overwrites those published LSTM artifacts only. The sweep writes separate folders. pytest does not train this model.
 
 ## Deployment
 

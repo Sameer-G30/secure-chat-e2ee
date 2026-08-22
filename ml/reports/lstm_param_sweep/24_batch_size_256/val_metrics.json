@@ -1,0 +1,103 @@
+{
+  "selection_rule": "maximize scam recall subject to legitimate recall >= 0.85",
+  "selection_reason": "max_scam_recall_subject_to_legit_recall_floor",
+  "legit_recall_floor": 0.85,
+  "floor_feasible": true,
+  "chosen_threshold": 0.2,
+  "grid_thresholds": [
+    0.2,
+    0.25,
+    0.3,
+    0.35,
+    0.4,
+    0.45,
+    0.5,
+    0.55,
+    0.6,
+    0.65,
+    0.7
+  ],
+  "val_rows": 14275,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.9932762836185819,
+      "recall": 0.8872508872508873,
+      "f1-score": 0.9372746935832732,
+      "support": 7326.0
+    },
+    "scam": {
+      "precision": 0.8931574181865218,
+      "recall": 0.9936681536911786,
+      "f1-score": 0.9407356948228883,
+      "support": 6949.0
+    },
+    "accuracy": 0.9390542907180385,
+    "macro avg": {
+      "precision": 0.9432168509025518,
+      "recall": 0.9404595204710329,
+      "f1-score": 0.9390051942030808,
+      "support": 14275.0
+    },
+    "weighted avg": {
+      "precision": 0.9445389108769087,
+      "recall": 0.9390542907180385,
+      "f1-score": 0.9389594920150831,
+      "support": 14275.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      6500,
+      826
+    ],
+    [
+      44,
+      6905
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "random_state": 42,
+  "hyperparameters": {
+    "embed_dim": 128,
+    "hidden_size": 128,
+    "num_layers": 1,
+    "dropout": 0.3,
+    "max_tokens": 128,
+    "max_vocab_size": 25000,
+    "vocab_size": 25000,
+    "batch_size": 256,
+    "eval_batch_size": 256,
+    "learning_rate": 0.001,
+    "num_train_epochs": 4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.0,
+    "class_weight": "balanced",
+    "seed": 42,
+    "pooling": "last_forward_last_backward",
+    "tokenizer": "whitespace_and_punctuation",
+    "url_feature_concat": true,
+    "url_feature_count": 20
+  },
+  "training_env": {
+    "torch_version": "2.8.0+cu128",
+    "cuda_available": true,
+    "fp16": false,
+    "fp16_reason": "cuda_fp32_lstm_amp_unstable",
+    "url_features": true,
+    "url_feature_count": 20,
+    "live_url_reputation": false,
+    "onnx_exported": false,
+    "frontend_wired": false,
+    "cuda_device_name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "cuda_device_total_memory_bytes": 8585216000
+  },
+  "url_features": true,
+  "live_url_reputation": false,
+  "onnx_exported": false,
+  "frontend_wired": false,
+  "fitted_on": "train_only",
+  "chat_style_eval_used_for_tuning": false
+}

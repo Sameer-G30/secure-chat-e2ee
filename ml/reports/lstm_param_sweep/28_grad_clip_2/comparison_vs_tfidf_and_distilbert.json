@@ -1,0 +1,133 @@
+{
+  "tfidf_test": {
+    "legitimate_precision": 0.9915651358950328,
+    "legitimate_recall": 0.8665028665028665,
+    "legitimate_f1": 0.9248251748251748,
+    "scam_precision": 0.8757621951219512,
+    "scam_recall": 0.9922279792746114,
+    "scam_f1": 0.9303643724696357,
+    "confusion_matrix": [
+      [
+        3174,
+        489
+      ],
+      [
+        27,
+        3447
+      ]
+    ],
+    "ham_warned": 489,
+    "scams_missed": 27,
+    "chosen_threshold": 0.3
+  },
+  "lstm_test": {
+    "legitimate_precision": 0.9749380335995593,
+    "legitimate_recall": 0.9664209664209664,
+    "legitimate_f1": 0.9706608171099533,
+    "scam_precision": 0.9649172846548774,
+    "scam_recall": 0.9738054116292458,
+    "scam_f1": 0.9693409742120344,
+    "confusion_matrix": [
+      [
+        3540,
+        123
+      ],
+      [
+        91,
+        3383
+      ]
+    ],
+    "ham_warned": 123,
+    "scams_missed": 91,
+    "chosen_threshold": 0.2
+  },
+  "tfidf_fitted_on": "train_only for TEST; train_plus_val for chat eval",
+  "distilbert_fitted_on": "train_only for TEST and chat eval",
+  "lstm_fitted_on": "train_only for TEST and chat eval",
+  "same_split_seed": 42,
+  "same_selection_rule": "maximize scam recall subject to legitimate recall >= 0.85",
+  "distilbert_test": {
+    "legitimate_precision": 0.9835931091058244,
+    "legitimate_recall": 0.9819819819819819,
+    "legitimate_f1": 0.9827868852459016,
+    "scam_precision": 0.9810344827586207,
+    "scam_recall": 0.9827288428324698,
+    "scam_f1": 0.9818809318377912,
+    "confusion_matrix": [
+      [
+        3597,
+        66
+      ],
+      [
+        60,
+        3414
+      ]
+    ],
+    "ham_warned": 66,
+    "scams_missed": 60,
+    "chosen_threshold": 0.3
+  },
+  "tfidf_chat_eval": {
+    "legitimate_precision": 1.0,
+    "legitimate_recall": 0.3,
+    "legitimate_f1": 0.46153846153846156,
+    "scam_precision": 0.5882352941176471,
+    "scam_recall": 1.0,
+    "scam_f1": 0.7407407407407407,
+    "confusion_matrix": [
+      [
+        30,
+        70
+      ],
+      [
+        0,
+        100
+      ]
+    ],
+    "ham_warned": 70,
+    "scams_missed": 0,
+    "chosen_threshold": 0.3
+  },
+  "lstm_chat_eval": {
+    "legitimate_precision": 0.8271604938271605,
+    "legitimate_recall": 0.67,
+    "legitimate_f1": 0.7403314917127072,
+    "scam_precision": 0.7226890756302521,
+    "scam_recall": 0.86,
+    "scam_f1": 0.7853881278538812,
+    "confusion_matrix": [
+      [
+        67,
+        33
+      ],
+      [
+        14,
+        86
+      ]
+    ],
+    "ham_warned": 33,
+    "scams_missed": 14,
+    "chosen_threshold": 0.2
+  },
+  "distilbert_chat_eval": {
+    "legitimate_precision": 0.883495145631068,
+    "legitimate_recall": 0.91,
+    "legitimate_f1": 0.896551724137931,
+    "scam_precision": 0.9072164948453608,
+    "scam_recall": 0.88,
+    "scam_f1": 0.8934010152284264,
+    "confusion_matrix": [
+      [
+        91,
+        9
+      ],
+      [
+        12,
+        88
+      ]
+    ],
+    "ham_warned": 9,
+    "scams_missed": 12,
+    "chosen_threshold": 0.3
+  }
+}

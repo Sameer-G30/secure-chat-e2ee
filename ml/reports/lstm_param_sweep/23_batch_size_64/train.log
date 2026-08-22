@@ -1,0 +1,22 @@
+/home/sam/projects/Minor Project-II/ml/.venv/bin/python3 scripts/train_lstm.py --reports-dir reports/lstm_param_sweep/23_batch_size_64 --model-dir models/lstm_param_sweep/23_batch_size_64 --use-expanded-threshold-grid --embed-dim 128 --hidden-size 128 --num-layers 1 --dropout 0.3 --max-tokens 128 --max-vocab-size 25000 --batch-size 64 --learning-rate 0.001 --epochs 4 --weight-decay 0.0 --grad-clip 1.0 --class-weight balanced --eval-batch-size 256 --url-features
+
+Device: cuda  fp16: False (cuda_fp32_lstm_amp_unstable)
+Train rows: 49958  Val rows: 14275  Test rows: 7137
+TRAIN vocab_size=25000  rows truncated at max_tokens=128: 930
+train_model: epoch 1/4  mean_loss=0.2047
+train_model: epoch 2/4  mean_loss=0.1041
+train_model: epoch 3/4  mean_loss=0.0748
+train_model: epoch 4/4  mean_loss=0.0574
+TRAIN wall-clock seconds: 68.3
+Frozen threshold: 0.2  Reason: max_scam_recall_subject_to_legit_recall_floor  floor_feasible=True
+TEST scam class -> precision: 0.959  recall: 0.986  f1: 0.972
+TEST confusion matrix ([[TN, FP], [FN, TP]]): [[3516, 147], [49, 3425]]
+Wrote reports/lstm_param_sweep/23_batch_size_64/test_metrics.json, reports/lstm_param_sweep/23_batch_size_64/val_metrics.json, and reports/lstm_param_sweep/23_batch_size_64/confusion_matrix.png
+Chat eval: 200 locked rows (threshold=0.2, fitted on 49958 TRAIN rows)
+Chat eval scam  -> precision: 0.752  recall: 0.910  f1: 0.824
+Chat eval legit -> precision: 0.886  recall: 0.700  f1: 0.782
+Chat eval confusion matrix ([[TN, FP], [FN, TP]]): [[70, 30], [9, 91]]
+Wrote reports/lstm_param_sweep/23_batch_size_64/chat_style_eval_metrics.json and reports/lstm_param_sweep/23_batch_size_64/chat_eval_confusion_matrix.png
+Wrote reports/lstm_param_sweep/23_batch_size_64/comparison_vs_tfidf_and_distilbert.json
+Wrote reports/lstm_param_sweep/23_batch_size_64/link_error_analysis.json
+Wrote reports/lstm_param_sweep/23_batch_size_64/char_lstm_decision.md  verdict=do_not_explore_char_lstm

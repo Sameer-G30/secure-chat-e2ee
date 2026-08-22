@@ -38,7 +38,7 @@ import re
 from collections import Counter
 
 # Import dataclass to bundle hyperparameters and VAL threshold results.
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 # Import Path for typed checkpoint and report locations.
 from pathlib import Path
@@ -73,6 +73,7 @@ from secure_chat_ml.baseline import (
     DEFAULT_LEGIT_RECALL_FLOOR,
     DEFAULT_SELECTION_RULE,
     DEFAULT_THRESHOLD_GRID,
+    EXPANDED_THRESHOLD_GRID,
     LEGITIMATE_LABEL,
     SCAM_LABEL,
     BaselineEvaluation,
@@ -135,6 +136,18 @@ DEFAULT_NUM_TRAIN_EPOCHS = 4
 # Clip recurrent gradients so a rare exploding step cannot NaN the run.
 DEFAULT_GRAD_CLIP = 1.0
 
+# Adam L2 penalty; documented default is 0.0 (no decay) so published weights match.
+DEFAULT_WEIGHT_DECAY = 0.0
+
+# TRAIN class-weight mode; "balanced" matches DistilBERT / TF-IDF.
+DEFAULT_CLASS_WEIGHT = "balanced"
+
+# Concatenate the TRAIN-scaled URL vector unless an OFAT run ablates it.
+DEFAULT_URL_FEATURES = True
+
+# OFAT VAL grid: published 0.30..0.70 plus the extra 0.20 and 0.25 cuts.
+LSTM_EXPANDED_THRESHOLD_GRID: tuple[float, ...] = EXPANDED_THRESHOLD_GRID
+
 # Checkpoint payload files under ml/models/lstm/ (directory is gitignored).
 MODEL_WEIGHTS_NAME = "model.pt"
 
@@ -190,6 +203,12 @@ class LstmHyperparameters:
     num_train_epochs: int = DEFAULT_NUM_TRAIN_EPOCHS
     # Record the gradient-norm clip applied after each backward pass.
     grad_clip: float = DEFAULT_GRAD_CLIP
+    # Record Adam weight decay (0.0 keeps the published LSTM recipe).
+    weight_decay: float = DEFAULT_WEIGHT_DECAY
+    # Record TRAIN class-weight mode ("balanced" or "none").
+    class_weight: str = DEFAULT_CLASS_WEIGHT
+    # Record whether the scaled URL vector is concatenated before the head.
+    url_features: bool = DEFAULT_URL_FEATURES
     # Record the seed applied to torch/numpy and the split.
     seed: int = 42
     # Record the pooling rule so reports do not imply mean/max pooling.
@@ -641,16 +660,36 @@ def build_model(
 
     # Fall back to documented defaults when the CLI did not override knobs.
     knobs = hyperparams or LstmHyperparameters()
-    # Construct the network; url_dim is always len(URL_FEATURE_NAMES).
+    # Use the frozen URL width, or 0 when an OFAT run ablates URL concat.
+    url_dim = len(URL_FEATURE_NAMES) if knobs.url_features else 0
+    # Construct the network; the linear head width follows url_dim.
     return WordBiLstmClassifier(
         vocab_size=int(vocab_size),
         embed_dim=knobs.embed_dim,
         hidden_size=knobs.hidden_size,
         num_layers=knobs.num_layers,
         dropout=knobs.dropout,
-        url_dim=len(URL_FEATURE_NAMES),
+        url_dim=url_dim,
         pad_index=PAD_INDEX,
     )
+
+
+# Build the URL block the BiLSTM head expects (empty when url_dim is 0).
+def url_feature_array_for_model(
+    texts: pd.Series | list[str] | np.ndarray,
+    url_scaler: StandardScaler,
+    url_dim: int,
+) -> np.ndarray:
+    """Return scaled URL rows, or a (n, 0) matrix when URL concat is ablated."""
+
+    # Count rows so an empty URL block still has the right first dimension.
+    n_rows = len(as_text_list(texts))
+    # url_dim 0 means the linear head has no URL columns.
+    if int(url_dim) <= 0:
+        # Shape (n, 0) concatenates as a no-op on the feature axis.
+        return np.zeros((n_rows, 0), dtype=np.float32)
+    # Otherwise reuse the TRAIN-fitted scaler (never refit here).
+    return transform_url_features(texts, url_scaler)
 
 
 # Fit embeddings, BiLSTM, and the classification head on TRAIN only.
@@ -676,16 +715,21 @@ def train_model(
     text_list = as_text_list(train_texts)
     # Materialize labels as ints matching the schema.
     label_list = as_label_list(train_labels)
-    # Compute balanced weights from TRAIN if the caller did not pass them.
+    # Compute TRAIN class weights unless the caller passed an explicit tensor.
     if class_weights is None:
-        # Fit weights here so tests can also pass an explicit tensor.
-        class_weights = balanced_class_weights(label_list)
+        # "none" matches TF-IDF's class_weight=None OFAT ablation.
+        if hyperparams.class_weight == "none":
+            # Equal weights leave the empirical TRAIN prior unadjusted.
+            class_weights = torch.tensor([1.0, 1.0], dtype=torch.float32)
+        else:
+            # Fit balanced weights here so tests can also pass an explicit tensor.
+            class_weights = balanced_class_weights(label_list)
     # Encode TRAIN with the TRAIN vocabulary (already built by the caller).
     token_ids, lengths = encode_texts(
         text_list, token_to_id, max_tokens=hyperparams.max_tokens
     )
-    # Scale TRAIN URL features with the TRAIN-fitted scaler (already fit).
-    url_features = transform_url_features(text_list, url_scaler)
+    # Scale TRAIN URL features, or pass an empty block when URL concat is off.
+    url_features = url_feature_array_for_model(text_list, url_scaler, model.url_dim)
     # Wrap encodings as a Dataset DataLoader can iterate.
     train_dataset = EncodedLstmDataset(token_ids, lengths, url_features, label_list)
     # Shuffle TRAIN each epoch; pin_memory only helps when CUDA is in use.
@@ -700,8 +744,12 @@ def train_model(
     model.to(device)
     # Switch to train so dropout is active.
     model.train()
-    # Adam on all parameters; lr is the documented from-scratch default.
-    optimizer = torch.optim.Adam(model.parameters(), lr=hyperparams.learning_rate)
+    # Adam on all parameters; lr and weight_decay come from documented knobs.
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=hyperparams.learning_rate,
+        weight_decay=hyperparams.weight_decay,
+    )
     # Move TRAIN-only class weights onto the same device as the logits.
     weight = class_weights.to(device=device, dtype=torch.float32)
     # Weighted CE matches DistilBERT WeightedTrainer / sklearn class_weight=balanced.
@@ -776,8 +824,8 @@ def predict_scam_proba(
         return np.array([], dtype=np.float64)
     # Encode with the TRAIN vocabulary; OOV becomes UNK.
     token_ids, lengths = encode_texts(text_list, token_to_id, max_tokens=max_tokens)
-    # Scale URL features with the TRAIN-fitted scaler (zeros stay valid).
-    url_features = transform_url_features(text_list, url_scaler)
+    # Scale URL features, or pass an empty block when the head has url_dim 0.
+    url_features = url_feature_array_for_model(text_list, url_scaler, model.url_dim)
     # Move the model onto the inference device and disable dropout.
     model.to(device)
     # Ensure dropout is off; this function must never train.
@@ -930,8 +978,16 @@ def load_saved_classifier(
         )
     # Parse the sidecar; this is a trusted local file written by this project.
     meta = json.loads(meta_path.read_text())
-    # Rebuild hyperparameters from the recorded dict.
-    hyperparams = LstmHyperparameters(**meta["hyperparameters"])
+    # Rebuild hyperparameters from the recorded dict, ignoring unknown keys.
+    allowed = {item.name for item in fields(LstmHyperparameters)}
+    # Drop keys a newer checkpoint might add that this code does not know yet.
+    hp_payload = {
+        key: value
+        for key, value in meta["hyperparameters"].items()
+        if key in allowed
+    }
+    # Missing new fields (url_features, weight_decay, ...) use dataclass defaults.
+    hyperparams = LstmHyperparameters(**hp_payload)
     # Rebuild the TRAIN vocabulary (token strings → ids).
     token_to_id = {str(key): int(value) for key, value in meta["token_to_id"].items()}
     # Rebuild the TRAIN-fitted URL scaler from stored mean/scale/var.

@@ -1,0 +1,26 @@
+/home/sam/projects/Minor Project-II/ml/.venv/bin/python3 scripts/train_lstm.py --reports-dir reports/lstm_param_sweep/07_epochs_8 --model-dir models/lstm_param_sweep/07_epochs_8 --use-expanded-threshold-grid --embed-dim 128 --hidden-size 128 --num-layers 1 --dropout 0.3 --max-tokens 128 --max-vocab-size 25000 --batch-size 128 --learning-rate 0.001 --epochs 8 --weight-decay 0.0 --grad-clip 1.0 --class-weight balanced --eval-batch-size 256 --url-features
+
+Device: cuda  fp16: False (cuda_fp32_lstm_amp_unstable)
+Train rows: 49958  Val rows: 14275  Test rows: 7137
+TRAIN vocab_size=25000  rows truncated at max_tokens=128: 930
+train_model: epoch 1/8  mean_loss=0.2292
+train_model: epoch 2/8  mean_loss=0.1154
+train_model: epoch 3/8  mean_loss=0.0875
+train_model: epoch 4/8  mean_loss=0.0667
+train_model: epoch 5/8  mean_loss=0.0546
+train_model: epoch 6/8  mean_loss=0.0464
+train_model: epoch 7/8  mean_loss=0.0388
+train_model: epoch 8/8  mean_loss=0.0304
+TRAIN wall-clock seconds: 76.6
+Frozen threshold: 0.2  Reason: max_scam_recall_subject_to_legit_recall_floor  floor_feasible=True
+TEST scam class -> precision: 0.951  recall: 0.991  f1: 0.971
+TEST confusion matrix ([[TN, FP], [FN, TP]]): [[3484, 179], [30, 3444]]
+Wrote reports/lstm_param_sweep/07_epochs_8/test_metrics.json, reports/lstm_param_sweep/07_epochs_8/val_metrics.json, and reports/lstm_param_sweep/07_epochs_8/confusion_matrix.png
+Chat eval: 200 locked rows (threshold=0.2, fitted on 49958 TRAIN rows)
+Chat eval scam  -> precision: 0.754  recall: 0.890  f1: 0.817
+Chat eval legit -> precision: 0.866  recall: 0.710  f1: 0.780
+Chat eval confusion matrix ([[TN, FP], [FN, TP]]): [[71, 29], [11, 89]]
+Wrote reports/lstm_param_sweep/07_epochs_8/chat_style_eval_metrics.json and reports/lstm_param_sweep/07_epochs_8/chat_eval_confusion_matrix.png
+Wrote reports/lstm_param_sweep/07_epochs_8/comparison_vs_tfidf_and_distilbert.json
+Wrote reports/lstm_param_sweep/07_epochs_8/link_error_analysis.json
+Wrote reports/lstm_param_sweep/07_epochs_8/char_lstm_decision.md  verdict=do_not_explore_char_lstm

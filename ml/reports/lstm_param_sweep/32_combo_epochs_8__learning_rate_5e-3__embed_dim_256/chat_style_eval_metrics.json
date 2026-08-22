@@ -1,0 +1,59 @@
+{
+  "trained_on_rows": 49958,
+  "trained_on": "train_only_processed_chat_llm",
+  "processed_dir": "data/processed_chat_llm",
+  "rewrite_method": "llm_intent_v1",
+  "held_out_in_domain_test_rows": 7137,
+  "held_out_in_domain_val_rows": 14275,
+  "chat_eval_rows": 200,
+  "chosen_threshold": 0.2,
+  "threshold_source": "reports/lstm_param_sweep/32_combo_epochs_8__learning_rate_5e-3__embed_dim_256/val_metrics.json (validation-frozen)",
+  "retuned_on_chat_eval": false,
+  "chat_style_eval_training_allowed": false,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.8541666666666666,
+      "recall": 0.82,
+      "f1-score": 0.8367346938775511,
+      "support": 100.0
+    },
+    "scam": {
+      "precision": 0.8269230769230769,
+      "recall": 0.86,
+      "f1-score": 0.8431372549019608,
+      "support": 100.0
+    },
+    "accuracy": 0.84,
+    "macro avg": {
+      "precision": 0.8405448717948718,
+      "recall": 0.84,
+      "f1-score": 0.8399359743897559,
+      "support": 200.0
+    },
+    "weighted avg": {
+      "precision": 0.8405448717948718,
+      "recall": 0.84,
+      "f1-score": 0.839935974389756,
+      "support": 200.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      82,
+      18
+    ],
+    [
+      14,
+      86
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "url_features": true,
+  "live_url_reputation": false,
+  "onnx_exported": false,
+  "frontend_wired": false,
+  "model_dir": "models/lstm_param_sweep/32_combo_epochs_8__learning_rate_5e-3__embed_dim_256"
+}
