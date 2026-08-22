@@ -1,0 +1,55 @@
+{
+  "trained_on_rows": 64233,
+  "trained_on": "train_plus_val_processed_chat_llm",
+  "processed_dir": "data/processed_chat_llm",
+  "rewrite_method": "llm_intent_v1",
+  "held_out_in_domain_test_rows": 7137,
+  "chat_eval_rows": 200,
+  "chosen_C": 1.0,
+  "chosen_threshold": 0.2,
+  "threshold_source": "reports/baseline_metrics.json (validation-frozen)",
+  "retuned_on_chat_eval": false,
+  "chat_style_eval_training_allowed": false,
+  "classification_report": {
+    "legitimate": {
+      "precision": 1.0,
+      "recall": 0.29,
+      "f1-score": 0.4496124031007752,
+      "support": 100.0
+    },
+    "scam": {
+      "precision": 0.5847953216374269,
+      "recall": 1.0,
+      "f1-score": 0.7380073800738007,
+      "support": 100.0
+    },
+    "accuracy": 0.645,
+    "macro avg": {
+      "precision": 0.7923976608187134,
+      "recall": 0.645,
+      "f1-score": 0.593809891587288,
+      "support": 200.0
+    },
+    "weighted avg": {
+      "precision": 0.7923976608187135,
+      "recall": 0.645,
+      "f1-score": 0.5938098915872879,
+      "support": 200.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      29,
+      71
+    ],
+    [
+      0,
+      100
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "live_url_reputation": false
+}

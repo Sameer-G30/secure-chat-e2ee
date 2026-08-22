@@ -21,15 +21,22 @@ import json
 # Import Path for portable input/output locations.
 from pathlib import Path
 
+# Import joblib to persist a TRAIN-fitted pipeline next to sweep reports.
+from joblib import dump
+
 # Import the testable training/evaluation logic this script only orchestrates.
 from secure_chat_ml.baseline import (
     DEFAULT_C_GRID,
     DEFAULT_LEGIT_RECALL_FLOOR,
     DEFAULT_THRESHOLD_GRID,
+    EXPANDED_THRESHOLD_GRID,
+    WIDENED_C_GRID,
+    BaselineHyperparameters,
     ThresholdTuningResult,
     build_pipeline,
     evaluate,
     evaluate_external,
+    hyperparameters_to_dict,
     infer_rewrite_method,
     load_processed_corpora,
     save_confusion_matrix_plot,
@@ -139,6 +146,129 @@ def parse_args() -> argparse.Namespace:
         default=50_000,
         help="Maximum TF-IDF vocabulary size (default: 50000).",
     )
+    # Inclusive lower n-gram order (1 = unigrams).
+    parser.add_argument(
+        "--ngram-min",
+        type=int,
+        default=1,
+        help="Minimum n-gram order for TF-IDF (default: 1).",
+    )
+    # Inclusive upper n-gram order (2 = unigrams+bigrams).
+    parser.add_argument(
+        "--ngram-max",
+        type=int,
+        default=2,
+        help="Maximum n-gram order for TF-IDF (default: 2).",
+    )
+    # Minimum document frequency for a term to enter the vocabulary.
+    parser.add_argument(
+        "--min-df",
+        type=int,
+        default=2,
+        help="Minimum document frequency for TF-IDF terms (default: 2).",
+    )
+    # Maximum document frequency as a proportion of documents (1.0 = no cap).
+    parser.add_argument(
+        "--max-df",
+        type=float,
+        default=1.0,
+        help="Maximum document-frequency proportion for TF-IDF terms (default: 1.0).",
+    )
+    # Sublinear TF is the published default; --no-sublinear-tf is an OFAT alternative.
+    parser.add_argument(
+        "--sublinear-tf",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use 1+log(tf) before IDF (default: on).",
+    )
+    # IDF weighting is the published default; --no-use-idf is an OFAT alternative.
+    parser.add_argument(
+        "--use-idf",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply inverse-document-frequency weighting (default: on).",
+    )
+    # Stop-word mode: published recipe keeps every token.
+    parser.add_argument(
+        "--stop-words",
+        type=str,
+        choices=("none", "english"),
+        default="none",
+        help="TF-IDF stop-word list (default: none).",
+    )
+    # Accent folding: published recipe uses unicode.
+    parser.add_argument(
+        "--strip-accents",
+        type=str,
+        choices=("unicode", "ascii", "none"),
+        default="unicode",
+        help="Accent stripping mode (default: unicode).",
+    )
+    # URL lexical/structural branch: published recipe keeps it.
+    parser.add_argument(
+        "--url-features",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Concatenate local URL features with TF-IDF (default: on).",
+    )
+    # Logistic class weights: published recipe uses balanced.
+    parser.add_argument(
+        "--class-weight",
+        type=str,
+        choices=("balanced", "none"),
+        default="balanced",
+        help="Logistic class_weight (default: balanced).",
+    )
+    # Logistic solver: published recipe uses lbfgs.
+    parser.add_argument(
+        "--solver",
+        type=str,
+        choices=("lbfgs", "liblinear", "saga"),
+        default="lbfgs",
+        help="LogisticRegression solver (default: lbfgs).",
+    )
+    # Logistic iteration cap: published recipe uses 1000.
+    parser.add_argument(
+        "--max-iter",
+        type=int,
+        default=1000,
+        help="LogisticRegression max_iter (default: 1000).",
+    )
+    # Optional explicit C list; overrides --use-widened-c-grid.
+    parser.add_argument(
+        "--c-grid",
+        type=float,
+        nargs="+",
+        default=None,
+        help="VAL C values to search (default: 0.25 1.0 4.0).",
+    )
+    # Convenience flag used by the OFAT sweep so C is searched more widely.
+    parser.add_argument(
+        "--use-widened-c-grid",
+        action="store_true",
+        help="Search C in {0.01, 0.05, ..., 64.0} instead of {0.25, 1.0, 4.0}.",
+    )
+    # Optional explicit VAL threshold list; overrides --use-expanded-threshold-grid.
+    parser.add_argument(
+        "--threshold-grid",
+        type=float,
+        nargs="+",
+        default=None,
+        help="VAL P(scam) thresholds to search (default: 0.30 0.35 ... 0.70).",
+    )
+    # Convenience flag used by the OFAT sweep so 0.20 and 0.25 are searched.
+    parser.add_argument(
+        "--use-expanded-threshold-grid",
+        action="store_true",
+        help="Search VAL thresholds 0.20, 0.25, ..., 0.70 instead of 0.30..0.70.",
+    )
+    # Optional directory for a joblib dump of the TRAIN-fitted pipeline.
+    parser.add_argument(
+        "--model-dir",
+        type=Path,
+        default=None,
+        help="If set, write pipeline.joblib here (gitignored under ml/models/).",
+    )
     # Enable or disable the validation-only C/threshold search (default on).
     parser.add_argument(
         "--tune-threshold",
@@ -150,8 +280,73 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Return the C values this run will search on VALIDATION.
+def _resolve_c_grid(args: argparse.Namespace) -> tuple[float, ...]:
+    """Return an explicit --c-grid, the widened sweep grid, or the published grid."""
+
+    # An explicit list always wins so a reviewer can reproduce one unusual point.
+    if args.c_grid is not None:
+        # argparse already parsed these as floats.
+        return tuple(float(value) for value in args.c_grid)
+    # The OFAT sweep opts into the widened set without listing every C on the command line.
+    if args.use_widened_c_grid:
+        # Include values both below 0.25 and above 4.0.
+        return WIDENED_C_GRID
+    # Default CLI behavior must match the published Slice-2/5 baseline reports.
+    return DEFAULT_C_GRID
+
+
+# Return the P(scam) thresholds this run will search on VALIDATION.
+def _resolve_threshold_grid(args: argparse.Namespace) -> tuple[float, ...]:
+    """Return an explicit --threshold-grid, the expanded sweep grid, or the published grid."""
+
+    # An explicit list always wins so a reviewer can reproduce one unusual point.
+    if args.threshold_grid is not None:
+        # argparse already parsed these as floats.
+        return tuple(float(value) for value in args.threshold_grid)
+    # The OFAT sweep opts into 0.20 and 0.25 without listing every cut.
+    if args.use_expanded_threshold_grid:
+        # Same 0.05 step as the published grid, just starting at 0.20.
+        return EXPANDED_THRESHOLD_GRID
+    # Default CLI behavior must match the published 0.30..0.70 reports.
+    return DEFAULT_THRESHOLD_GRID
+
+
+# Build the dataclass the pipeline constructors consume from parsed CLI flags.
+def _hyperparameters_from_args(args: argparse.Namespace) -> BaselineHyperparameters:
+    """Return TF-IDF/logistic knobs matching this training invocation."""
+
+    # Map the CLI "none" tokens onto Python None for sklearn.
+    stop_words = None if args.stop_words == "none" else args.stop_words
+    # Map accent folding the same way ("none" disables stripping).
+    strip_accents = None if args.strip_accents == "none" else args.strip_accents
+    # Map class_weight "none" onto sklearn's unweighted default.
+    class_weight = None if args.class_weight == "none" else args.class_weight
+    # Bundle every OFAT knob; C itself is still searched on VAL.
+    return BaselineHyperparameters(
+        max_features=args.max_features,
+        ngram_min=args.ngram_min,
+        ngram_max=args.ngram_max,
+        min_df=args.min_df,
+        max_df=args.max_df,
+        sublinear_tf=args.sublinear_tf,
+        use_idf=args.use_idf,
+        stop_words=stop_words,
+        strip_accents=strip_accents,
+        url_features=args.url_features,
+        class_weight=class_weight,
+        solver=args.solver,
+        max_iter=args.max_iter,
+        random_state=args.random_state,
+    )
+
+
 # Serialize the frozen validation choices plus the VAL classification report.
-def _val_metrics_payload(tuning: ThresholdTuningResult, args: argparse.Namespace) -> dict:
+def _val_metrics_payload(
+    tuning: ThresholdTuningResult,
+    args: argparse.Namespace,
+    hyperparameters: BaselineHyperparameters,
+) -> dict:
     """Return the JSON body written to reports/val_metrics.json."""
 
     # Include the chosen operating point, why it was chosen, and VAL metrics.
@@ -170,8 +365,9 @@ def _val_metrics_payload(tuning: ThresholdTuningResult, args: argparse.Namespace
         "confusion_matrix_labels": ["legitimate", "scam"],
         "random_state": args.random_state,
         "tune_threshold": args.tune_threshold,
+        "hyperparameters": hyperparameters_to_dict(hyperparameters),
         "live_url_reputation": False,
-        "url_features": True,
+        "url_features": hyperparameters.url_features,
         "chat_style_eval_used_for_tuning": False,
     }
 
@@ -182,6 +378,12 @@ def main() -> None:
 
     # Parse CLI arguments (defaults match the documented from-ml/ command).
     args = parse_args()
+    # Resolve the VAL C grid before loading data so a bad flag fails fast.
+    c_grid = _resolve_c_grid(args)
+    # Resolve the VAL threshold grid the same way (expanded vs published).
+    threshold_grid = _resolve_threshold_grid(args)
+    # Bundle TF-IDF/logistic knobs so TEST, VAL, and chat-eval share one recipe.
+    hyperparameters = _hyperparameters_from_args(args)
 
     # Load every rewritten (or original) corpus into one combined dataset.
     combined = load_processed_corpora(args.processed_dir)
@@ -195,19 +397,24 @@ def main() -> None:
     )
     # Tune C and the decision threshold on VALIDATION only, unless the operator opted out.
     if args.tune_threshold:
-        # Search the documented grids; never look at TEST or the locked chat eval set.
+        # Search the chosen grids; never look at TEST or the locked chat eval set.
         tuning = tune_on_validation(
             train_df,
             val_df,
             max_features=args.max_features,
-            C_grid=DEFAULT_C_GRID,
-            threshold_grid=DEFAULT_THRESHOLD_GRID,
+            C_grid=c_grid,
+            threshold_grid=threshold_grid,
             legit_recall_floor=DEFAULT_LEGIT_RECALL_FLOOR,
             random_state=args.random_state,
+            hyperparameters=hyperparameters,
         )
     else:
         # Keep C=1.0 and threshold=0.5, but still score VAL at that default for the audit file.
-        default_pipeline = build_pipeline(max_features=args.max_features, C=1.0)
+        default_pipeline = build_pipeline(
+            max_features=args.max_features,
+            C=1.0,
+            hyperparameters=hyperparameters,
+        )
         # Fit on TRAIN only even when tuning is disabled.
         default_pipeline.fit(train_df["text"], train_df["label"])
         # Score VAL at the default 0.5 threshold so val_metrics.json still exists.
@@ -227,7 +434,11 @@ def main() -> None:
             grid_thresholds=[0.5],
         )
     # Build a fresh pipeline at the frozen C so TEST scoring does not reuse VAL-fitted heads.
-    pipeline = build_pipeline(max_features=args.max_features, C=tuning.C)
+    pipeline = build_pipeline(
+        max_features=args.max_features,
+        C=tuning.C,
+        hyperparameters=hyperparameters,
+    )
     # Fit on TRAIN and score TEST once with the frozen threshold.
     result = evaluate(pipeline, train_df, test_df, threshold=tuning.threshold)
 
@@ -257,9 +468,12 @@ def main() -> None:
                 "val_size": args.val_size,
                 "test_size": args.test_size,
                 "max_features": args.max_features,
+                "hyperparameters": hyperparameters_to_dict(hyperparameters),
+                "grid_C": tuning.grid_C,
+                "grid_thresholds": tuning.grid_thresholds,
                 "processed_dir": str(args.processed_dir),
                 "rewrite_method": infer_rewrite_method(args.processed_dir),
-                "url_features": True,
+                "url_features": hyperparameters.url_features,
                 "live_url_reputation": False,
                 "chat_style_eval_used_for_training": False,
                 "chat_style_eval_used_for_tuning": False,
@@ -270,9 +484,17 @@ def main() -> None:
     # Persist VAL metrics separately so the threshold search remains auditable.
     val_path = args.reports_dir / "val_metrics.json"
     # Write the validation payload next to the TEST report.
-    val_path.write_text(json.dumps(_val_metrics_payload(tuning, args), indent=2))
+    val_path.write_text(json.dumps(_val_metrics_payload(tuning, args, hyperparameters), indent=2))
     # Save the TEST confusion-matrix heatmap next to the JSON reports.
     save_confusion_matrix_plot(result, args.reports_dir / "confusion_matrix.png")
+    # Optionally dump the TRAIN-fitted pipeline for the OFAT sweep (gitignored).
+    if args.model_dir is not None:
+        # Ensure the checkpoint directory exists before writing joblib bytes.
+        args.model_dir.mkdir(parents=True, exist_ok=True)
+        # Persist the sklearn Pipeline so a later slice can inspect coefficients.
+        dump(pipeline, args.model_dir / "pipeline.joblib")
+        # Record the path in the terminal so the operator can find the dump.
+        print(f"Wrote {args.model_dir / 'pipeline.joblib'}")
 
     # Print a concise human-readable summary to the terminal.
     scam_metrics = result.classification_report["scam"]

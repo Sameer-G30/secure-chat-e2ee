@@ -1,0 +1,115 @@
+{
+  "train_rows": 49958,
+  "val_rows": 14275,
+  "test_rows": 7137,
+  "chosen_C": 1.0,
+  "chosen_threshold": 0.2,
+  "selection_reason": "max_scam_recall_subject_to_legit_recall_floor",
+  "selection_rule": "maximize scam recall subject to legitimate recall >= 0.85",
+  "legit_recall_floor": 0.85,
+  "floor_feasible": true,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.9949953081013451,
+      "recall": 0.8684138684138684,
+      "f1-score": 0.927405247813411,
+      "support": 3663.0
+    },
+    "scam": {
+      "precision": 0.8776649746192894,
+      "recall": 0.9953943580886586,
+      "f1-score": 0.9328297814944699,
+      "support": 3474.0
+    },
+    "accuracy": 0.930222782681799,
+    "macro avg": {
+      "precision": 0.9363301413603172,
+      "recall": 0.9319041132512635,
+      "f1-score": 0.9301175146539404,
+      "support": 7137.0
+    },
+    "weighted avg": {
+      "precision": 0.9378836955867504,
+      "recall": 0.930222782681799,
+      "f1-score": 0.9300456891764485,
+      "support": 7137.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      3181,
+      482
+    ],
+    [
+      16,
+      3458
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "source_counts_in_test_split": {
+    "enron_spam": 3293,
+    "kaggle_phishing": 1892,
+    "nazario": 840,
+    "spamassassin": 579,
+    "uci_sms_spam": 533
+  },
+  "random_state": 42,
+  "train_size": 0.7,
+  "val_size": 0.2,
+  "test_size": 0.1,
+  "max_features": 50000,
+  "hyperparameters": {
+    "max_features": 50000,
+    "ngram_range": [
+      1,
+      2
+    ],
+    "min_df": 1,
+    "max_df": 1.0,
+    "sublinear_tf": true,
+    "use_idf": true,
+    "stop_words": "none",
+    "strip_accents": "unicode",
+    "url_features": true,
+    "class_weight": "balanced",
+    "solver": "lbfgs",
+    "max_iter": 1000,
+    "random_state": 42
+  },
+  "grid_C": [
+    0.01,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+    16.0,
+    32.0,
+    64.0
+  ],
+  "grid_thresholds": [
+    0.2,
+    0.25,
+    0.3,
+    0.35,
+    0.4,
+    0.45,
+    0.5,
+    0.55,
+    0.6,
+    0.65,
+    0.7
+  ],
+  "processed_dir": "data/processed_chat_llm",
+  "rewrite_method": "llm_intent_v1",
+  "url_features": true,
+  "live_url_reputation": false,
+  "chat_style_eval_used_for_training": false,
+  "chat_style_eval_used_for_tuning": false
+}

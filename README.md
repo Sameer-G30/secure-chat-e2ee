@@ -2,7 +2,7 @@
 
 Secure Chat is a portfolio-grade real-time messaging system designed so the server stores and relays ciphertext but never receives message plaintext or private/symmetric key material. Decrypted messages are classified for phishing and scam indicators locally in the recipient's browser.
 
-> Status: Slice 5. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. DistilBERT is fine-tuned offline on the full 71,370-row LLM rewrite (fp16 on the RTX 4060); it is not loaded in the browser yet. A later one-at-a-time hyperparameter sweep lives under `ml/reports/distilbert_param_sweep/` and does **not** replace the Slice 5 default (`max_length` 256) until ONNX Runtime Web cost is measured. Client-side ONNX Runtime Web and the scam warning banner still arrive in later reviewed slices.
+> Status: Slice 5. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. DistilBERT is fine-tuned offline on the full 71,370-row LLM rewrite (fp16 on the RTX 4060); it is not loaded in the browser yet. A later DistilBERT one-at-a-time hyperparameter sweep lives under `ml/reports/distilbert_param_sweep/` and does **not** replace the Slice 5 default (`max_length` 256) until ONNX Runtime Web cost is measured. A matching TF-IDF one-at-a-time sweep lives under `ml/reports/baseline_param_sweep/` and does **not** replace the published TF-IDF default (50k terms, C=0.25, threshold 0.30) until the TypeScript TF-IDF + ONNX logistic-head path is measured. Client-side ONNX Runtime Web and the scam warning banner still arrive in later reviewed slices.
 
 ## Architecture
 
@@ -218,6 +218,7 @@ uv run python scripts/evaluate_chat_style_eval.py           # frozen C/threshold
 uv run python scripts/train_distilbert.py                   # DistilBERT Slice 5 default (max_length 256); writes reports/distilbert/
 uv run python scripts/evaluate_chat_style_eval_distilbert.py  # frozen DistilBERT threshold; never fits the 200-row file
 uv run python scripts/sweep_distilbert_params.py            # optional OFAT retrain; writes reports/distilbert_param_sweep/ (does not overwrite Slice 5)
+uv run python scripts/sweep_baseline_params.py              # optional OFAT retrain; writes reports/baseline_param_sweep/ (does not overwrite published TF-IDF)
 uv run pytest
 uv run ruff check scripts src tests
 ```
@@ -228,7 +229,7 @@ uv run ruff check scripts src tests
 
 Checkpointing uses `data/processed_chat_llm/_rewrite_checkpoint.sqlite` so a crash can `--resume` without redoing finished rows. Runtime on this WSL2 box (RTX 4060 8GB, llama3.2:latest): ~0.4–0.8s/row after GPU warmup. Full processed corpora (~71k rows) ≈ 8–12 hours per uninterrupted pass; this full run was resumed twice (10k sample → stop near 16k → finish). `--limit N` is a smoke run. `--stratified-sample 10000` is a label+source-stratified subset. Reported metrics below used the **full** processed set with the refusal-fallback path: 71,813 in, `dropped_empty=0`, `llm_failed=1`, then exact-text dedup dropped 442 rows (**71,370** left: 36,629 legitimate / 34,741 scam; 70,860 `llm_intent_v1`, 510 `rule_based_v1_fallback`). Checkpoint before dedup: 71,170 `llm_ok` and 642 `llm_refused_then_fallback`. See `ml/reports/rewrite_chat_register_llm_log.json`. Refusals no longer cull labeled scams.
 
-`train_baseline.py` defaults to `data/processed_chat_llm`. Pass `--processed-dir data/processed_chat` for rule_based_v1 or `--processed-dir data/processed` for original email/SMS. It takes a stratified 70% train / 20% validation / 10% test split (`random_state=42`), fits TF-IDF + local URL features + `LogisticRegression` on TRAIN only, searches `C ∈ {0.25, 1.0, 4.0}` and `predict_proba[:, scam]` thresholds `0.30, 0.35, …, 0.70` on VALIDATION only, **maximizes scam recall subject to legitimate recall ≥ 0.85** (at most ~15% of real ham warned), freezes those choices, and scores TEST once. Reported numbers in `reports/baseline_metrics.json` are TEST; `reports/val_metrics.json` is the audit of the operating point. Use `--no-tune-threshold` to keep `C=1.0` and threshold `0.5`. `live_url_reputation` remains false.
+`train_baseline.py` defaults to `data/processed_chat_llm`. Pass `--processed-dir data/processed_chat` for rule_based_v1 or `--processed-dir data/processed` for original email/SMS. It takes a stratified 70% train / 20% validation / 10% test split (`random_state=42`), fits TF-IDF + local URL features + `LogisticRegression` on TRAIN only, searches `C ∈ {0.25, 1.0, 4.0}` and `predict_proba[:, scam]` thresholds `0.30, 0.35, …, 0.70` on VALIDATION only, **maximizes scam recall subject to legitimate recall ≥ 0.85** (at most ~15% of real ham warned), freezes those choices, and scores TEST once. Reported numbers in `reports/baseline_metrics.json` are TEST; `reports/val_metrics.json` is the audit of the operating point. Use `--no-tune-threshold` to keep `C=1.0` and threshold `0.5`. `live_url_reputation` remains false. A later one-at-a-time sweep (widened C, VAL grid including 0.20/0.25, and one-knob TF-IDF/logistic variants) is documented under **TF-IDF one-at-a-time parameter sweep** below and writes `ml/reports/baseline_param_sweep/` without replacing this default.
 
 `build_chat_style_eval_set.py` writes 200 hand-authored DM-style messages (100 legitimate, 100 scam covering romance, crypto, prize, "hi mom/it's me," fake-support, KYC, seed-phrase, and phishing-link patterns), including some ordinary https links so "has a URL" is not treated as automatic scam. None of it is scraped. Per `data/label-schema.yaml` `evaluation_policy.chat_style_eval_training_allowed: false`, that file is never fitted, never used to tune the threshold, and never rewritten into training. `evaluate_chat_style_eval.py` fits on TRAIN+VAL of `processed_chat_llm` (or whichever directory `baseline_metrics.json` recorded) and only calls `.predict` / `predict_proba` on the 200 rows, applying the frozen threshold from `reports/baseline_metrics.json`.
 
@@ -265,7 +266,7 @@ Slice 4 adds:
 Slice 5 adds:
 
 - **Backend / frontend:** none. E2EE, WebSocket relay, `ChatScreen`, and auth are unchanged.
-- **ML:** DistilBERT-base fine-tuned offline on the full 71,370-row `llm_intent_v1` rewrite with the same split/seed and VAL rule as the TF-IDF baseline. Slice 5 numbers live in `ml/reports/distilbert/` (`max_length` 256, threshold 0.30). A later one-at-a-time parameter sweep is documented separately under `ml/reports/distilbert_param_sweep/` and is **not** the browser/ONNX default until sequence-length cost is measured. No ONNX export, no `onnxruntime-web`, no scam banner.
+- **ML:** DistilBERT-base fine-tuned offline on the full 71,370-row `llm_intent_v1` rewrite with the same split/seed and VAL rule as the TF-IDF baseline. Slice 5 numbers live in `ml/reports/distilbert/` (`max_length` 256, threshold 0.30). A later DistilBERT one-at-a-time parameter sweep is documented separately under `ml/reports/distilbert_param_sweep/` and is **not** the browser/ONNX default until sequence-length cost is measured. A later TF-IDF one-at-a-time sweep is documented under `ml/reports/baseline_param_sweep/` and is **not** the published TF-IDF/ONNX default (50k terms, C=0.25, threshold 0.30) until TypeScript TF-IDF + logistic-head cost is measured. No ONNX export, no `onnxruntime-web`, no scam banner.
 
 ## E2EE and client-side AI
 
@@ -275,7 +276,7 @@ The sender encrypts before network transmission. The server stores and relays on
 
 The baseline and DistilBERT tracks report precision, recall, F1, confusion matrices, and the selected threshold. Accuracy alone is insufficient for the imbalanced and harm-sensitive classification task. Final reported numbers come from TEST after freezing validation choices. The locked chat-style eval set is never used to fit or to tune a threshold. Model size, ONNX export, and browser latency are later-slice deliverables (A5/A6 client load).
 
-### TF-IDF + local URL features + Logistic Regression (current)
+### TF-IDF + local URL features + Logistic Regression (published default; ONNX switch-back)
 
 Training text is the `llm_intent_v1` rewrite of UCI SMS Spam, Enron-Spam, SpamAssassin, Nazario phishing, and the Kaggle phishing-email compilation, with `rule_based_v1_fallback` only on rows where Llama refused twice. Local Ollama **llama3.2:latest** (Llama 3.2 3B instruct, already pulled) paraphrased each source into a new WhatsApp/iMessage/DM with the same intent, facts, and binary label (`num_predict=400`, LLM cap 600 characters of prose; URLs extra and never sliced). This is not header-stripping plus truncation. Python post-conditions copy every original URL character-for-character (13,188 URL-bearing rows all still contain every original URL; 8,801 needed a Python append). Labels are never flipped. `data/chat_eval/chat_style_eval_v1.csv` is never read. Assistant refusals ("I cannot write a message that could be used in a scam") are retried, then rewritten with `rule_based_v1` for that row; they are never stored as training DMs.
 
@@ -324,6 +325,79 @@ Previous 8,337-row LLM-DM chat-eval (C=4.0, threshold=0.30, refusals dropped): l
 Previous LLM-DM chat-eval at the precision-floor point (C=0.25, threshold=0.30): legitimate P/R/F1 1.000 / 0.140 / 0.246; scam 0.538 / 1.000 / 0.699; matrix `[[14, 86], [0, 100]]`.
 
 Previous `rule_based_v1` chat-eval (C=4.0, threshold=0.30, TRAIN+VAL of `processed_chat`): legitimate P/R/F1 0.686 / 0.960 / 0.800; scam 0.933 / 0.560 / 0.700; matrix `[[96, 4], [44, 56]]`.
+
+### TF-IDF one-at-a-time parameter sweep (offline; not the published default)
+
+This is a **separate** experiment from the published TF-IDF point above. It does **not** overwrite `ml/reports/baseline_metrics.json`, `ml/reports/val_metrics.json`, `ml/reports/chat_style_eval_metrics.json`, or `ml/reports/confusion_matrix.png`. Keep those as the **switch-back default** if a later TypeScript TF-IDF + ONNX logistic-head export of a sweep candidate is a poor fit for ONNX Runtime Web (vocabulary size, IDF tables, or a more aggressive 0.20 threshold). Until that cost is measured, treat the published recipe (`max_features` 50,000, C=0.25, threshold 0.30) as the recipe `scripts/train_baseline.py` still trains by default.
+
+**What we did.** Same 71,370-row `llm_intent_v1` corpus, same 70/20/10 split (`random_state=42`), same VAL rule (maximize scam recall subject to legitimate recall ≥ 0.85). Twenty-one full TRAIN-only retrains. Every run searched a **widened C grid** `{0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0}` (the published set was only `{0.25, 1.0, 4.0}`) and an **expanded VAL threshold grid** `0.20, 0.25, …, 0.70` (the published grid started at 0.30). Run `00` is that published TF-IDF recipe with only those VAL grids changed. Each other run changes **exactly one** training knob from that recipe (one-factor-at-a-time, not a full factorial — 10k features was not combined with trigrams, no-IDF, etc.):
+
+| Group | Documented default | Values tried (one at a time) |
+| --- | --- | --- |
+| max_features | 50,000 | 10,000, 25,000, 100,000, 200,000 |
+| ngram_range | (1, 2) | (1, 1), (1, 3), (2, 2) |
+| min_df | 2 | 1, 3, 5 |
+| max_df | 1.0 | 0.90, 0.95, 0.99 |
+| sublinear_tf | True | False |
+| use_idf | True | False |
+| stop_words | none | english |
+| class_weight | balanced | none |
+| solver | lbfgs | liblinear, saga |
+| url_features | True | False |
+
+Driver: `ml/scripts/sweep_baseline_params.py`. Per-run reports: `ml/reports/baseline_param_sweep/<run_id>/` (`report.md`, TEST/VAL/chat-eval JSON, confusion matrix). Joblib dumps (gitignored, not loaded together in RAM — one process per run): `ml/models/baseline_param_sweep/<run_id>/`. Ranking JSON: `ml/reports/baseline_param_sweep/ranking.json`.
+
+**What we found.** Once 0.20 and 0.25 were on the VAL grid, **20 of 21** retrains froze **threshold = 0.20**; `solver=saga` froze **0.40**. Most also moved from published **C = 0.25** to **C = 1.0**. The expanded-grid retrain of the published 50k recipe (`00_baseline_expanded_grids`) already beat the published 0.30-grid point on TEST scam misses (16 vs 27) with almost the same ham-warning count (487 vs 489). Among **training** knobs, **`max_features=10000`** was the change that clearly cut ham warnings without giving up scam recall (440 vs 487 ham warned vs that expanded-grid 50k recipe; 17 vs 16 TEST misses). Bigger vocabularies (100k / 200k) warned on *more* in-domain ham. Dropping IDF (`15_use_idf_false`) raised TEST accuracy and cut ham warnings further but tied the published point on TEST scam misses (27) and missed 2 locked chat scams. `solver=saga` was the only run that clearly got worse (63 TEST misses).
+
+**Top 3 by combined TEST score.** Rank by the equal-weight mean of **scam recall**, **ham (legitimate) precision**, and **overall accuracy** together on the 7,137-row TEST set (VAL-frozen C and threshold; the locked 200-row chat eval was scored after freeze and was **not** used to pick the ranking):
+
+| Rank | Run | What changed | C | Thr | TEST scam recall | TEST ham precision | TEST accuracy | Combined mean | TEST missed / ham warned | Chat missed / ham warned |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `01_max_features_10000` | max_features **10000** | 1.0 | 0.20 | 0.9951 | 0.9948 | 0.9360 | **0.9753** | 17 / 440 | 0 / 61 |
+| 2 | `15_use_idf_false` | **no IDF** (still 50k terms) | 2.0 | 0.20 | 0.9922 | 0.9918 | 0.9414 | **0.9752** | 27 / 391 | 2 / 58 |
+| 3 | `02_max_features_25000` | max_features **25000** | 1.0 | 0.20 | 0.9954 | 0.9950 | 0.9327 | **0.9744** | 16 / 464 | 0 / 67 |
+| Published (kept) | `reports/baseline_metrics.json` | 50k terms, C grid {0.25, 1, 4}, thr 0.30–0.70 | 0.25 | 0.30 | 0.9922 | 0.9916 | 0.9277 | 0.9705 | 27 / 489 | 0 / 70 |
+
+**Offline quality candidate:** rank 1, `max_features=10000`, other knobs at documented defaults, C=1.0, threshold=0.20. Reports: `ml/reports/baseline_param_sweep/01_max_features_10000/`. Pipeline: `ml/models/baseline_param_sweep/01_max_features_10000/pipeline.joblib`. Chat-eval still catches 100/100 locked scams and warns on **61/100** ordinary DMs (vs 70/100 published). DistilBERT remains far quieter on chat ham (9/100 in Slice 5). Do not retune C or the threshold on the locked 200-row file.
+
+A5 still plans to reimplement TF-IDF in TypeScript and export only the logistic head to ONNX (tokenizer operators are unsupported in ONNX Runtime Web). A 10k vocabulary is *smaller* than the published 50k table, but a 0.20 threshold and a different IDF/vocab layout still need a browser latency and bundle-size check.
+
+**If the sweep candidate is not suitable for ONNX Runtime Web, switch back (do not delete the published TF-IDF reports):**
+
+1. **First fallback (published default — safest first browser export):** `max_features` 50,000, C=0.25, threshold=0.30, `ml/reports/baseline_metrics.json` and `ml/reports/chat_style_eval_metrics.json`. This is what `scripts/train_baseline.py` still trains with no extra flags. Same 50k TypeScript vocabulary the later ONNX slice already assumed.
+2. **Second fallback (still 50k terms, only VAL grids changed):** run `00_baseline_expanded_grids`, C=1.0, threshold=0.20, `ml/reports/baseline_param_sweep/00_baseline_expanded_grids/`. Browser feature size stays 50k; only the logistic C and the probability cut differ from the published point (TEST misses 16 vs 27; ham warned 487 vs 489).
+3. **Keep as offline quality candidate until measured:** rank 1, `max_features=10000`, C=1.0, threshold=0.20, `ml/reports/baseline_param_sweep/01_max_features_10000/`. Smaller vocab than the published default; do not make this `train_baseline.py`'s default until ONNX Runtime Web cost is measured.
+
+To reproduce only the quality candidate without overwriting the published JSON:
+
+```bash
+cd ml
+uv run python scripts/train_baseline.py \
+  --max-features 10000 \
+  --use-expanded-threshold-grid \
+  --use-widened-c-grid \
+  --reports-dir reports/baseline_param_sweep/01_max_features_10000 \
+  --model-dir models/baseline_param_sweep/01_max_features_10000
+uv run python scripts/evaluate_chat_style_eval.py \
+  --reports-dir reports/baseline_param_sweep/01_max_features_10000
+```
+
+### How to retrain the published TF-IDF baseline
+
+The 71k `llm_intent_v1` rewrite is already complete — do not run `rewrite_chat_register_llm.py` again. From `ml/`:
+
+```bash
+cd ml
+uv sync
+# Published default (50k terms, C grid 0.25/1/4, VAL 0.30…0.70). Overwrites reports/baseline_metrics.json only.
+uv run python scripts/train_baseline.py --processed-dir data/processed_chat_llm
+uv run python scripts/evaluate_chat_style_eval.py
+
+# Optional: reproduce the OFAT sweep (does not overwrite the published TF-IDF JSON). Resume skips finished run folders.
+uv run python scripts/sweep_baseline_params.py
+```
+
+Re-running the **default** command overwrites the published TF-IDF artifacts only. The sweep writes separate folders. pytest does not train this model.
 
 ### DistilBERT-base (Slice 5, offline; not loaded in the browser)
 

@@ -25,6 +25,7 @@ import pandas as pd
 from secure_chat_ml.baseline import (
     build_pipeline,
     evaluate_external,
+    hyperparameters_from_mapping,
     infer_rewrite_method,
     load_chat_style_eval_set,
     load_processed_corpora,
@@ -119,8 +120,10 @@ def main() -> None:
     chosen_C = float(frozen["chosen_C"])
     # Read the frozen decision threshold; do not search it on chat eval.
     chosen_threshold = float(frozen["chosen_threshold"])
+    # Rebuild the same TF-IDF/URL/logistic knobs used at train time (old reports default).
+    hyperparameters = hyperparameters_from_mapping(frozen)
     # Read the TF-IDF vocabulary cap so this fit matches the reported model.
-    max_features = int(frozen.get("max_features", 50_000))
+    max_features = int(hyperparameters.max_features)
 
     # Refuse to treat the locked eval directory as a training source.
     if "chat_eval" in processed_dir.parts:
@@ -142,7 +145,11 @@ def main() -> None:
     # Fit on TRAIN+VAL only; TEST stays held out and chat eval is never concatenated.
     fit_df = pd.concat([train_df, val_df], ignore_index=True)
     # Build the pipeline at the frozen C, including the local URL-feature branch.
-    pipeline = build_pipeline(max_features=max_features, C=chosen_C)
+    pipeline = build_pipeline(
+        max_features=max_features,
+        C=chosen_C,
+        hyperparameters=hyperparameters,
+    )
     # Fit on in-domain TRAIN+VAL text/labels only.
     pipeline.fit(fit_df["text"], fit_df["label"])
 

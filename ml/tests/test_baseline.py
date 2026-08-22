@@ -17,8 +17,13 @@ from secure_chat_ml.baseline import (
     CLASS_NAMES,
     DEFAULT_C_GRID,
     DEFAULT_THRESHOLD_GRID,
+    EXPANDED_THRESHOLD_GRID,
+    WIDENED_C_GRID,
+    BaselineHyperparameters,
     build_pipeline,
     evaluate,
+    hyperparameters_from_mapping,
+    hyperparameters_to_dict,
     infer_rewrite_method,
     load_processed_corpora,
     pick_operating_point,
@@ -382,4 +387,131 @@ def test_score_threshold_grid_matches_the_documented_grid_length() -> None:
     assert len(candidates) == len(DEFAULT_THRESHOLD_GRID)
     assert {row["threshold"] for row in candidates} == set(DEFAULT_THRESHOLD_GRID)
     assert all(row["C"] == 0.25 for row in candidates)
+
+
+# Confirm the sweep VAL grid adds 0.20 and 0.25 below the published default.
+def test_expanded_threshold_grid_includes_0_20_and_0_25() -> None:
+    """Assert 0.20 and 0.25 are searched in addition to the documented 0.30..0.70 cuts."""
+
+    # The expanded grid must be a strict superset of the published TF-IDF grid.
+    assert set(DEFAULT_THRESHOLD_GRID).issubset(set(EXPANDED_THRESHOLD_GRID))
+    # 20/100 and 25/100 are the two extra operating points requested for this sweep.
+    assert 0.20 in EXPANDED_THRESHOLD_GRID
+    # Keep 0.25 as an explicit member, not only 0.20.
+    assert 0.25 in EXPANDED_THRESHOLD_GRID
+    # Step size stays 0.05 so VAL search remains comparable to the published reports.
+    steps = [
+        round(EXPANDED_THRESHOLD_GRID[index + 1] - EXPANDED_THRESHOLD_GRID[index], 2)
+        for index in range(len(EXPANDED_THRESHOLD_GRID) - 1)
+    ]
+    # Every adjacent pair must be 0.05 apart.
+    assert set(steps) == {0.05}
+
+
+# Confirm the sweep C grid widens both below 0.25 and above 4.0.
+def test_widened_c_grid_is_a_strict_superset_of_the_published_grid() -> None:
+    """Assert every published C is kept and extra weaker/stronger values are added."""
+
+    # Published {0.25, 1.0, 4.0} must still be searched.
+    assert set(DEFAULT_C_GRID).issubset(set(WIDENED_C_GRID))
+    # Stronger regularization than the published minimum C=0.25.
+    assert any(value < 0.25 for value in WIDENED_C_GRID)
+    # Weaker regularization than the published maximum C=4.0.
+    assert any(value > 4.0 for value in WIDENED_C_GRID)
+    # The widened grid must be strictly larger, not a rename of the published set.
+    assert len(WIDENED_C_GRID) > len(DEFAULT_C_GRID)
+
+
+# Confirm hyperparameters JSON round-trips through the report helpers.
+def test_hyperparameters_round_trip_through_json_mapping() -> None:
+    """Assert chat-eval can rebuild the same knobs train_baseline.py wrote."""
+
+    original = BaselineHyperparameters(
+        max_features=25_000,
+        ngram_min=1,
+        ngram_max=3,
+        min_df=3,
+        max_df=0.95,
+        sublinear_tf=False,
+        use_idf=False,
+        stop_words="english",
+        strip_accents=None,
+        url_features=False,
+        class_weight=None,
+        solver="liblinear",
+        max_iter=500,
+        random_state=7,
+    )
+    payload = {"hyperparameters": hyperparameters_to_dict(original)}
+    restored = hyperparameters_from_mapping(payload)
+    assert restored == original
+
+
+# Confirm a published-style report without a hyperparameters block still loads.
+def test_hyperparameters_from_mapping_defaults_published_recipe() -> None:
+    """Assert old baseline_metrics.json (max_features + url_features only) still works."""
+
+    restored = hyperparameters_from_mapping({"max_features": 50000, "url_features": True})
+    assert restored.max_features == 50_000
+    assert restored.ngram_max == 2
+    assert restored.url_features is True
+    assert restored.class_weight == "balanced"
+    assert restored.solver == "lbfgs"
+
+
+# Confirm OFAT can drop the URL branch and still fit.
+def test_build_pipeline_without_url_features_still_fits(
+    synthetic_processed_dir: Path,
+) -> None:
+    """Assert url_features=False yields a TF-IDF-only FeatureUnion that trains."""
+
+    combined = load_processed_corpora(synthetic_processed_dir)
+    train_df, _val_df, test_df = stratified_split(combined, random_state=42)
+    knobs = BaselineHyperparameters(max_features=1000, url_features=False)
+    pipeline = build_pipeline(max_features=1000, hyperparameters=knobs)
+    result = evaluate(pipeline, train_df, test_df, threshold=0.5)
+    transformer_names = [
+        name for name, _transformer in pipeline.named_steps["features"].transformer_list
+    ]
+    assert transformer_names == ["tfidf"]
+    assert result.test_rows == len(test_df)
+
+
+# Confirm n-gram OFAT actually changes the vectorizer range.
+def test_build_pipeline_honors_unigram_only_ngram_range(
+    synthetic_processed_dir: Path,
+) -> None:
+    """Assert ngram_max=1 reaches TfidfVectorizer rather than staying at (1, 2)."""
+
+    combined = load_processed_corpora(synthetic_processed_dir)
+    train_df, _val_df, _test_df = stratified_split(combined, random_state=42)
+    knobs = BaselineHyperparameters(max_features=1000, ngram_min=1, ngram_max=1)
+    pipeline = build_pipeline(max_features=1000, hyperparameters=knobs)
+    pipeline.fit(train_df["text"], train_df["label"])
+    vectorizer = pipeline.named_steps["features"].transformer_list[0][1]
+    assert vectorizer.ngram_range == (1, 1)
+
+
+# Confirm tune_on_validation searches a caller-supplied widened C grid.
+def test_tune_on_validation_records_a_custom_c_grid(
+    synthetic_processed_dir: Path,
+) -> None:
+    """Assert the frozen C comes from the supplied grid, including values below 0.25."""
+
+    combined = load_processed_corpora(synthetic_processed_dir)
+    train_df, val_df, _test_df = stratified_split(combined, random_state=42)
+    custom_c = (0.05, 0.25, 8.0)
+    tuning = tune_on_validation(
+        train_df,
+        val_df,
+        max_features=1000,
+        C_grid=custom_c,
+        threshold_grid=EXPANDED_THRESHOLD_GRID,
+        legit_recall_floor=0.85,
+        random_state=42,
+    )
+    assert tuning.C in custom_c
+    assert tuning.grid_C == list(custom_c)
+    assert 0.20 in tuning.grid_thresholds
+    assert 0.25 in tuning.grid_thresholds
 

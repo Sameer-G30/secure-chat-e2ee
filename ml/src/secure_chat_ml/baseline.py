@@ -66,6 +66,25 @@ DEFAULT_C_GRID: tuple[float, ...] = (0.25, 1.0, 4.0)
 # Default decision thresholds on predict_proba[:, scam], inclusive of 0.30 and 0.70.
 DEFAULT_THRESHOLD_GRID: tuple[float, ...] = tuple(i / 100 for i in range(30, 71, 5))
 
+# Sweep VAL P(scam) grid: published 0.30..0.70 plus the extra 0.20 and 0.25 cuts.
+EXPANDED_THRESHOLD_GRID: tuple[float, ...] = tuple(i / 100 for i in range(20, 71, 5))
+
+# Sweep C grid: published {0.25, 1.0, 4.0} plus weaker and stronger regularization.
+WIDENED_C_GRID: tuple[float, ...] = (
+    0.01,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+    16.0,
+    32.0,
+    64.0,
+)
+
 # Legitimate-recall floor: warn on at most ~15% of real ham (default 0.85).
 DEFAULT_LEGIT_RECALL_FLOOR = 0.85
 
@@ -125,6 +144,156 @@ class ThresholdTuningResult:
     grid_C: list[float] = field(default_factory=list)
     # Record the thresholds that were searched.
     grid_thresholds: list[float] = field(default_factory=list)
+
+
+# Bundle TF-IDF + logistic knobs that OFAT can change one group at a time.
+@dataclass(frozen=True)
+class BaselineHyperparameters:
+    """Represent the TF-IDF/URL/logistic knobs recorded in reports (C is searched)."""
+
+    # Record the TF-IDF vocabulary cap (default matches the published baseline).
+    max_features: int = 50_000
+    # Record the inclusive lower n-gram order (1 = unigrams).
+    ngram_min: int = 1
+    # Record the inclusive upper n-gram order (2 = unigrams+bigrams).
+    ngram_max: int = 2
+    # Record the minimum document frequency for a term to enter the vocabulary.
+    min_df: int = 2
+    # Record the maximum document frequency (1.0 = no rare-term-style upper filter).
+    max_df: float = 1.0
+    # Record whether TF is replaced with 1 + log(TF) before IDF.
+    sublinear_tf: bool = True
+    # Record whether inverse-document-frequency weighting is applied.
+    use_idf: bool = True
+    # Record sklearn stop-word mode: None or "english".
+    stop_words: str | None = None
+    # Record accent stripping: "unicode", "ascii", or None.
+    strip_accents: str | None = "unicode"
+    # Record whether the local URL-feature branch is concatenated with TF-IDF.
+    url_features: bool = True
+    # Record logistic class_weight: "balanced" or None (serialized as "none").
+    class_weight: str | None = "balanced"
+    # Record the sklearn LogisticRegression solver name.
+    solver: str = "lbfgs"
+    # Record the logistic iteration cap.
+    max_iter: int = 1000
+    # Record the logistic RNG seed (does not affect the corpus split).
+    random_state: int = 42
+
+
+# Normalize CLI/JSON class_weight strings onto the sklearn argument.
+def _sklearn_class_weight(value: str | None) -> str | None:
+    """Return sklearn class_weight, mapping the sweep's 'none' token to None."""
+
+    # Treat missing, empty, and the explicit "none" token as unweighted classes.
+    if value is None or str(value).strip().lower() in {"", "none"}:
+        # sklearn interprets None as equal class weights.
+        return None
+    # Pass "balanced" (and any future sklearn string) through unchanged.
+    return str(value)
+
+
+# Normalize CLI/JSON stop_words strings onto the sklearn argument.
+def _sklearn_stop_words(value: str | None) -> str | None:
+    """Return sklearn stop_words, mapping the sweep's 'none' token to None."""
+
+    # Treat missing and the explicit "none" token as "do not drop stop words".
+    if value is None or str(value).strip().lower() in {"", "none"}:
+        # sklearn's default is no stop-word list.
+        return None
+    # Pass "english" (and any caller-supplied list name) through unchanged.
+    return str(value)
+
+
+# Normalize CLI/JSON strip_accents strings onto the sklearn argument.
+def _sklearn_strip_accents(value: str | None) -> str | None:
+    """Return sklearn strip_accents, mapping the sweep's 'none' token to None."""
+
+    # Treat missing-as-default only when the caller already passed None.
+    if value is None or str(value).strip().lower() in {"", "none"}:
+        # Disable accent folding entirely.
+        return None
+    # Pass "unicode" or "ascii" through unchanged.
+    return str(value)
+
+
+# Serialize hyperparameters into the JSON reports train/eval scripts share.
+def hyperparameters_to_dict(hyperparameters: BaselineHyperparameters) -> dict[str, Any]:
+    """Return a JSON-safe dict so chat-eval can rebuild the same pipeline."""
+
+    # Use the "none" token for optional sklearn None values so JSON stays explicit.
+    return {
+        "max_features": int(hyperparameters.max_features),
+        "ngram_range": [int(hyperparameters.ngram_min), int(hyperparameters.ngram_max)],
+        "min_df": int(hyperparameters.min_df),
+        "max_df": float(hyperparameters.max_df),
+        "sublinear_tf": bool(hyperparameters.sublinear_tf),
+        "use_idf": bool(hyperparameters.use_idf),
+        "stop_words": (
+            "none" if hyperparameters.stop_words is None else str(hyperparameters.stop_words)
+        ),
+        "strip_accents": (
+            "none"
+            if hyperparameters.strip_accents is None
+            else str(hyperparameters.strip_accents)
+        ),
+        "url_features": bool(hyperparameters.url_features),
+        "class_weight": (
+            "none" if hyperparameters.class_weight is None else str(hyperparameters.class_weight)
+        ),
+        "solver": str(hyperparameters.solver),
+        "max_iter": int(hyperparameters.max_iter),
+        "random_state": int(hyperparameters.random_state),
+    }
+
+
+# Rebuild hyperparameters from baseline_metrics.json (old reports lack the block).
+def hyperparameters_from_mapping(payload: dict[str, Any]) -> BaselineHyperparameters:
+    """Return knobs from a metrics JSON, defaulting to the published recipe."""
+
+    # Prefer the dedicated hyperparameters object written by newer training runs.
+    block = payload.get("hyperparameters")
+    # Fall back to top-level keys so published baseline_metrics.json still loads.
+    source = block if isinstance(block, dict) else payload
+    # ngram_range is stored as a two-integer list; default is unigrams+bigrams.
+    ngram = source.get("ngram_range", [1, 2])
+    # Guard a malformed JSON list by falling back to the published (1, 2) range.
+    if not isinstance(ngram, (list, tuple)) or len(ngram) != 2:
+        # Keep the published default rather than crashing chat-eval reconstruction.
+        ngram = [1, 2]
+    # class_weight may be stored as "none"; map that back to Python None.
+    class_weight_raw = source.get("class_weight", "balanced")
+    # stop_words may be stored as "none"; map that back to Python None.
+    stop_words_raw = source.get("stop_words", None)
+    # strip_accents defaults to unicode when the old report omitted the key.
+    strip_raw = source.get("strip_accents", "unicode")
+    # url_features was a top-level key on the published TEST report.
+    url_features = source.get("url_features", payload.get("url_features", True))
+    # max_features was a top-level key on the published TEST report.
+    max_features = source.get("max_features", payload.get("max_features", 50_000))
+    # Build the frozen dataclass the pipeline constructors consume.
+    return BaselineHyperparameters(
+        max_features=int(max_features),
+        ngram_min=int(ngram[0]),
+        ngram_max=int(ngram[1]),
+        min_df=int(source.get("min_df", 2)),
+        max_df=float(source.get("max_df", 1.0)),
+        sublinear_tf=bool(source.get("sublinear_tf", True)),
+        use_idf=bool(source.get("use_idf", True)),
+        stop_words=_sklearn_stop_words(
+            None if stop_words_raw is None else str(stop_words_raw)
+        ),
+        strip_accents=_sklearn_strip_accents(
+            None if strip_raw is None else str(strip_raw)
+        ),
+        url_features=bool(url_features),
+        class_weight=_sklearn_class_weight(
+            None if class_weight_raw is None else str(class_weight_raw)
+        ),
+        solver=str(source.get("solver", "lbfgs")),
+        max_iter=int(source.get("max_iter", 1000)),
+        random_state=int(source.get("random_state", payload.get("random_state", 42))),
+    )
 
 
 # Load and concatenate every normalized corpus CSV into one labeled dataset.
@@ -227,48 +396,93 @@ def stratified_split(
     )
 
 
-# Build the TF-IDF + local-URL FeatureUnion used by the classifier head.
-def build_feature_union(max_features: int = 50_000) -> FeatureUnion:
-    """Return an unfitted FeatureUnion of TF-IDF text features and URL features."""
+# Fill in published-recipe defaults when a caller only overrides max_features.
+def resolve_hyperparameters(
+    max_features: int = 50_000,
+    hyperparameters: BaselineHyperparameters | None = None,
+) -> BaselineHyperparameters:
+    """Return explicit knobs, defaulting to the published TF-IDF recipe."""
 
-    # Combine sparse TF-IDF with the scaled, sparsified URL block.
-    return FeatureUnion(
-        transformer_list=[
-            # Vectorize unigrams and bigrams; sublinear TF dampens repeated scam boilerplate.
-            (
-                "tfidf",
-                TfidfVectorizer(
-                    max_features=max_features,
-                    ngram_range=(1, 2),
-                    min_df=2,
-                    sublinear_tf=True,
-                    strip_accents="unicode",
-                ),
-            ),
-            # Add on-device URL lexical/structural features; zeros when a message has no URL.
-            (
-                "url",
-                build_url_feature_pipeline(),
-            ),
-        ]
+    # Sweep and chat-eval pass a full dataclass; older callers only pass max_features.
+    if hyperparameters is not None:
+        # Honor the caller's OFAT combination exactly.
+        return hyperparameters
+    # Reconstruct the published recipe with only the vocabulary cap changed.
+    return BaselineHyperparameters(max_features=max_features)
+
+
+# Build the TF-IDF vectorizer honoring one OFAT combination.
+def build_tfidf_vectorizer(
+    max_features: int = 50_000,
+    hyperparameters: BaselineHyperparameters | None = None,
+) -> TfidfVectorizer:
+    """Return an unfitted TfidfVectorizer using published defaults unless overridden."""
+
+    # Resolve so a None hyperparameters argument still matches the published recipe.
+    knobs = resolve_hyperparameters(max_features=max_features, hyperparameters=hyperparameters)
+    # Vectorize n-grams with the OFAT (or published) TF-IDF settings.
+    return TfidfVectorizer(
+        max_features=knobs.max_features,
+        ngram_range=(knobs.ngram_min, knobs.ngram_max),
+        min_df=knobs.min_df,
+        max_df=knobs.max_df,
+        sublinear_tf=knobs.sublinear_tf,
+        use_idf=knobs.use_idf,
+        stop_words=_sklearn_stop_words(knobs.stop_words),
+        strip_accents=_sklearn_strip_accents(knobs.strip_accents),
     )
 
 
-# Build the LogisticRegression head with a chosen C.
-def build_classifier(C: float = 1.0, random_state: int = 42) -> LogisticRegression:
-    """Return an unfitted class-weighted logistic classifier."""
+# Build the TF-IDF + local-URL FeatureUnion used by the classifier head.
+def build_feature_union(
+    max_features: int = 50_000,
+    hyperparameters: BaselineHyperparameters | None = None,
+) -> FeatureUnion:
+    """Return an unfitted FeatureUnion of TF-IDF text features and optional URL features."""
 
-    # Use class_weight="balanced" because scam/legitimate rows are not 50/50.
+    # Resolve so unit tests that only pass max_features keep the published recipe.
+    knobs = resolve_hyperparameters(max_features=max_features, hyperparameters=hyperparameters)
+    # Always include the TF-IDF branch; URL features are the optional second branch.
+    transformers: list[tuple[str, Any]] = [
+        # Vectorize n-grams; sublinear TF dampens repeated scam boilerplate by default.
+        ("tfidf", build_tfidf_vectorizer(hyperparameters=knobs)),
+    ]
+    # Concatenate on-device URL lexical/structural features unless this OFAT run dropped them.
+    if knobs.url_features:
+        # Zeros when a message has no URL; no live reputation lookup.
+        transformers.append(("url", build_url_feature_pipeline()))
+    # Combine sparse TF-IDF with the optional scaled, sparsified URL block.
+    return FeatureUnion(transformer_list=transformers)
+
+
+# Build the LogisticRegression head with a chosen C.
+def build_classifier(
+    C: float = 1.0,
+    random_state: int = 42,
+    hyperparameters: BaselineHyperparameters | None = None,
+) -> LogisticRegression:
+    """Return an unfitted logistic classifier (class-weighted unless OFAT disables it)."""
+
+    # Resolve knobs; C and random_state stay arguments because callers search/seed them.
+    knobs = resolve_hyperparameters(hyperparameters=hyperparameters)
+    # Map the sweep's "none" token onto sklearn's unweighted default.
+    class_weight = _sklearn_class_weight(knobs.class_weight)
+    # Use class_weight="balanced" by default because scam/legitimate rows are not 50/50.
     return LogisticRegression(
         C=C,
-        max_iter=1000,
-        class_weight="balanced",
+        max_iter=knobs.max_iter,
+        class_weight=class_weight,
         random_state=random_state,
+        solver=knobs.solver,
     )
 
 
 # Build the untrained TF-IDF + URL features + Logistic Regression pipeline.
-def build_pipeline(max_features: int = 50_000, C: float = 1.0) -> Pipeline:
+def build_pipeline(
+    max_features: int = 50_000,
+    C: float = 1.0,
+    hyperparameters: BaselineHyperparameters | None = None,
+) -> Pipeline:
     """Return an unfitted scikit-learn Pipeline implementing the A5 baseline.
 
     Per decision A5, only this pipeline's LogisticRegression head is exported
@@ -278,13 +492,19 @@ def build_pipeline(max_features: int = 50_000, C: float = 1.0) -> Pipeline:
     URL features are computed locally in the same spirit (no live reputation).
     """
 
+    # Resolve knobs so older callers that only pass max_features stay unchanged.
+    knobs = resolve_hyperparameters(max_features=max_features, hyperparameters=hyperparameters)
     # Stack the feature union and the logistic head into one fit/predict object.
     return Pipeline(
         steps=[
-            # Transform raw message text into TF-IDF plus scaled URL features.
-            ("features", build_feature_union(max_features=max_features)),
-            # Classify with a class-weighted logistic head at the chosen C.
-            ("classifier", build_classifier(C=C)),
+            # Transform raw message text into TF-IDF plus optional scaled URL features.
+            ("features", build_feature_union(hyperparameters=knobs)),
+            # Classify with a logistic head at the chosen C (searched on VAL, not TEST).
+            ("classifier", build_classifier(
+                C=C,
+                random_state=knobs.random_state,
+                hyperparameters=knobs,
+            )),
         ]
     )
 
@@ -470,6 +690,7 @@ def tune_on_validation(
     threshold_grid: tuple[float, ...] = DEFAULT_THRESHOLD_GRID,
     legit_recall_floor: float = DEFAULT_LEGIT_RECALL_FLOOR,
     random_state: int = 42,
+    hyperparameters: BaselineHyperparameters | None = None,
 ) -> ThresholdTuningResult:
     """Return the frozen C and threshold chosen on the validation split.
 
@@ -481,8 +702,10 @@ def tune_on_validation(
     `selection_reason` records the fallback.
     """
 
+    # Resolve OFAT knobs; C is still searched rather than taken from the dataclass.
+    knobs = resolve_hyperparameters(max_features=max_features, hyperparameters=hyperparameters)
     # Fit the FeatureUnion on TRAIN text only so validation cannot leak into IDF or scaling.
-    features = build_feature_union(max_features=max_features)
+    features = build_feature_union(hyperparameters=knobs)
     # Transform TRAIN into the sparse TF-IDF + URL block.
     X_train = features.fit_transform(train_df["text"])
     # Transform VAL with TRAIN-fitted IDF and URL scaler (no refit).
@@ -495,8 +718,8 @@ def tune_on_validation(
     candidates: list[dict[str, Any]] = []
     # Fit one logistic head per C; thresholds are applied to predict_proba without refitting.
     for C in C_grid:
-        # Build a fresh class-weighted logistic head at this C.
-        classifier = build_classifier(C=C, random_state=random_state)
+        # Build a fresh logistic head at this C using the OFAT solver/class_weight.
+        classifier = build_classifier(C=C, random_state=random_state, hyperparameters=knobs)
         # Announce the fit so a long C-grid run is auditable from the terminal.
         print(f"tune_on_validation: fitting LogisticRegression(C={C}) on TRAIN...")
         # Fit on the TRAIN feature matrix only.
