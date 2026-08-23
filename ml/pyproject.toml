@@ -26,6 +26,12 @@ dependencies = [
     "transformers>=4.57.3,<4.58",
     # Required by transformers.Trainer for the PyTorch training loop.
     "accelerate>=1.6,<2",
+    # Export DistilBERT/LSTM graphs and the TF-IDF logistic head for ONNX Runtime Web.
+    "onnx>=1.17,<2",
+    # Quantize DistilBERT and verify exported graphs on CPU without touching the 71k reports.
+    "onnxruntime>=1.20,<2",
+    # Load TF-IDF sweep joblib dumps when exporting the 10k logistic head.
+    "joblib>=1.4,<2",
 ]
 
 # Pull GPU-enabled torch from the CUDA 12.8 index on Linux/Windows only.

@@ -25,6 +25,13 @@ import {
   initializeSodium,
 } from '../crypto/keyExchange'
 import type { DirectionalSessionKeys } from '../crypto/keyExchange'
+// Import the on-device scam classifier (TF-IDF eager, DistilBERT opt-in).
+import {
+  classifyVerifiedPlaintext,
+  disableDistilbertOptIn,
+  enableDistilbertOptIn,
+  ensureChatDefaultClassifier,
+} from '../ml/scamClassifier'
 
 // Describe one bubble in the in-memory message list (Slice 4 has no history pagination).
 interface ChatMessage {
@@ -36,6 +43,8 @@ interface ChatMessage {
   plaintext: string | null
   // Signal that decrypt+verify failed; the UI must not invent corrupted text.
   verificationFailed: boolean
+  // Non-blocking banner after local classification of verified plaintext.
+  scamWarning: boolean
 }
 
 // Describe the live conversation this tab has derived keys for.
@@ -72,16 +81,34 @@ export function ChatScreen() {
   const [draft, setDraft] = useState('')
   // Hold the derived conversation so encrypt/decrypt can read ids and epoch.
   const [activeChat, setActiveChat] = useState<ActiveChat | null>(null)
+  // Hold whether the operator opted into lazy-loaded DistilBERT (A6).
+  const [useDistilbert, setUseDistilbert] = useState(false)
+  // Hold DistilBERT load status so the toggle can show a failure without blocking chat.
+  const [distilbertStatus, setDistilbertStatus] = useState<string | null>(null)
 
   // Keep the live socket off React state so reconnects do not re-render on every frame.
   const socketRef = useRef<ChatSocket | null>(null)
   // Keep the latest active chat in a ref so socket callbacks never close over a stale epoch.
   const activeChatRef = useRef<ActiveChat | null>(null)
+  // Keep the DistilBERT opt-in flag in a ref so incoming envelopes use the current model.
+  const useDistilbertRef = useRef(false)
 
   // Mirror active chat into the ref whenever React state changes.
   useEffect(() => {
     activeChatRef.current = activeChat
   }, [activeChat])
+
+  // Mirror the DistilBERT toggle into the ref used by socket callbacks.
+  useEffect(() => {
+    useDistilbertRef.current = useDistilbert
+  }, [useDistilbert])
+
+  // Eager-load the published TF-IDF default once ChatScreen mounts (A5).
+  useEffect(() => {
+    void ensureChatDefaultClassifier().catch(() => {
+      // Missing ONNX export must not block the encrypted conversation.
+    })
+  }, [])
 
   // Close any open relay socket when this screen unmounts (logout or session end).
   useEffect(() => {
@@ -96,6 +123,29 @@ export function ChatScreen() {
     return null
   }
   const currentSession = session
+
+  // Classify verified plaintext locally and attach a non-blocking banner.
+  function classifyAndFlag(messageId: string, plaintext: string) {
+    // Skip empty strings; they have no scam signal and would still hit ORT.
+    if (!plaintext) {
+      // Leave scamWarning false.
+      return
+    }
+    // Run after decrypt/send so the bubble appears before WASM returns.
+    void classifyVerifiedPlaintext(plaintext, useDistilbertRef.current).then((result) => {
+      // A missing export or WASM abort leaves the message unwarned.
+      if (result === null || !result.warned) {
+        // No banner to attach.
+        return
+      }
+      // Flip only this row's warning flag; never hide or delete the text.
+      setMessages((existing) =>
+        existing.map((message) =>
+          message.id === messageId ? { ...message, scamWarning: true } : message,
+        ),
+      )
+    })
+  }
 
   // Decrypt a peer envelope, or record a verification failure without rendering garbage.
   function handleIncomingEnvelope(envelope: RelayedEnvelope) {
@@ -115,6 +165,7 @@ export function ChatScreen() {
           direction: 'received',
           plaintext: null,
           verificationFailed: true,
+          scamWarning: false,
         },
       ])
       return
@@ -139,8 +190,10 @@ export function ChatScreen() {
           direction: 'received',
           plaintext,
           verificationFailed: false,
+          scamWarning: false,
         },
       ])
+      classifyAndFlag(envelope.id, plaintext)
     } catch {
       setMessages((existing) => [
         ...existing,
@@ -149,6 +202,7 @@ export function ChatScreen() {
           direction: 'received',
           plaintext: null,
           verificationFailed: true,
+          scamWarning: false,
         },
       ])
     }
@@ -241,15 +295,18 @@ export function ChatScreen() {
       conversationId: current.conversationId,
       senderId: current.selfId,
     })
+    const localId = crypto.randomUUID()
     setMessages((existing) => [
       ...existing,
       {
-        id: crypto.randomUUID(),
+        id: localId,
         direction: 'sent',
         plaintext,
         verificationFailed: false,
+        scamWarning: false,
       },
     ])
+    classifyAndFlag(localId, plaintext)
     setDraft('')
   }
 
@@ -268,9 +325,40 @@ export function ChatScreen() {
             ) : null}
           </p>
         </div>
-        <button type="button" className="text-button" onClick={() => void logout()}>
-          Log out
-        </button>
+        <div className="chat-header-actions">
+          <label className="chat-distilbert-toggle">
+            <input
+              type="checkbox"
+              checked={useDistilbert}
+              onChange={(event) => {
+                const enabled = event.target.checked
+                setUseDistilbert(enabled)
+                if (enabled) {
+                  setDistilbertStatus('Loading DistilBERT on this device…')
+                  void enableDistilbertOptIn()
+                    .then(() => {
+                      setDistilbertStatus('DistilBERT is classifying on this device (not sent to the server).')
+                    })
+                    .catch((caught: unknown) => {
+                      setUseDistilbert(false)
+                      setDistilbertStatus(
+                        caught instanceof Error
+                          ? `DistilBERT failed to load: ${caught.message}`
+                          : 'DistilBERT failed to load; staying on TF-IDF.',
+                      )
+                    })
+                } else {
+                  void disableDistilbertOptIn()
+                  setDistilbertStatus('Using the on-device TF-IDF classifier.')
+                }
+              }}
+            />
+            Use DistilBERT (large download)
+          </label>
+          <button type="button" className="text-button" onClick={() => void logout()}>
+            Log out
+          </button>
+        </div>
       </header>
 
       <form className="chat-peer-form" onSubmit={(event) => void handleStartChat(event)}>
@@ -300,6 +388,12 @@ export function ChatScreen() {
         </p>
       ) : null}
 
+      {distilbertStatus ? (
+        <p className="chat-status" role="status">
+          {distilbertStatus}
+        </p>
+      ) : null}
+
       <section className="chat-transcript" aria-label="Encrypted messages">
         {messages.length === 0 ? (
           <p className="chat-empty">No messages yet. Ciphertext is relayed through the server; plaintext stays on this device.</p>
@@ -319,7 +413,14 @@ export function ChatScreen() {
                 {message.verificationFailed ? (
                   <span role="alert">message failed verification</span>
                 ) : (
-                  message.plaintext
+                  <>
+                    {message.scamWarning ? (
+                      <p className="scam-banner" role="status">
+                        This message shows signs of a scam
+                      </p>
+                    ) : null}
+                    {message.plaintext}
+                  </>
                 )}
               </li>
             ))}
@@ -347,10 +448,11 @@ export function ChatScreen() {
       </form>
 
       <p className="slice-note" role="status">
-        Slice 4 proof: two browser tabs (two accounts) can hold a real encrypted conversation
-        through the server. Contacts, history pagination, typing/presence, dark mode, and the scam
-        banner arrive in later slices. Epoch rotation is not scheduled yet — messages use the
-        current counter only.
+        Slice 6: two browser tabs still hold a real encrypted conversation through the server.
+        After decrypt (and on send), this tab classifies plaintext locally with ONNX Runtime Web.
+        The default model is the published TF-IDF + logistic head (A5). DistilBERT is opt-in (A6).
+        The word BiLSTM is exported and measured on ?mlLoadCheck=1 but is not wired into ChatScreen.
+        Contacts, history pagination, typing/presence, and dark mode stay later slices.
       </p>
     </main>
   )

@@ -24,7 +24,12 @@ ml/data/processed/
 ml/data/processed_chat/
 ml/data/processed_chat_llm/
 ml/models/
+ml/exports/
 .ipynb_checkpoints/
+
+# Exclude browser ONNX Runtime Web artifacts copied from ml/exports/.
+frontend/public/ml/
+frontend/public/ort/
 
 # Exclude editor and operating-system metadata.
 .vscode/

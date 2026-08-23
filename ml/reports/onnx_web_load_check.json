@@ -1,0 +1,168 @@
+{
+  "url": "http://127.0.0.1:5173/?mlLoadCheck=1",
+  "pageErrors": [],
+  "rows": [
+    {
+      "id": "distilbert_best",
+      "loadOrder": 1,
+      "label": "DistilBERT best (max_length 512, threshold 0.20)",
+      "loadSuccess": true,
+      "error": null,
+      "initMs": 641.5,
+      "inferenceMsPerMessage": 758.5499999998137,
+      "onnxBytes": 67404393,
+      "jsHeapBytes": 91700000,
+      "fixtureBannerMatch": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "offline": {
+        "reports_dir": "reports/distilbert_param_sweep/09_max_length_512",
+        "test_accuracy": 0.9837466722712624,
+        "test_fn": 49,
+        "test_fp": 67,
+        "chat_accuracy": 0.93,
+        "chat_fn": 8,
+        "chat_fp": 6,
+        "note": "Offline TEST/chat-eval only. Browser fixtures are not TEST accuracy."
+      }
+    },
+    {
+      "id": "distilbert_default",
+      "loadOrder": 2,
+      "label": "DistilBERT default (max_length 256, threshold 0.30)",
+      "loadSuccess": true,
+      "error": null,
+      "initMs": 254,
+      "inferenceMsPerMessage": 345.32499999925494,
+      "onnxBytes": 67404393,
+      "jsHeapBytes": 91700000,
+      "fixtureBannerMatch": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "offline": {
+        "reports_dir": "reports/distilbert",
+        "test_accuracy": 0.9823455233291298,
+        "test_fn": 60,
+        "test_fp": 66,
+        "chat_accuracy": 0.895,
+        "chat_fn": 12,
+        "chat_fp": 9,
+        "note": "Offline TEST/chat-eval only. Browser fixtures are not TEST accuracy."
+      }
+    },
+    {
+      "id": "lstm_best",
+      "loadOrder": 3,
+      "label": "Word BiLSTM best (8 epochs, threshold 0.20)",
+      "loadSuccess": true,
+      "error": null,
+      "initMs": 75.69999999925494,
+      "inferenceMsPerMessage": 1.349999999627471,
+      "onnxBytes": 13861285,
+      "jsHeapBytes": 91700000,
+      "fixtureBannerMatch": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "offline": {
+        "reports_dir": "reports/lstm_param_sweep/07_epochs_8",
+        "test_accuracy": 0.9707159871094297,
+        "test_fn": 30,
+        "test_fp": 179,
+        "chat_accuracy": 0.8,
+        "chat_fn": 11,
+        "chat_fp": 29,
+        "note": "Offline TEST/chat-eval only. Browser fixtures are not TEST accuracy."
+      }
+    },
+    {
+      "id": "lstm_default",
+      "loadOrder": 4,
+      "label": "Word BiLSTM default (4 epochs, threshold 0.30)",
+      "loadSuccess": true,
+      "error": null,
+      "initMs": 72.39999999850988,
+      "inferenceMsPerMessage": 0.775000000372529,
+      "onnxBytes": 13861285,
+      "jsHeapBytes": 91700000,
+      "fixtureBannerMatch": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "offline": {
+        "reports_dir": "reports/lstm",
+        "test_accuracy": 0.9651113913408995,
+        "test_fn": 49,
+        "test_fp": 200,
+        "chat_accuracy": 0.81,
+        "chat_fn": 14,
+        "chat_fp": 24,
+        "note": "Offline TEST/chat-eval only. Browser fixtures are not TEST accuracy."
+      }
+    },
+    {
+      "id": "tfidf_best",
+      "loadOrder": 5,
+      "label": "TF-IDF best (max_features 10000, C=1.0, threshold 0.20)",
+      "loadSuccess": true,
+      "error": null,
+      "initMs": 16.5,
+      "inferenceMsPerMessage": 0.724999999627471,
+      "onnxBytes": 40318,
+      "jsHeapBytes": 91700000,
+      "fixtureBannerMatch": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "offline": {
+        "reports_dir": "reports/baseline_param_sweep/01_max_features_10000",
+        "test_accuracy": 0.9359674933445425,
+        "test_fn": 17,
+        "test_fp": 440,
+        "chat_accuracy": 0.695,
+        "chat_fn": 0,
+        "chat_fp": 61,
+        "note": "Offline TEST/chat-eval only. Browser fixtures are not TEST accuracy."
+      }
+    },
+    {
+      "id": "tfidf_default",
+      "loadOrder": 6,
+      "label": "TF-IDF default (max_features 50000, C=0.25, threshold 0.30)",
+      "loadSuccess": true,
+      "error": null,
+      "initMs": 36.5,
+      "inferenceMsPerMessage": 1,
+      "onnxBytes": 200320,
+      "jsHeapBytes": 91700000,
+      "fixtureBannerMatch": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "offline": {
+        "reports_dir": "reports",
+        "test_accuracy": 0.9277007145859605,
+        "test_fn": 27,
+        "test_fp": 489,
+        "chat_accuracy": 0.65,
+        "chat_fn": 0,
+        "chat_fp": 70,
+        "note": "Offline TEST/chat-eval only. Browser fixtures are not TEST accuracy."
+      }
+    }
+  ]
+}

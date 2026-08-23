@@ -7,6 +7,13 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   // Transform React 19 TypeScript and enable development fast refresh.
   plugins: [react()],
+  // Treat ORT's SIMD binary as a static asset so Vite serves the correct MIME type.
+  assetsInclude: ['**/*.wasm'],
+  // Avoid prebundling ORT Web so its WASM assets resolve from the package dist.
+  optimizeDeps: {
+    // onnxruntime-web ships its own WASM; Vite's dep optimizer breaks those URLs.
+    exclude: ['onnxruntime-web'],
+  },
   // Run component tests in a browser-like DOM environment.
   test: {
     // Emulate the DOM APIs required by React Testing Library.

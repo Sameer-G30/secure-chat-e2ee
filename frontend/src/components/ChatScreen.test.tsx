@@ -19,6 +19,19 @@ import type { IdentityKeyPair } from '../crypto/keyExchange'
 // Import the socket handler type so the mock can capture ChatScreen's callbacks.
 import type { ChatSocketHandlers, RelayedEnvelope } from '../api/chatSocket'
 
+// Mock on-device classification so ChatScreen tests never load ORT Web.
+vi.mock('../ml/scamClassifier', () => ({
+  ensureChatDefaultClassifier: vi.fn(async () => {}),
+  classifyVerifiedPlaintext: vi.fn(async () => ({
+    pScam: 0.01,
+    warned: false,
+    checkpointId: 'tfidf_default',
+    inferenceMs: 1,
+  })),
+  enableDistilbertOptIn: vi.fn(async () => {}),
+  disableDistilbertOptIn: vi.fn(async () => {}),
+}))
+
 // Mock the public-key lookup so tests never perform a real HTTP request.
 vi.mock('../api/keysClient', async () => {
   const actual = await vi.importActual<typeof import('../api/keysClient')>('../api/keysClient')
@@ -71,6 +84,7 @@ vi.mock('../crypto/keyExchange', async () => {
 import { fetchPublicKey } from '../api/keysClient'
 import { fetchConversationEpoch, startOrFetchConversation } from '../api/conversationsClient'
 import { connectChatSocket } from '../api/chatSocket'
+import { classifyVerifiedPlaintext } from '../ml/scamClassifier'
 
 const mockedFetchPublicKey = vi.mocked(fetchPublicKey)
 const mockedStartOrFetchConversation = vi.mocked(startOrFetchConversation)
@@ -211,5 +225,31 @@ describe('ChatScreen', () => {
     expect(await screen.findByText('message failed verification')).toBeInTheDocument()
     expect(screen.queryByText('do not show garbage')).not.toBeInTheDocument()
     expect(screen.queryByText('hello from bob')).not.toBeInTheDocument()
+    expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
+  })
+
+  it('shows a non-blocking scam banner on verified plaintext when the classifier warns', async () => {
+    const mockedClassify = vi.mocked(classifyVerifiedPlaintext)
+    mockedClassify.mockResolvedValue({
+      pScam: 0.95,
+      warned: true,
+      checkpointId: 'tfidf_default',
+      inferenceMs: 2,
+    })
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+
+    capturedHandlers?.onEnvelope({
+      id: 'msg-scam',
+      conversationId,
+      senderId: bobId,
+      ciphertext: new Uint8Array(32).fill(1),
+      nonce: new Uint8Array(24).fill(2),
+      keyEpoch: 0,
+    })
+
+    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(await screen.findByText('This message shows signs of a scam')).toBeInTheDocument()
   })
 })

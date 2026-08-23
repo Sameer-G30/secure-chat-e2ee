@@ -2,7 +2,7 @@
 
 Secure Chat is a portfolio-grade real-time messaging system designed so the server stores and relays ciphertext but never receives message plaintext or private/symmetric key material. Decrypted messages are classified for phishing and scam indicators locally in the recipient's browser.
 
-> Status: Slice 5. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. DistilBERT is fine-tuned offline on the full 71,370-row LLM rewrite (fp16 on the RTX 4060); it is not loaded in the browser yet. A later DistilBERT one-at-a-time hyperparameter sweep lives under `ml/reports/distilbert_param_sweep/` and does **not** replace the Slice 5 default (`max_length` 256) until ONNX Runtime Web cost is measured. A matching TF-IDF one-at-a-time sweep lives under `ml/reports/baseline_param_sweep/` and does **not** replace the published TF-IDF default (50k terms, C=0.25, threshold 0.30) until the TypeScript TF-IDF + ONNX logistic-head path is measured. A matching word-BiLSTM one-at-a-time sweep lives under `ml/reports/lstm_param_sweep/` (quality candidate: 8 epochs, threshold 0.20) and does **not** replace the published LSTM default (4 epochs, threshold 0.30) until ONNX Runtime Web cost is measured — switch back to `ml/reports/lstm/` if that candidate is a poor browser fit. Client-side ONNX Runtime Web and the scam warning banner still arrive in later reviewed slices.
+> Status: Slice 6. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. DistilBERT remains the Slice 5 offline default (`max_length` 256, threshold 0.30) in `ml/reports/distilbert/`; the later one-at-a-time sweep winner (`max_length` 512, threshold 0.20) stays under `ml/reports/distilbert_param_sweep/` and is **not** the ChatScreen default. The TF-IDF sweep winner (10k terms, C=1.0, threshold 0.20) stays under `ml/reports/baseline_param_sweep/` and does **not** replace the published TF-IDF default (50k terms, C=0.25, threshold 0.30). The word-BiLSTM sweep winner (8 epochs, threshold 0.20) stays under `ml/reports/lstm_param_sweep/` and does **not** replace the published LSTM default (4 epochs, threshold 0.30). All six of those checkpoints were exported to ONNX Runtime Web and loaded **one at a time** in Chromium (all six succeeded; banners matched Python fixtures 4/4). ChatScreen eagerly classifies verified plaintext with the **published TF-IDF** TypeScript vectorizer + logistic-head ONNX (A5). DistilBERT-default (256-token int8) is a lazy opt-in checkbox (A6). The word BiLSTM was measured and is **not** wired into ChatScreen. Full six-row table: `ml/reports/onnx_web_load_check.md`. Trainer defaults were not changed.
 
 ## Architecture
 
@@ -20,13 +20,14 @@ The browser generates its X25519 identity keypair locally (`crypto/keyExchange.t
 - Refresh-token rotation detects reuse: presenting an already-rotated token revokes every other active refresh token for that account, forcing full re-authentication instead of silently tolerating a stolen token.
 - The X25519 private key is generated in the browser, never transmitted, and only ever persisted sealed (AEAD-encrypted with an Argon2id-derived, password-based key) in IndexedDB; the server only ever receives and stores the public half.
 - React text rendering avoids raw HTML injection from user-controlled messages and usernames.
+- Scam classification runs only on the endpoint, after decrypt (or on plaintext the sender already has). The server never receives scores, labels, or plaintext. The banner is non-blocking: it never hides, blocks, or deletes a verified message.
 
 
 
 ### Explicit limitations
 
 - The server can observe metadata such as account identities, conversation membership, message timing, message size, and non-secret epoch numbers.
-- A compromised endpoint, malicious browser extension, or attacker who knows the user's password and accesses the local key vault can read plaintext available on that endpoint.
+- A compromised endpoint, malicious browser extension, or attacker who knows the user's password and accesses the local key vault can read plaintext available on that endpoint, and can also see on-device scam scores.
 - Static long-term X25519 keys plus epoch derivation provide key separation, not true forward secrecy. A complete Double Ratchet is intentionally out of scope.
 - Public-key authenticity is initially trusted on first use; key transparency or out-of-band safety-number verification is future work.
 - Multi-device key synchronization and recovery are outside the first implementation scope.
@@ -175,7 +176,9 @@ Both API and frontend must be running, and migrations must include `conversation
 5. Type a message in one tab and send it. The other tab should show the recovered plaintext. The Network panel's WebSocket frames must contain `ciphertext`, `nonce`, and `key_epoch` — never the message text.
 6. If you tamper with a frame (or the associated conversation/sender metadata), the recipient shows **message failed verification** instead of garbled text.
 
-Tokens stay in memory only: refreshing a tab requires logging in again. Multi-device key recovery is still unsupported (`IdentitySetupError`). Do not expect contacts, history pagination, typing/presence, dark mode, or a scam banner in this slice.
+Tokens stay in memory only: refreshing a tab requires logging in again. Multi-device key recovery is still unsupported (`IdentitySetupError`). Do not expect contacts, history pagination, typing/presence, or dark mode in this slice.
+
+Verified plaintext (sent locally, and received after decrypt) may show a non-blocking **This message shows signs of a scam** banner from the on-device TF-IDF classifier. Verification-failed rows never get a banner. Optional **Use DistilBERT (large download)** lazy-loads the Slice 5 256-token graph. Sequential ORT Web measurement: `http://localhost:5173/?mlLoadCheck=1`.
 
 To inspect ciphertext-only storage after a send (API container + `psql` are optional; the automated tests already assert this):
 
@@ -222,6 +225,7 @@ uv run python scripts/evaluate_chat_style_eval_lstm.py      # frozen LSTM thresh
 uv run python scripts/sweep_distilbert_params.py            # optional OFAT retrain; writes reports/distilbert_param_sweep/ (does not overwrite Slice 5)
 uv run python scripts/sweep_baseline_params.py              # optional OFAT retrain; writes reports/baseline_param_sweep/ (does not overwrite published TF-IDF)
 uv run python scripts/sweep_lstm_params.py                  # optional OFAT retrain; writes reports/lstm_param_sweep/ (does not overwrite published LSTM)
+uv run python scripts/export_onnx_web.py                    # Slice 6: export all six checkpoints into ml/exports/onnx_web and frontend/public/ml/
 uv run pytest
 uv run ruff check scripts src tests
 ```
@@ -271,15 +275,34 @@ Slice 4 adds:
 Slice 5 adds:
 
 - **Backend / frontend:** none. E2EE, WebSocket relay, `ChatScreen`, and auth are unchanged.
-- **ML:** DistilBERT-base fine-tuned offline on the full 71,370-row `llm_intent_v1` rewrite with the same split/seed and VAL rule as the TF-IDF baseline. Slice 5 numbers live in `ml/reports/distilbert/` (`max_length` 256, threshold 0.30). A later DistilBERT one-at-a-time parameter sweep is documented separately under `ml/reports/distilbert_param_sweep/` and is **not** the browser/ONNX default until sequence-length cost is measured. A later TF-IDF one-at-a-time sweep is documented under `ml/reports/baseline_param_sweep/` and is **not** the published TF-IDF/ONNX default (50k terms, C=0.25, threshold 0.30) until TypeScript TF-IDF + logistic-head cost is measured. A later word-BiLSTM one-at-a-time sweep is documented under `ml/reports/lstm_param_sweep/` and is **not** the first LSTM/ONNX default (4 epochs, threshold 0.30) until ONNX Runtime Web cost is measured. No ONNX export, no `onnxruntime-web`, no scam banner.
+- **ML:** DistilBERT-base fine-tuned offline on the full 71,370-row `llm_intent_v1` rewrite with the same split/seed and VAL rule as the TF-IDF baseline. Slice 5 numbers live in `ml/reports/distilbert/` (`max_length` 256, threshold 0.30). A later DistilBERT one-at-a-time parameter sweep is documented separately under `ml/reports/distilbert_param_sweep/` and is **not** the ChatScreen default. A later TF-IDF one-at-a-time sweep is documented under `ml/reports/baseline_param_sweep/` and is **not** the published TF-IDF/ONNX default (50k terms, C=0.25, threshold 0.30). A later word-BiLSTM one-at-a-time sweep is documented under `ml/reports/lstm_param_sweep/` and is **not** wired into ChatScreen.
+
+Slice 6 adds:
+
+- **Backend:** none. No classification endpoints, no scores in Postgres. E2EE, JWT, WebSocket relay, epoch, and auth are unchanged.
+- **Frontend:** ONNX Runtime Web loads one checkpoint at a time. ChatScreen eagerly uses published TF-IDF (TypeScript vectorizer + logistic-head ONNX, A5). DistilBERT-default (256-token int8) is a lazy opt-in (A6). Verified plaintext can show a non-blocking scam banner; verification-failed rows never do. Sequential measurement page: `/?mlLoadCheck=1`. Word BiLSTM is exported and measured, not wired into ChatScreen.
+- **ML:** `scripts/export_onnx_web.py` writes gitignored ONNX + JSON sidecars under `ml/exports/onnx_web/` and copies them to `frontend/public/ml/`. It does not overwrite published metric JSON. Published TF-IDF joblib is fitted once into `models/baseline_onnx_export/` when `models/baseline/` is missing. Browser cost table: `ml/reports/onnx_web_load_check.md`.
+
+Chromium sequential load (Playwright, `/?mlLoadCheck=1`). Fixture banners vs Python 4/4 on every row. These are **not** TEST accuracy.
+
+| # | Checkpoint | Load | Init | Infer / msg | Serving ONNX |
+| --- | --- | --- | --- | --- | --- |
+| 1 | DistilBERT best (512, 0.20) | yes, int8 | 642 ms | 759 ms | 64.3 MiB |
+| 2 | DistilBERT default (256, 0.30) | yes, int8 | 254 ms | 345 ms | 64.3 MiB |
+| 3 | BiLSTM best (8 ep, 0.20) | yes | 76 ms | 1.3 ms | 13.2 MiB |
+| 4 | BiLSTM default (4 ep, 0.30) | yes | 72 ms | 0.8 ms | 13.2 MiB |
+| 5 | TF-IDF best (10k, C=1.0, 0.20) | yes | 17 ms | 0.7 ms | 39 KiB |
+| 6 | TF-IDF default (50k, C=0.25, 0.30) | yes | 37 ms | 1.0 ms | 196 KiB |
+
+ChatScreen eager default is row 6. DistilBERT row 2 is the A6 opt-in. Rows 3–4 are not wired into ChatScreen.
 
 ## E2EE and client-side AI
 
-The sender encrypts before network transmission. The server stores and relays only an authenticated encrypted envelope. The recipient verifies and decrypts locally. DistilBERT is trained offline in Slice 5; scam classification on recovered plaintext in ONNX Runtime Web is still a later slice. Slice 4 stops at verified plaintext in the message list.
+The sender encrypts before network transmission. The server stores and relays only an authenticated encrypted envelope. The recipient verifies and decrypts locally. Slice 6 classifies that verified plaintext in the browser with ONNX Runtime Web. Scores never leave the tab. The default ChatScreen model is the published TF-IDF logistic head; DistilBERT is opt-in.
 
 ## ML evaluation
 
-The baseline and DistilBERT tracks report precision, recall, F1, confusion matrices, and the selected threshold. Accuracy alone is insufficient for the imbalanced and harm-sensitive classification task. Final reported numbers come from TEST after freezing validation choices. The locked chat-style eval set is never used to fit or to tune a threshold. Model size, ONNX export, and browser latency are later-slice deliverables (A5/A6 client load).
+The baseline and DistilBERT tracks report precision, recall, F1, confusion matrices, and the selected threshold. Accuracy alone is insufficient for the imbalanced and harm-sensitive classification task. Final reported numbers come from TEST after freezing validation choices. The locked chat-style eval set is never used to fit or to tune a threshold. Slice 6 browser load, init, and inference-per-message numbers live in `ml/reports/onnx_web_load_check.md` and must not be called TEST accuracy.
 
 ### TF-IDF + local URL features + Logistic Regression (published default; ONNX switch-back)
 
@@ -439,7 +462,7 @@ Chat-eval confusion matrix: `[[91, 9], [12, 88]]` — 9 false positives out of 1
 
 The Slice 5 goal was to cut chat ham false alarms **below 70/100** without giving up ~0.99 in-domain / 1.00 chat-eval scam recall. DistilBERT **met the false-alarm goal** (9/100 chat ham warned; 66 vs 489 in-domain). In-domain scam recall stayed near 0.99 (0.983 vs 0.992: 33 extra TEST misses). Chat-eval scam recall **did drop** (0.880 vs 1.000: 12 misses). That is the honest VAL-frozen trade-off, not a reason to hunt 0.15 / 0.11 on the 200-row file. Side-by-side JSON: `ml/reports/distilbert/comparison_vs_tfidf.json`.
 
-No ONNX export in this slice. A6 lazy-load in the browser is Slice 6+.
+Slice 5 itself did not export ONNX. Slice 6 exported this checkpoint as `distilbert_default` (int8 `model.onnx`, max_length 256, threshold 0.30) and lazy-loads it behind ChatScreen's DistilBERT checkbox. It is not the eager ChatScreen default.
 
 ### DistilBERT one-at-a-time parameter sweep (offline; not the browser default)
 
@@ -543,7 +566,7 @@ In-domain the LSTM sits between TF-IDF and DistilBERT on the VAL-frozen operatin
 
 **Char LSTM: do not explore.** Criterion A is only weakly true on chat-eval (14 extra misses vs TF-IDF’s 0; TEST is *better* than DistilBERT). B is false (0/14 extra FNs are URL-bearing). C is false (URL concat already matches TF-IDF on URL scams). Misses are mostly no-URL social-engineering; DistilBERT is the semantic model for that gap. Decision file: `ml/reports/lstm/char_lstm_decision.md`.
 
-No ONNX export. Not loaded in the browser. This published 4-epoch point does **not** replace the published TF-IDF default or the Slice 5 DistilBERT default.
+Slice 6 exported this checkpoint as `lstm_default` and measured it in ONNX Runtime Web. It is **not** wired into ChatScreen. This published 4-epoch point does **not** replace the published TF-IDF default or the Slice 5 DistilBERT default. If a later slice wires LSTM into chat, start here rather than with the 8-epoch sweep winner.
 
 ### Word BiLSTM one-at-a-time parameter sweep (offline quality candidate; not the ONNX default yet)
 
@@ -627,4 +650,4 @@ Deployment is scheduled for later slices after authentication, conversation-scop
 
 ## Demo
 
-A short two-browser E2EE demonstration is the Slice 4 proof above. A scam-warning demonstration will be recorded in the final slices.
+A short two-browser E2EE demonstration is the Slice 4 proof above. After decrypt (and on send), the same tabs may show a non-blocking scam banner from the on-device TF-IDF classifier. Sequential ORT Web measurement: `http://localhost:5173/?mlLoadCheck=1`. Six-row cost table: `ml/reports/onnx_web_load_check.md`.
