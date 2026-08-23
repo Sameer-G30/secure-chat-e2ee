@@ -28,6 +28,10 @@ export interface ChatSocketHandlers {
   onProtocolError: (detail: string) => void
   // Notify the UI when the socket closes so it can show a disconnected state.
   onClose: () => void
+  // Receive a typing metadata event; the server never sees draft text.
+  onTyping?: (userId: string, isTyping: boolean) => void
+  // Receive a presence metadata event; this is not a secret.
+  onPresence?: (userId: string, online: boolean) => void
 }
 
 // Describe the handle ChatScreen uses to send envelopes and tear the socket down.
@@ -37,12 +41,14 @@ export interface ChatSocket {
     envelope: EncryptedEnvelope,
     routing: { conversationId: string; senderId: string },
   ) => void
+  // Send a typing metadata frame without including the draft text.
+  sendTyping: (isTyping: boolean) => void
   // Close the socket when the user leaves the conversation or logs out.
   close: () => void
 }
 
 // Narrow an unknown JSON value into a relayed envelope, or return null if it is not one.
-function parseRelayedEnvelope(value: unknown): RelayedEnvelope | null {
+export function parseRelayedEnvelope(value: unknown): RelayedEnvelope | null {
   if (!value || typeof value !== 'object') {
     return null
   }
@@ -109,6 +115,20 @@ export function connectChatSocket(
         // The sender already rendered plaintext locally; the id is optional metadata.
         return
       }
+      if (type === 'typing') {
+        const typingFrame = parsed as { user_id?: unknown; is_typing?: unknown }
+        if (typeof typingFrame.user_id === 'string' && typeof typingFrame.is_typing === 'boolean') {
+          handlers.onTyping?.(typingFrame.user_id, typingFrame.is_typing)
+        }
+        return
+      }
+      if (type === 'presence') {
+        const presenceFrame = parsed as { user_id?: unknown; online?: unknown }
+        if (typeof presenceFrame.user_id === 'string' && typeof presenceFrame.online === 'boolean') {
+          handlers.onPresence?.(presenceFrame.user_id, presenceFrame.online)
+        }
+        return
+      }
     }
     const envelope = parseRelayedEnvelope(parsed)
     if (envelope === null) {
@@ -137,6 +157,12 @@ export function connectChatSocket(
           sender_id: routing.senderId,
         }),
       )
+    },
+    sendTyping(isTyping) {
+      if (socket.readyState !== WebSocket.OPEN) {
+        return
+      }
+      socket.send(JSON.stringify({ type: 'typing', is_typing: isTyping }))
     },
     close() {
       if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {

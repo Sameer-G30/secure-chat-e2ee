@@ -1,6 +1,10 @@
 """Expose ORM models so Alembic autogeneration can discover their metadata."""
 
 # Import the Conversation model so importing this package registers its table.
+# Import the Contact model so importing this package registers its table.
+from app.models.contact import Contact
+
+# Import the Conversation model so importing this package registers its table.
 from app.models.conversation import Conversation
 
 # Import the Message model so importing this package registers its table.
@@ -13,4 +17,4 @@ from app.models.refresh_token import RefreshToken
 from app.models.user import User
 
 # Declare the public re-export surface for this package.
-__all__ = ["Conversation", "Message", "RefreshToken", "User"]
+__all__ = ["Contact", "Conversation", "Message", "RefreshToken", "User"]

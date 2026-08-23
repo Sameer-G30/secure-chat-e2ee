@@ -59,6 +59,30 @@ async def _connect_ws(url: str, client: AsyncClient) -> AsyncIterator[AsyncWebSo
         yield session
 
 
+# Skip typing/presence metadata until a data/control frame matching expected_type arrives.
+async def _receive_until(ws: AsyncWebSocketSession, expected_type: str) -> dict[str, object]:
+    """Drain presence/typing frames, then return the next frame of the requested type."""
+
+    while True:
+        frame = await ws.receive_json()
+        assert isinstance(frame, dict)
+        frame_type = frame.get("type")
+        if frame_type in {"presence", "typing"} and expected_type not in {"presence", "typing"}:
+            continue
+        if expected_type != "any" and frame_type != expected_type:
+            continue
+        return frame
+
+
+# Read a protocol error detail as a string for substring assertions.
+def _error_detail(frame: dict[str, object]) -> str:
+    """Require the error frame's detail to be a string, then return it."""
+
+    detail = frame["detail"]
+    assert isinstance(detail, str)
+    return detail
+
+
 # Assert a WebSocket handshake is rejected, unwrapping anyio ExceptionGroups.
 async def _assert_ws_rejected(url: str, expected_codes: tuple[int, ...] | None = None) -> None:
     """Require the server to close or refuse the upgrade rather than accept the socket."""
@@ -171,9 +195,9 @@ async def test_websocket_relays_ciphertext_only(
                         "conversation_id": conversation_id,
                     }
                 )
-                accepted = await alice_ws.receive_json()
+                accepted = await _receive_until(alice_ws, "accepted")
                 assert accepted["type"] == "accepted"
-                fanout = await bob_ws.receive_json()
+                fanout = await _receive_until(bob_ws, "envelope")
 
     assert fanout["type"] == "envelope"
     assert fanout["ciphertext"] == ciphertext
@@ -248,9 +272,9 @@ async def test_websocket_rejects_cross_conversation_envelope(
                     "conversation_id": alice_carol_id,
                 }
             )
-            error = await alice_ws.receive_json()
+            error = await _receive_until(alice_ws, "error")
             assert error["type"] == "error"
-            assert "conversation_id" in error["detail"]
+            assert "conversation_id" in _error_detail(error)
             # Bob must not receive a fanned-out frame for the rejected envelope.
             # Closing without a receive is the assertion; an unexpected fan-out
             # would still be stored and is checked via the database below.
@@ -281,9 +305,9 @@ async def test_websocket_rejects_spoofed_sender_id(client: AsyncClient) -> None:
                     "sender_id": bob_id,
                 }
             )
-            error = await alice_ws.receive_json()
+            error = await _receive_until(alice_ws, "error")
     assert error["type"] == "error"
-    assert "sender_id" in error["detail"]
+    assert "sender_id" in _error_detail(error)
     assert bob_token
 
 
@@ -303,6 +327,70 @@ async def test_websocket_rejects_future_key_epoch(client: AsyncClient) -> None:
                     "key_epoch": 99,
                 }
             )
-            error = await alice_ws.receive_json()
+            error = await _receive_until(alice_ws, "error")
     assert error["type"] == "error"
-    assert "key_epoch" in error["detail"]
+    assert "key_epoch" in _error_detail(error)
+
+
+# Confirm typing frames fan out as metadata and are never written to messages.
+async def test_websocket_typing_is_metadata_only_and_not_persisted(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Send a typing frame with a draft field and require a metadata fan-out, not a row."""
+
+    alice_token, bob_token, conversation_id = await _alice_bob_conversation(client)
+    alice_url = f"http://testserver/ws/conversations/{conversation_id}?access_token={alice_token}"
+    bob_url = f"http://testserver/ws/conversations/{conversation_id}?access_token={bob_token}"
+    created = await client.get(
+        f"/conversations/{conversation_id}",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    alice_id = created.json()["self"]["id"]
+
+    async with _ws_client() as ws_client:
+        async with _connect_ws(alice_url, ws_client) as alice_ws:
+            async with _connect_ws(bob_url, ws_client) as bob_ws:
+                await alice_ws.send_json(
+                    {
+                        "type": "typing",
+                        "is_typing": True,
+                        "draft": "this draft must never be stored or relayed",
+                    }
+                )
+                typing = await _receive_until(bob_ws, "typing")
+
+    assert typing["type"] == "typing"
+    assert typing["is_typing"] is True
+    assert typing["user_id"] == alice_id
+    assert "draft" not in typing
+    stored = list((await db_session.scalars(select(Message))).all())
+    assert stored == []
+    assert bob_token
+
+
+# Confirm join/leave emit presence metadata the server can already see.
+async def test_websocket_presence_announces_online_and_offline(client: AsyncClient) -> None:
+    """Require Alice to see Bob come online, then go offline after Bob disconnects."""
+
+    alice_token, bob_token, conversation_id = await _alice_bob_conversation(client)
+    alice_url = f"http://testserver/ws/conversations/{conversation_id}?access_token={alice_token}"
+    bob_url = f"http://testserver/ws/conversations/{conversation_id}?access_token={bob_token}"
+    created = await client.get(
+        f"/conversations/{conversation_id}",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    bob_id = created.json()["peer"]["id"]
+
+    async with _ws_client() as ws_client:
+        async with _connect_ws(alice_url, ws_client) as alice_ws:
+            initial = await _receive_until(alice_ws, "presence")
+            assert initial["user_id"] == bob_id
+            assert initial["online"] is False
+            async with _connect_ws(bob_url, ws_client):
+                online = await _receive_until(alice_ws, "presence")
+                assert online["user_id"] == bob_id
+                assert online["online"] is True
+            offline = await _receive_until(alice_ws, "presence")
+            assert offline["user_id"] == bob_id
+            assert offline["online"] is False
+    assert bob_token

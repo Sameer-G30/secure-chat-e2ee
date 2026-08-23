@@ -3,6 +3,9 @@
 # Import base64 to build well-formed public-key payloads for test accounts.
 import base64
 
+# Import datetime helpers so chronological tests can stamp distinct created_at values.
+from datetime import UTC, datetime, timedelta
+
 # Import UUID to inspect canonical pair ordering on stored conversation rows.
 from uuid import UUID
 
@@ -331,3 +334,125 @@ async def test_message_queries_are_scoped_by_conversation_id(
     assert [row.ciphertext for row in carol_rows] == [b"ciphertext-for-carol-only"]
     # The unused bob_token documents that Bob is a real second account, not a dummy username.
     assert bob_token
+
+
+# Confirm GET /conversations/{id}/messages is membership-gated and conversation-scoped.
+async def test_message_history_is_scoped_and_ciphertext_only(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Return Alice/Bob envelopes to members and 404 a stranger; never a body field."""
+
+    alice_token = await _register_login(client, _ALICE, key_fill=0x01)
+    bob_token = await _register_login(client, _BOB, key_fill=0x02)
+    carol_token = await _register_login(client, _CAROL, key_fill=0x03)
+    alice_bob = await client.post(
+        "/conversations",
+        json={"peer_username": "bob"},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    alice_carol = await client.post(
+        "/conversations",
+        json={"peer_username": "carol"},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    alice_bob_id = UUID(alice_bob.json()["id"])
+    alice_carol_id = UUID(alice_carol.json()["id"])
+    alice = await db_session.scalar(select(User).where(User.username == "alice"))
+    assert alice is not None
+    await persist_envelope(
+        db_session,
+        conversation_id=alice_bob_id,
+        sender_id=alice.id,
+        ciphertext=b"ciphertext-for-bob-only",
+        nonce=b"n" * 24,
+        key_epoch=0,
+    )
+    await persist_envelope(
+        db_session,
+        conversation_id=alice_carol_id,
+        sender_id=alice.id,
+        ciphertext=b"ciphertext-for-carol-only",
+        nonce=b"n" * 24,
+        key_epoch=0,
+    )
+
+    history = await client.get(
+        f"/conversations/{alice_bob_id}/messages",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert history.status_code == 200
+    payload = history.json()
+    assert "messages" in payload
+    assert len(payload["messages"]) == 1
+    envelope = payload["messages"][0]
+    assert envelope["type"] == "envelope"
+    assert envelope["ciphertext"] == base64.b64encode(b"ciphertext-for-bob-only").decode("ascii")
+    assert envelope["key_epoch"] == 0
+    assert "plaintext" not in envelope
+    assert "score" not in envelope
+    assert "p_scam" not in envelope
+    assert payload["messages"][0]["ciphertext"] != base64.b64encode(
+        b"ciphertext-for-carol-only"
+    ).decode("ascii")
+
+    bob_history = await client.get(
+        f"/conversations/{alice_bob_id}/messages",
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+    assert bob_history.status_code == 200
+    assert len(bob_history.json()["messages"]) == 1
+
+    stranger = await client.get(
+        f"/conversations/{alice_bob_id}/messages",
+        headers={"Authorization": f"Bearer {carol_token}"},
+    )
+    assert stranger.status_code == 404
+
+    unauthenticated = await client.get(f"/conversations/{alice_bob_id}/messages")
+    assert unauthenticated.status_code in (401, 403)
+
+
+# Confirm history returns oldest envelopes first so the chat transcript can render top-down.
+async def test_message_history_is_chronological(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Persist two envelopes and require GET history to list the earlier row first."""
+
+    alice_token = await _register_login(client, _ALICE, key_fill=0x01)
+    await _register_login(client, _BOB, key_fill=0x02)
+    created = await client.post(
+        "/conversations",
+        json={"peer_username": "bob"},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    conversation_id = UUID(created.json()["id"])
+    alice = await db_session.scalar(select(User).where(User.username == "alice"))
+    assert alice is not None
+    first = await persist_envelope(
+        db_session,
+        conversation_id=conversation_id,
+        sender_id=alice.id,
+        ciphertext=b"first-ciphertext-blob-ok",
+        nonce=b"n" * 24,
+        key_epoch=0,
+    )
+    second = await persist_envelope(
+        db_session,
+        conversation_id=conversation_id,
+        sender_id=alice.id,
+        ciphertext=b"second-ciphertext-blob",
+        nonce=b"n" * 24,
+        key_epoch=0,
+    )
+    # SQLite timestamps are second-precision; stamp distinct times so order is not UUID luck.
+    earlier = datetime.now(UTC) - timedelta(seconds=2)
+    later = datetime.now(UTC)
+    first.created_at = earlier
+    second.created_at = later
+    await db_session.commit()
+    history = await client.get(
+        f"/conversations/{conversation_id}/messages",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    ids = [row["id"] for row in history.json()["messages"]]
+    assert ids == [str(first.id), str(second.id)]

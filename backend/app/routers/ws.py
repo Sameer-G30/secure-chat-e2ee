@@ -23,6 +23,7 @@ from app.schemas.messages import RelayEnvelopeIn
 from app.security.dependencies import get_user_from_access_token
 
 # Import persist/fan-out helpers; none of these decrypt or handle private keys.
+from app.services.conversations import other_user_id
 from app.services.relay import (
     EnvelopeRejected,
     authorize_relay_connection,
@@ -86,11 +87,39 @@ async def conversation_relay(
     await websocket.accept()
     # Track this socket so a later persist can fan the envelope to the peer.
     connection_hub.join(conversation.id, user.id, websocket)
+    # Presence is metadata the server can already see; tell this tab if the peer is online.
+    peer_id = other_user_id(conversation, user.id)
+    await websocket.send_json(
+        {
+            "type": "presence",
+            "user_id": str(peer_id),
+            "online": connection_hub.is_connected(conversation.id, peer_id),
+        }
+    )
+    # Tell the already-connected peer that this user is now online.
+    await connection_hub.broadcast(
+        conversation.id,
+        {"type": "presence", "user_id": str(user.id), "online": True},
+        exclude_user_id=user.id,
+    )
 
     try:
         while True:
             # Wait for the next JSON frame from this member.
             raw_frame = await websocket.receive_json()
+            # Typing frames are metadata only: never persist, never include draft text.
+            if isinstance(raw_frame, dict) and raw_frame.get("type") == "typing":
+                is_typing = bool(raw_frame.get("is_typing"))
+                await connection_hub.broadcast(
+                    conversation.id,
+                    {
+                        "type": "typing",
+                        "user_id": str(user.id),
+                        "is_typing": is_typing,
+                    },
+                    exclude_user_id=user.id,
+                )
+                continue
             try:
                 # Validate ciphertext/nonce/epoch shape without attempting decryption.
                 envelope = RelayEnvelopeIn.model_validate(raw_frame)
@@ -119,10 +148,26 @@ async def conversation_relay(
     except WebSocketDisconnect:
         # Normal tab close; drop this socket from the room.
         connection_hub.leave(conversation.id, user.id, websocket)
+        # Broadcast offline only when this user has no remaining sockets in the room.
+        if not connection_hub.is_connected(conversation.id, user.id):
+            await connection_hub.broadcast(
+                conversation.id,
+                {"type": "presence", "user_id": str(user.id), "online": False},
+            )
     except Exception:
         # Any unexpected failure must still forget the socket; do not log envelope bytes.
         connection_hub.leave(conversation.id, user.id, websocket)
+        if not connection_hub.is_connected(conversation.id, user.id):
+            await connection_hub.broadcast(
+                conversation.id,
+                {"type": "presence", "user_id": str(user.id), "online": False},
+            )
         raise
     else:
         # Leave the room if the loop ends without a disconnect exception.
         connection_hub.leave(conversation.id, user.id, websocket)
+        if not connection_hub.is_connected(conversation.id, user.id):
+            await connection_hub.broadcast(
+                conversation.id,
+                {"type": "presence", "user_id": str(user.id), "online": False},
+            )

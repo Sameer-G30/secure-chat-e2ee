@@ -51,6 +51,18 @@ vi.mock('../api/conversationsClient', async () => {
     ...actual,
     startOrFetchConversation: vi.fn(),
     fetchConversationEpoch: vi.fn(),
+    fetchConversationMessages: vi.fn(),
+  }
+})
+
+// Mock the server-side address book so tests never hit GET/POST /contacts.
+vi.mock('../api/contactsClient', async () => {
+  const actual =
+    await vi.importActual<typeof import('../api/contactsClient')>('../api/contactsClient')
+  return {
+    ...actual,
+    listContacts: vi.fn(async () => []),
+    addContact: vi.fn(),
   }
 })
 
@@ -84,20 +96,29 @@ vi.mock('../crypto/keyExchange', async () => {
 })
 
 import { fetchPublicKey } from '../api/keysClient'
-import { fetchConversationEpoch, startOrFetchConversation } from '../api/conversationsClient'
+import {
+  fetchConversationEpoch,
+  fetchConversationMessages,
+  startOrFetchConversation,
+} from '../api/conversationsClient'
 import { connectChatSocket } from '../api/chatSocket'
+import { addContact, listContacts } from '../api/contactsClient'
 import { classifyVerifiedPlaintext } from '../ml/scamClassifier'
 
 const mockedFetchPublicKey = vi.mocked(fetchPublicKey)
 const mockedStartOrFetchConversation = vi.mocked(startOrFetchConversation)
 const mockedFetchConversationEpoch = vi.mocked(fetchConversationEpoch)
+const mockedFetchConversationMessages = vi.mocked(fetchConversationMessages)
 const mockedConnectChatSocket = vi.mocked(connectChatSocket)
+const mockedListContacts = vi.mocked(listContacts)
+const mockedAddContact = vi.mocked(addContact)
 
 const conversationId = '00000000-0000-4000-8000-000000000001'
 const aliceId = '00000000-0000-4000-8000-000000000002'
 const bobId = '00000000-0000-4000-8000-000000000003'
 
 const sendEnvelope = vi.fn()
+const sendTyping = vi.fn()
 const closeSocket = vi.fn()
 let capturedHandlers: ChatSocketHandlers | null = null
 
@@ -113,8 +134,11 @@ beforeAll(async () => {
 
 afterEach(() => {
   sendEnvelope.mockReset()
+  sendTyping.mockReset()
   closeSocket.mockReset()
   capturedHandlers = null
+  window.localStorage.clear()
+  document.documentElement.removeAttribute('data-theme')
   vi.clearAllMocks()
 })
 
@@ -140,7 +164,7 @@ function renderChatScreen() {
 }
 
 // Complete the peer lookup + conversation + epoch + socket handshake with mocks.
-async function startChatWithBob() {
+async function startChatWithBob(history: RelayedEnvelope[] = []) {
   mockedFetchPublicKey.mockResolvedValue({
     username: 'bob',
     publicKey: encodeBase64(bobKeys.publicKey),
@@ -156,14 +180,21 @@ async function startChatWithBob() {
     conversationId,
     currentEpoch: 0,
   })
+  mockedFetchConversationMessages.mockResolvedValue(history)
+  mockedListContacts.mockResolvedValue([])
+  mockedAddContact.mockResolvedValue({
+    id: bobId,
+    username: 'bob',
+    createdAt: '2026-08-14T00:00:00Z',
+  })
   capturedHandlers = null
   mockedConnectChatSocket.mockImplementation((_id, _token, handlers) => {
     capturedHandlers = handlers
-    return { sendEnvelope, close: closeSocket }
+    return { sendEnvelope, sendTyping, close: closeSocket }
   })
 
-  fireEvent.change(screen.getByLabelText('Peer username'), { target: { value: 'bob' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Start encrypted chat' }))
+  fireEvent.change(screen.getByLabelText('Add contact'), { target: { value: 'bob' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }))
   await waitFor(() => {
     expect(mockedConnectChatSocket).toHaveBeenCalled()
   })
@@ -260,5 +291,48 @@ describe('ChatScreen', () => {
 
     expect(await screen.findByText('hello from bob')).toBeInTheDocument()
     expect(await screen.findByText('This message shows signs of a scam')).toBeInTheDocument()
+  })
+
+  it('decrypts scoped history after opening a contact', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob([
+      {
+        id: 'hist-1',
+        conversationId,
+        senderId: bobId,
+        ciphertext: new Uint8Array(32).fill(1),
+        nonce: new Uint8Array(24).fill(2),
+        keyEpoch: 0,
+      },
+    ])
+    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(mockedFetchConversationMessages).toHaveBeenCalledWith('access-token', conversationId)
+  })
+
+  it('shows message failed verification for a history envelope that does not verify', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob([
+      {
+        id: 'hist-bad',
+        conversationId,
+        senderId: bobId,
+        ciphertext: new Uint8Array(32).fill(0xff),
+        nonce: new Uint8Array(24).fill(2),
+        keyEpoch: 0,
+      },
+    ])
+    expect(await screen.findByText('message failed verification')).toBeInTheDocument()
+    expect(screen.queryByText('hello from bob')).not.toBeInTheDocument()
+    expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
+  })
+
+  it('persists dark mode per signed-in username', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to dark mode' }))
+    expect(window.localStorage.getItem('secure-chat-theme:alice')).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('dark')
   })
 })

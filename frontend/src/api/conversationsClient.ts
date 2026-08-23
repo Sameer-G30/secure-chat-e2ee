@@ -1,3 +1,8 @@
+// Decode standard base64 ciphertext and nonce from conversation-history JSON.
+import { decodeBase64 } from '../crypto/keyExchange'
+// Import the envelope type already used by the live WebSocket parser.
+import type { RelayedEnvelope } from './chatSocket'
+
 // Read the API base URL from the same build-time environment variable other clients use.
 const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -138,6 +143,80 @@ export async function fetchConversationEpoch(
   }
   const record = body as { conversation_id: string; current_epoch: number }
   return { conversationId: record.conversation_id, currentEpoch: record.current_epoch }
+}
+
+// Fetch ciphertext-only envelopes for one conversation the caller belongs to.
+export async function fetchConversationMessages(
+  accessToken: string,
+  conversationId: string,
+): Promise<RelayedEnvelope[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/conversations/${encodeURIComponent(conversationId)}/messages`,
+    {
+      method: 'GET',
+      headers: authHeaders(accessToken),
+    },
+  )
+  const body: unknown = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new ConversationsApiError(
+      extractErrorDetail(body, 'Could not load that conversation history. Please try again shortly.'),
+      response.status,
+    )
+  }
+  const payload = body as { messages?: unknown }
+  if (!Array.isArray(payload.messages)) {
+    return []
+  }
+  const envelopes: RelayedEnvelope[] = []
+  for (const item of payload.messages) {
+    const parsed = parseHistoryEnvelope(item)
+    if (parsed !== null) {
+      envelopes.push(parsed)
+    }
+  }
+  return envelopes
+}
+
+// Narrow one history JSON object into a relayed envelope, or skip it if it is not one.
+function parseHistoryEnvelope(value: unknown): RelayedEnvelope | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const frame = value as {
+    type?: unknown
+    id?: unknown
+    conversation_id?: unknown
+    sender_id?: unknown
+    ciphertext?: unknown
+    nonce?: unknown
+    key_epoch?: unknown
+  }
+  if (frame.type !== 'envelope') {
+    return null
+  }
+  if (
+    typeof frame.id !== 'string' ||
+    typeof frame.conversation_id !== 'string' ||
+    typeof frame.sender_id !== 'string' ||
+    typeof frame.ciphertext !== 'string' ||
+    typeof frame.nonce !== 'string' ||
+    typeof frame.key_epoch !== 'number'
+  ) {
+    return null
+  }
+  try {
+    return {
+      id: frame.id,
+      conversationId: frame.conversation_id,
+      senderId: frame.sender_id,
+      ciphertext: decodeBase64(frame.ciphertext),
+      nonce: decodeBase64(frame.nonce),
+      keyEpoch: frame.key_epoch,
+    }
+  } catch {
+    return null
+  }
 }
 
 // Convert the REST API origin into the WebSocket origin used by the ciphertext relay.

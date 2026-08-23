@@ -2,11 +2,11 @@
 
 Secure Chat is a portfolio-grade real-time messaging system designed so the server stores and relays ciphertext but never receives message plaintext or private/symmetric key material. Decrypted messages are classified for phishing and scam indicators locally in the recipient's browser.
 
-> Status: Slice 6. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. DistilBERT remains the Slice 5 offline default (`max_length` 256, threshold 0.30) in `ml/reports/distilbert/`; the later one-at-a-time sweep winner (`max_length` 512, threshold 0.20) stays under `ml/reports/distilbert_param_sweep/` and is **not** the ChatScreen DistilBERT opt-in. ChatScreen eagerly classifies verified plaintext with **TF-IDF Best** (10k terms, C=1.0, threshold 0.20) via the TypeScript vectorizer + logistic-head ONNX. The published TF-IDF default (50k terms, C=0.25, threshold 0.30) remains the trainer default and a measured switch-back. DistilBERT-default (256-token int8) is a lazy opt-in checkbox; Word BiLSTM Best (8 epochs, threshold 0.20) is a second lazy opt-in (one heavy graph at a time). DistilBERT encodes the real token length (no pad-to-256/512) and runs in an ONNX Runtime Web Worker. All six checkpoints were exported to ONNX Runtime Web and loaded **one at a time** in Chromium (all six succeeded; banners matched Python fixtures 4/4). Full six-row table: `ml/reports/onnx_web_load_check.md`. Trainer defaults were not changed.
+> Status: Slice 7. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. Contacts live in a server-side `contacts` table (not localStorage). Opening a chat loads conversation-scoped ciphertext history; this tab decrypts and classifies locally. Typing and presence travel as WebSocket metadata the server can see; draft text never leaves the device. Dark mode is persisted per signed-in username. DistilBERT remains the Slice 5 offline default (`max_length` 256, threshold 0.30) in `ml/reports/distilbert/`; the later one-at-a-time sweep winner (`max_length` 512, threshold 0.20) stays under `ml/reports/distilbert_param_sweep/` and is **not** the ChatScreen DistilBERT opt-in. ChatScreen eagerly classifies verified plaintext with **TF-IDF Best** (10k terms, C=1.0, threshold 0.20) via the TypeScript vectorizer + logistic-head ONNX. The published TF-IDF default (50k terms, C=0.25, threshold 0.30) remains the trainer default and a measured switch-back. DistilBERT-default (256-token int8) is a lazy opt-in checkbox; Word BiLSTM Best (8 epochs, threshold 0.20) is a second lazy opt-in (one heavy graph at a time). DistilBERT encodes the real token length (no pad-to-256/512) and runs in an ONNX Runtime Web Worker. All six checkpoints were exported to ONNX Runtime Web and loaded **one at a time** in Chromium (all six succeeded; banners matched Python fixtures 4/4). Full six-row table: `ml/reports/onnx_web_load_check.md`. Trainer defaults were not changed.
 
 ## Architecture
 
-The browser generates its X25519 identity keypair locally (`crypto/keyExchange.ts`), seals the private half in IndexedDB with a password-derived Argon2id key (`crypto/keyVault.ts`), derives directional session/epoch keys, encrypts with XChaCha20-Poly1305, and decrypts authenticated envelopes. FastAPI authenticates users, issues/rotates JWTs, stores/serves public keys, coordinates the non-secret per-conversation epoch counter, and relays conversation-scoped ciphertext over WebSocket. PostgreSQL stores account metadata (`users`), refresh-token hashes (`refresh_tokens`), 1:1 membership plus `current_epoch` (`conversations`), and encrypted envelopes only (`messages`: ciphertext, nonce, key_epoch). The server has no code path that decrypts a message or handles a private/symmetric key.
+The browser generates its X25519 identity keypair locally (`crypto/keyExchange.ts`), seals the private half in IndexedDB with a password-derived Argon2id key (`crypto/keyVault.ts`), derives directional session/epoch keys, encrypts with XChaCha20-Poly1305, and decrypts authenticated envelopes. FastAPI authenticates users, issues/rotates JWTs, stores/serves public keys, coordinates the non-secret per-conversation epoch counter, and relays conversation-scoped ciphertext over WebSocket. PostgreSQL stores account metadata (`users`), refresh-token hashes (`refresh_tokens`), 1:1 membership plus `current_epoch` (`conversations`), encrypted envelopes only (`messages`: ciphertext, nonce, key_epoch), and per-owner address-book edges (`contacts`: `owner_id`, `contact_id` only). The server has no code path that decrypts a message or handles a private/symmetric key.
 
 ## Threat model
 
@@ -26,7 +26,7 @@ The browser generates its X25519 identity keypair locally (`crypto/keyExchange.t
 
 ### Explicit limitations
 
-- The server can observe metadata such as account identities, conversation membership, message timing, message size, and non-secret epoch numbers.
+- The server can observe metadata such as account identities, conversation membership, message timing, message size, non-secret epoch numbers, typing indicators, and online/offline presence. Draft text is never sent with typing frames.
 - A compromised endpoint, malicious browser extension, or attacker who knows the user's password and accesses the local key vault can read plaintext available on that endpoint, and can also see on-device scam scores.
 - Static long-term X25519 keys plus epoch derivation provide key separation, not true forward secrecy. A complete Double Ratchet is intentionally out of scope.
 - Public-key authenticity is initially trusted on first use; key transparency or out-of-band safety-number verification is future work.
@@ -167,16 +167,16 @@ Open `http://localhost:5173`. Register an account, then log in: the first succes
 
 ### Two-tab encrypted conversation (Slice 4 proof)
 
-Both API and frontend must be running, and migrations must include `conversations` and `messages` (`alembic upgrade head` as shown above).
+Both API and frontend must be running, and migrations must include `conversations`, `messages`, and `contacts` (`alembic upgrade head` as shown above). CORS allows a **single** `FRONTEND_ORIGIN` (default `http://localhost:5173`). If Vite prints 5174, or you open `127.0.0.1` instead of `localhost`, login looks like it failed until `FRONTEND_ORIGIN` matches the origin in the address bar.
 
 1. Open `http://localhost:5173` in **two browser tabs**.
 2. Tab A: register `alice` (or any distinct handle), then log in. Wait until the chat shell appears — that means key upload finished.
 3. Tab B: register `bob`, then log in the same way.
-4. In Alice's tab, enter `bob` as the peer username and click **Start encrypted chat**. In Bob's tab, enter `alice` and start the chat. Either order is fine; the server stores one canonical row with `user_a_id < user_b_id`.
-5. Type a message in one tab and send it. The other tab should show the recovered plaintext. The Network panel's WebSocket frames must contain `ciphertext`, `nonce`, and `key_epoch` — never the message text.
-6. If you tamper with a frame (or the associated conversation/sender metadata), the recipient shows **message failed verification** instead of garbled text.
+4. In Alice's tab, **Add contact** `bob` and click **Add**. In Bob's tab, add `alice` the same way. Either order is fine; the server stores one canonical conversation row with `user_a_id < user_b_id`. Contacts survive a new login on the **same** browser (server-side address book). A new device still hits `IdentitySetupError`.
+5. Type a message in one tab and send it. The other tab should show the recovered plaintext. The Network panel's WebSocket frames must contain `ciphertext`, `nonce`, and `key_epoch` — never the message text. Typing/presence frames are metadata only (`type`, `user_id`, `is_typing` / `online`); they must not include draft text.
+6. Reload is not required: logging out and back in on the same browser, then opening the same contact, loads that conversation's ciphertext history. This tab decrypts locally. Tampered envelopes show **message failed verification** instead of garbled text, with no scam banner.
 
-Tokens stay in memory only: refreshing a tab requires logging in again. Multi-device key recovery is still unsupported (`IdentitySetupError`). Do not expect contacts, history pagination, typing/presence, or dark mode in this slice.
+Tokens stay in memory only: refreshing a tab requires logging in again. Multi-device key recovery is still unsupported (`IdentitySetupError`). Epoch rotation scheduling stays a later slice.
 
 Verified plaintext (sent locally, and received after decrypt) may show a non-blocking **This message shows signs of a scam** banner from the on-device TF-IDF Best classifier. Verification-failed rows never get a banner. Optional **Use DistilBERT (large download)** lazy-loads the Slice 5 256-token graph (unpadded sequences, ORT Web Worker). Optional **Use Word BiLSTM Best** lazy-loads the 8-epoch LSTM. Sequential ORT Web measurement: `http://localhost:5173/?mlLoadCheck=1`.
 
@@ -256,7 +256,7 @@ Checkpointing uses `data/processed_chat_llm/_rewrite_checkpoint.sqlite` so a cra
 - Frontend lint: `cd frontend && npm run lint`
 - ML unit tests (synthetic data, no download required): `cd ml && uv run pytest`
 - ML lint: `cd ml && uv run ruff check scripts src tests`
-- Full service health: `docker compose up --build`, migrate, then exercise `/health`, `/auth/register`, `/auth/login`, `/keys/me`, `/keys/{username}`, `/auth/refresh`, `POST /conversations`, `GET /conversations/{id}/epoch` (or `GET /keys/conversations/{id}/epoch`), and a two-tab WebSocket conversation as shown above
+- Full service health: `docker compose up --build`, migrate, then exercise `/health`, `/auth/register`, `/auth/login`, `/keys/me`, `/keys/{username}`, `/auth/refresh`, `GET/POST /contacts`, `POST /conversations`, `GET /conversations/{id}/messages`, `GET /conversations/{id}/epoch` (or `GET /keys/conversations/{id}/epoch`), and a two-tab WebSocket conversation as shown above
 
 Slice 1 proved the API health contract, a complete libsodium key-exchange/KDF/AEAD round trip, rejection of tampered ciphertext, and a production frontend build. Slice 2 added: a migrated `users` table; Argon2id-hashed, rate-limited, uniqueness-enforced registration exercised end-to-end through Docker Compose against real Postgres; the crypto spike productionized into `keyExchange.ts`; `AuthScreen` wired to real registration; and a trained, evaluated TF-IDF baseline.
 
@@ -296,9 +296,15 @@ Chromium sequential load (Playwright, `/?mlLoadCheck=1`). Fixture banners vs Pyt
 
 ChatScreen eager default is row 5 (TF-IDF Best). DistilBERT row 2 and Word BiLSTM Best row 3 are lazy opt-ins. Row 6 remains the published TF-IDF switch-back; row 4 remains the published LSTM switch-back.
 
+Slice 7 adds:
+
+- **Backend:** migrated `contacts` (`UNIQUE (owner_id, contact_id)`, `CHECK (owner_id != contact_id)`); `GET/POST /contacts`; `GET /conversations/{id}/messages` (membership-gated, conversation-scoped, ciphertext-only, oldest first); typing and presence metadata on the existing conversation WebSocket (never persisted, never draft text). CORS remains a single `FRONTEND_ORIGIN` with `GET`/`POST` only. E2EE, JWT, epoch semantics, and auth are unchanged. No classification endpoints.
+- **Frontend:** ChatScreen §8 chrome — contacts sidebar, avatars, online dot, current-chat bar, typing indicator, sent/received bubbles, composer, per-username dark mode. Opening a contact loads scoped history, decrypts locally, and classifies verified plaintext with the existing TF-IDF Best eager path (DistilBERT / Word BiLSTM Best checkboxes unchanged; unpadded DistilBERT; ORT worker; package-export `wasmPaths`). Verification-failed history rows show **message failed verification** with no banner. Tokens stay in memory; contacts are not stored in localStorage.
+- **ML:** none. Trainer defaults, ONNX exports, and the six-row browser table are unchanged.
+
 ## E2EE and client-side AI
 
-The sender encrypts before network transmission. The server stores and relays only an authenticated encrypted envelope. The recipient verifies and decrypts locally. Slice 6 classifies that verified plaintext in the browser with ONNX Runtime Web. Scores never leave the tab. The default ChatScreen model is TF-IDF Best (10k terms); DistilBERT default and Word BiLSTM Best are opt-in.
+The sender encrypts before network transmission. The server stores and relays only an authenticated encrypted envelope. The recipient verifies and decrypts locally. Slice 6 classifies that verified plaintext in the browser with ONNX Runtime Web. Scores never leave the tab. The default ChatScreen model is TF-IDF Best (10k terms); DistilBERT default and Word BiLSTM Best are opt-in. Slice 7 still classifies only after decrypt (or on plaintext the sender already has). Typing and presence are metadata the server can see; they are not secrets.
 
 ## ML evaluation
 

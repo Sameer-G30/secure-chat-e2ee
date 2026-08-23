@@ -75,6 +75,14 @@ class ConnectionHub:
         if not room:
             self._rooms.pop(conversation_id, None)
 
+    def is_connected(self, conversation_id: UUID, user_id: UUID) -> bool:
+        """Return whether this user currently has a live socket in the room."""
+
+        # Presence is metadata the server can already see; this is not a secret.
+        room = self._rooms.get(conversation_id, {})
+        sockets = room.get(user_id)
+        return bool(sockets)
+
     async def broadcast(
         self,
         conversation_id: UUID,
@@ -166,18 +174,24 @@ async def persist_envelope(
 async def list_envelopes_for_conversation(
     db: AsyncSession,
     conversation_id: UUID,
+    *,
+    newest_first: bool = True,
 ) -> list[Message]:
-    """Return stored envelopes for one conversation_id, newest first.
+    """Return stored envelopes for one conversation_id.
 
-    This helper exists so every messages-table read is conversation-scoped
-    (§2, §11). Slice 4's UI does not paginate history; tests use this to
-    prove a query for conversation A cannot see conversation B.
+    Defaults to newest first. Slice 7's history GET passes newest_first=False
+    so the transcript can render oldest-to-newest. id is the tiebreaker when
+    timestamps match. Every read stays conversation-scoped (§2, §11).
     """
 
+    # Newest-first is the index-friendly order; chronological is the chat UI order.
+    created_order = Message.created_at.desc() if newest_first else Message.created_at.asc()
+    # UUID id breaks timestamp ties so two inserts in one second stay stable.
+    id_order = Message.id.desc() if newest_first else Message.id.asc()
     result = await db.scalars(
         select(Message)
         .where(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.desc())
+        .order_by(created_order, id_order)
     )
     return list(result.all())
 

@@ -22,16 +22,19 @@ from app.schemas.conversations import (
     CreateConversationRequest,
     EpochResponse,
 )
+from app.schemas.messages import MessageHistoryResponse
 
 # Import the shared bearer-token authentication dependency.
 from app.security.dependencies import get_current_user
 
 # Import conversation load/create helpers so routers stay thin.
 from app.services.conversations import (
+    get_conversation_for_participant,
     get_conversation_response,
     get_epoch_for_participant,
     get_or_create_conversation,
 )
+from app.services.relay import list_envelopes_for_conversation, serialize_envelope
 
 # Group conversation REST under one versionable tag; paths are absolute so
 # POST /conversations is not redirected to POST /conversations/ (which would drop the body).
@@ -89,3 +92,28 @@ async def fetch_conversation_epoch(
     """
 
     return await get_epoch_for_participant(db, conversation_id, current_user)
+
+
+# Return ciphertext-only envelopes for one conversation the caller belongs to.
+@router.get("/conversations/{conversation_id}/messages", response_model=MessageHistoryResponse)
+async def fetch_conversation_messages(
+    # Identify which conversation's envelopes to return.
+    conversation_id: UUID,
+    # Require a valid access token.
+    current_user: Annotated[User, Depends(get_current_user)],
+    # Inject a request-scoped async database session.
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> MessageHistoryResponse:
+    """Return envelopes scoped by conversation_id, oldest first.
+
+    Membership is required (non-members 404). The payload is ciphertext,
+    nonce, key_epoch, sender_id, created_at, and id only — never a body
+    and never a classification score. Spec §11 forbids a flat all-messages
+    query with a client-side filter.
+    """
+
+    # 404 if the conversation is missing or the caller is not a member.
+    await get_conversation_for_participant(db, conversation_id, current_user)
+    # Read only this conversation's rows, oldest first for the transcript.
+    stored = await list_envelopes_for_conversation(db, conversation_id, newest_first=False)
+    return MessageHistoryResponse(messages=[serialize_envelope(row) for row in stored])

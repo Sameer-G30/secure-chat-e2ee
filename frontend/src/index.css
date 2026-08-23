@@ -14,6 +14,16 @@
   --text-secondary: #666;
   /* Use a quiet border around form controls. */
   --border: #e5e5e5;
+  /* Use a solid white field so typed text stays dark in light mode. */
+  --input-bg: #fff;
+  /* Use a white chip so floating labels mask the input border in light mode. */
+  --label-chip: #fff;
+  /* Use the accessible blue-violet accent on floating labels. */
+  --label-accent: #5368d6;
+  /* Keep received bubbles on a white surface in light mode. */
+  --bubble-received-bg: #fff;
+  /* Tell native form controls to paint with a light color scheme. */
+  color-scheme: light;
   /* Retain the legacy green for future online presence. */
   --online: #34c759;
   /* Preserve the largest legacy container radius. */
@@ -36,6 +46,30 @@
   -webkit-font-smoothing: antialiased;
   /* Smooth text consistently in Firefox on macOS. */
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Switch the chat shell to a dark palette persisted per signed-in username. */
+html[data-theme='dark'] {
+  /* Paint native inputs with a dark scheme so typed text stays light. */
+  color-scheme: dark;
+  /* Darken the application canvas behind the chat shell. */
+  --surface: #12141c;
+  /* Darken card and transcript surfaces to match the canvas. */
+  --card: rgba(28, 30, 42, 0.96);
+  /* Switch primary copy to near-white so it reads on dark surfaces. */
+  --text-primary: #f4f4f5;
+  /* Lighten supporting copy so it still contrasts with the canvas. */
+  --text-secondary: #a1a1aa;
+  /* Soften borders so they remain visible without glowing. */
+  --border: #3f3f46;
+  /* Use an opaque dark field so composer and add-contact text stay light. */
+  --input-bg: #1c1e2a;
+  /* Match the floating-label chip to the dark input instead of leftover white. */
+  --label-chip: #1c1e2a;
+  /* Lighten the label accent so it stays readable on the dark chip. */
+  --label-accent: #a5b4fc;
+  /* Raise received bubbles off the canvas without keeping a white sheet. */
+  --bubble-received-bg: #2a2d3a;
 }
 
 /* Apply predictable sizing to every element and pseudo-element. */
@@ -239,10 +273,10 @@ body {
   z-index: 1;
   /* Mask the border beneath label text. */
   padding: 0 6px;
-  /* Match the card behind the label. */
-  background: #fff;
-  /* Use the gradient's accessible blue as an accent. */
-  color: #5368d6;
+  /* Match the themed chip so the label does not leave a white box in dark mode. */
+  background: var(--label-chip);
+  /* Use the themed accent so the label stays readable on both palettes. */
+  color: var(--label-accent);
   /* Keep the label compact. */
   font-size: 12px;
   /* Make labels easy to scan. */
@@ -261,12 +295,24 @@ body {
   border-radius: var(--radius-sm);
   /* Keep user-entered text comfortably readable. */
   font: inherit;
-  /* Use a white input surface. */
-  background: #fff;
-  /* Use high-contrast text. */
+  /* Use the themed field so typed text is never light-on-white or dark-on-dark. */
+  background: var(--input-bg);
+  /* Use high-contrast text for both palettes. */
   color: var(--text-primary);
+  /* Force WebKit to paint the same text color instead of the native field color. */
+  -webkit-text-fill-color: var(--text-primary);
+  /* Keep the caret visible against the themed field. */
+  caret-color: var(--text-primary);
   /* Animate focus state changes without moving layout. */
   transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+/* Keep placeholders visible after WebKit text-fill is set on the input. */
+.input-group input::placeholder {
+  /* Use supporting copy color for the empty-state hint. */
+  color: var(--text-secondary);
+  /* Override the inherited fill so placeholders do not match typed text. */
+  -webkit-text-fill-color: var(--text-secondary);
 }
 
 /* Expose a visible keyboard and pointer focus state. */
@@ -399,16 +445,141 @@ body {
   color: #b42318;
 }
 
-/* Present the Slice 4 authenticated chat shell on the light application surface. */
-.chat-screen {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 24px;
+/* Present the Slice 7 authenticated chat shell as a sidebar plus transcript. */
+.chat-shell {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: 100svh;
+  background: var(--surface);
+}
+
+/* Stack the address book beside the transcript on narrow viewports. */
+@media (max-width: 800px) {
+  .chat-shell {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Render the server-side contact list as a left column. */
+.chat-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 16px;
+  border-right: 1px solid var(--border);
+  background: var(--card);
+}
+
+.chat-sidebar-self {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.chat-sidebar-name {
+  margin: 0;
+  font-weight: 700;
+}
+
+.chat-sidebar-hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.chat-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--grad-start), var(--grad-end));
+}
+
+.chat-avatar-sm {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+
+.chat-add-contact {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-contact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.chat-contact-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-contact-button-active,
+.chat-contact-button:hover {
+  background: rgba(102, 126, 234, 0.12);
+}
+
+.chat-contact-name {
+  flex: 1;
+}
+
+.chat-online-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.chat-online-dot-on {
+  background: var(--online);
+}
+
+.chat-main {
   display: grid;
   grid-template-rows: auto auto auto auto 1fr auto auto;
   gap: 16px;
+  padding: 24px;
   min-height: 100svh;
-  background: var(--surface);
+}
+
+.chat-header-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.chat-presence {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.chat-presence-on {
+  color: var(--online);
+}
+
+.chat-typing {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-style: italic;
 }
 
 /* Lay out the account identity and logout action side by side. */
@@ -471,6 +642,14 @@ body {
 .chat-bubble-sent .scam-banner {
   color: #fff7ed;
   background: rgba(0, 0, 0, 0.22);
+}
+
+/* Keep the inbound scam banner readable on a dark received bubble. */
+html[data-theme='dark'] .chat-bubble-received .scam-banner {
+  /* Use light amber so the warning still reads as a warning. */
+  color: #fde68a;
+  /* Darken the chip so it sits on the raised received bubble. */
+  background: rgba(0, 0, 0, 0.35);
 }
 
 /* Collect the peer username and the start-chat action on one row when space allows. */
@@ -536,9 +715,13 @@ body {
 }
 
 .chat-bubble-received {
+  /* Align inbound bubbles to the start of the transcript. */
   justify-self: start;
+  /* Use primary text so inbound plaintext follows the active theme. */
   color: var(--text-primary);
-  background: #fff;
+  /* Use the themed received surface instead of a hardcoded white sheet. */
+  background: var(--bubble-received-bg);
+  /* Draw a quiet edge so the bubble still reads against the transcript. */
   border: 1px solid var(--border);
 }
 
@@ -558,13 +741,32 @@ body {
 }
 
 .chat-composer input {
+  /* Fill the remaining row beside the send action. */
   width: 100%;
+  /* Match the auth-field spacing so the composer feels native to the shell. */
   padding: 14px 16px;
+  /* Draw the same quiet border used on other text fields. */
   border: 2px solid var(--border);
+  /* Preserve the form-control radius. */
   border-radius: var(--radius-sm);
+  /* Inherit platform typography. */
   font: inherit;
-  background: #fff;
+  /* Use the themed field so draft text stays readable in dark mode. */
+  background: var(--input-bg);
+  /* Use primary text for the draft in both palettes. */
   color: var(--text-primary);
+  /* Force WebKit to paint the draft in the themed color, not native fieldtext. */
+  -webkit-text-fill-color: var(--text-primary);
+  /* Keep the caret visible on the dark field. */
+  caret-color: var(--text-primary);
+}
+
+/* Keep the empty-composer hint readable after WebKit text-fill is set. */
+.chat-composer input::placeholder {
+  /* Use supporting copy color for the placeholder. */
+  color: var(--text-secondary);
+  /* Override the inherited fill so the hint is not the same as typed text. */
+  -webkit-text-fill-color: var(--text-secondary);
 }
 
 .chat-composer input:focus {
@@ -576,6 +778,32 @@ body {
 .chat-send-button {
   width: auto;
   min-width: 96px;
+}
+
+/* Keep Slice 7 status notes readable on the dark canvas. */
+html[data-theme='dark'] .slice-note {
+  /* Lighten the note copy so it is not dark-purple-on-dark. */
+  color: #ddd6fe;
+  /* Keep a violet tint without washing out the canvas. */
+  background: rgba(102, 126, 234, 0.18);
+}
+
+/* Keep error copy readable when the chat shell is in dark mode. */
+html[data-theme='dark'] .auth-feedback-error {
+  /* Lighten the error text against the dark canvas. */
+  color: #fecaca;
+  /* Keep a red tint that still reads as an error. */
+  background: rgba(220, 38, 38, 0.18);
+}
+
+/* Keep verification-failed bubbles readable on the dark transcript. */
+html[data-theme='dark'] .chat-bubble-failed {
+  /* Lighten the failure copy. */
+  color: #fecaca;
+  /* Keep a red-tinted dark chip. */
+  background: rgba(220, 38, 38, 0.18);
+  /* Soften the failure border for the dark palette. */
+  border-color: rgba(248, 113, 113, 0.35);
 }
 
 /* Full-width sequential ORT Web measurement page (query ?mlLoadCheck=1). */

@@ -88,7 +88,7 @@ class RelayEnvelopeOut(BaseModel):
     """Represent one persisted envelope as relayed to conversation members.
 
     Contains only ciphertext, nonce, key_epoch, and routing metadata.
-    Never includes plaintext or any key material.
+    Never includes a message body or any key material.
     """
 
     # Mark this frame as a stored envelope so clients can distinguish errors/acks.
@@ -107,3 +107,15 @@ class RelayEnvelopeOut(BaseModel):
     key_epoch: int
     # Carry the insertion timestamp as an ISO-8601 string for display ordering.
     created_at: str
+
+
+# Wrap conversation-scoped history so the client never queries the whole messages table.
+class MessageHistoryResponse(BaseModel):
+    """Represent one conversation's stored envelopes in chronological order.
+
+    Slice 7 serves GET /conversations/{id}/messages from this shape. Every
+    item is ciphertext-only; classification scores never appear here.
+    """
+
+    # Carry envelopes oldest-first so the chat transcript can render top-to-bottom.
+    messages: list[RelayEnvelopeOut]
