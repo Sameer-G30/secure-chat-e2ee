@@ -31,7 +31,7 @@ export interface LstmMetaSidecar {
   num_layers: number
   // Must stay false: no HTTP reputation lookups.
   live_url_reputation: boolean
-  // Slice 6 does not wire LSTM into ChatScreen.
+  // Slice 6 ChatScreen lazy-loads lstm_best behind a toggle; this sidecar flag stays false.
   wired_in_chatscreen: boolean
 }
 

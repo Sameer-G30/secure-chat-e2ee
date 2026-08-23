@@ -31,7 +31,24 @@ vi.mock('onnxruntime-web/wasm', () => {
   return {
     InferenceSession: { create: vi.fn() },
     Tensor: FakeTensor,
-    env: { wasm: { numThreads: 1, simd: true } },
+    env: {
+      // Match ortRuntime.ts: proxy + SIMD + Vite-processed wasm/mjs URLs (not public/ort).
+      wasm: {
+        // Keep the default single-thread mock used by jsdom tests.
+        numThreads: 1,
+        // Mirror the production SIMD flag so assignments in ortRuntime succeed.
+        simd: true,
+        // Mirror the production worker flag so assignments in ortRuntime succeed.
+        proxy: true,
+        // Object form matches Env.WasmFilePaths; string `/ort/` is invalid under Vite 8.
+        wasmPaths: {
+          // Dummy .wasm URL; ortRuntime overwrites this with the Vite asset path.
+          wasm: '/mock-ort.wasm',
+          // Dummy .mjs URL; ortRuntime overwrites this with the Vite asset path.
+          mjs: '/mock-ort.mjs',
+        },
+      },
+    },
   }
 })
 

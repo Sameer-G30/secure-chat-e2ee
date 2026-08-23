@@ -47,7 +47,7 @@ export interface CheckpointManifest {
     chat_fp: number | null
     note: string
   }
-  // True only for the ChatScreen eager default (published TF-IDF).
+  // True only for the ChatScreen eager default (TF-IDF Best).
   wired_in_chatscreen_by_default: boolean
 }
 
@@ -107,11 +107,17 @@ export interface LoadCheckRow {
   offline: CheckpointManifest['offline'] | null
 }
 
-// ChatScreen default until the six-way log says otherwise: published TF-IDF (A5/A6).
-export const CHATSCREEN_DEFAULT_ID: CheckpointId = 'tfidf_default'
+// Which heavy graph ChatScreen should score with; TF-IDF Best stays the eager fallback.
+export type ChatHeavyPreference = 'tfidf' | 'distilbert' | 'lstm'
+
+// ChatScreen eager default: TF-IDF Best (10k terms, C=1.0, threshold 0.20).
+export const CHATSCREEN_DEFAULT_ID: CheckpointId = 'tfidf_best'
 
 // DistilBERT opt-in loads the Slice 5 256-token graph, not the 512-token winner.
 export const DISTILBERT_OPT_IN_ID: CheckpointId = 'distilbert_default'
+
+// Word BiLSTM opt-in loads the 8-epoch sweep winner, not the published 4-epoch default.
+export const LSTM_OPT_IN_ID: CheckpointId = 'lstm_best'
 
 // Fixed sequential order; skip to the next row if this one OOMs.
 export const CHECKPOINT_LOAD_ORDER: readonly CheckpointId[] = [

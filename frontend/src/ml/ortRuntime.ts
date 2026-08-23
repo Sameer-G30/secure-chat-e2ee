@@ -2,15 +2,31 @@
 
 // Import the WASM-only build so we do not pull WebGL/WebGPU backends.
 import * as ort from 'onnxruntime-web/wasm'
+// Resolve the SIMD-threaded binary through the package export (not public/, not /dist/).
+import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url'
+// Resolve the Emscripten factory through the package export so Vite can transform it.
+import ortWasmMjsUrl from 'onnxruntime-web/ort-wasm-simd-threaded.mjs?url'
 
 // Import checkpoint path helpers.
 import { checkpointAssetUrl } from './paths'
 import type { CheckpointFamily, CheckpointId } from './types'
 
-// Keep WASM single-threaded to avoid SharedArrayBuffer/COOP requirements.
-ort.env.wasm.numThreads = 1
+// Point ORT at Vite-processed URLs. A `/ort/` prefix makes Vite import public/ JS and fail.
+ort.env.wasm.wasmPaths = {
+  // Override the .wasm fetch path with the hashed Vite asset URL.
+  wasm: ortWasmUrl,
+  // Override the .mjs factory path so the worker never imports `/ort/*.mjs`.
+  mjs: ortWasmMjsUrl,
+}
+// Run InferenceSession.run in an ORT-owned Web Worker so DistilBERT does not freeze the composer.
+ort.env.wasm.proxy = true
 // Enable SIMD when the browser supports it (Chrome/Edge on this machine).
 ort.env.wasm.simd = true
+// Use extra WASM threads only when COOP/COEP made the page cross-origin isolated.
+ort.env.wasm.numThreads =
+  typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated
+    ? Math.min(4, Math.max(1, navigator.hardwareConcurrency || 1))
+    : 1
 
 // The one allowed DistilBERT or LSTM session; TF-IDF may stay loaded beside it.
 let heavySession: { id: CheckpointId; family: CheckpointFamily; session: ort.InferenceSession } | null =
@@ -23,7 +39,7 @@ let tfidfSession: { id: CheckpointId; session: ort.InferenceSession } | null = n
 export async function createSessionFromBuffer(buffer: ArrayBuffer): Promise<ort.InferenceSession> {
   // WASM execution provider is the portable CPU path for all six graphs.
   return ort.InferenceSession.create(buffer, {
-    // Do not request WebGPU here; the load-check must work without a GPU flag.
+    // WASM stays the portable CPU path; WebGPU is skipped because int8 DistilBERT is unreliable there.
     executionProviders: ['wasm'],
   })
 }

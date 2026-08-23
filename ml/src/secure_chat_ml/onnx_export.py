@@ -692,7 +692,7 @@ def export_tfidf_checkpoint(
                 "tfidf_json": vocab_bytes,
             },
             "offline": offline,
-            "wired_in_chatscreen_by_default": spec["id"] == "tfidf_default",
+            "wired_in_chatscreen_by_default": spec["id"] == "tfidf_best",
         },
     )
     # Copy into Vite's public folder when the CLI asked for a frontend dest.

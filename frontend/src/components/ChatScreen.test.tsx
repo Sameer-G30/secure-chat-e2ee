@@ -25,11 +25,13 @@ vi.mock('../ml/scamClassifier', () => ({
   classifyVerifiedPlaintext: vi.fn(async () => ({
     pScam: 0.01,
     warned: false,
-    checkpointId: 'tfidf_default',
+    checkpointId: 'tfidf_best',
     inferenceMs: 1,
   })),
   enableDistilbertOptIn: vi.fn(async () => {}),
   disableDistilbertOptIn: vi.fn(async () => {}),
+  enableLstmOptIn: vi.fn(async () => {}),
+  disableLstmOptIn: vi.fn(async () => {}),
 }))
 
 // Mock the public-key lookup so tests never perform a real HTTP request.
@@ -228,12 +230,19 @@ describe('ChatScreen', () => {
     expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
   })
 
+  it('shows DistilBERT and Word BiLSTM Best opt-in checkboxes', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    expect(screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Use Word BiLSTM Best' })).toBeInTheDocument()
+  })
+
   it('shows a non-blocking scam banner on verified plaintext when the classifier warns', async () => {
     const mockedClassify = vi.mocked(classifyVerifiedPlaintext)
     mockedClassify.mockResolvedValue({
       pScam: 0.95,
       warned: true,
-      checkpointId: 'tfidf_default',
+      checkpointId: 'tfidf_best',
       inferenceMs: 2,
     })
     renderChatScreen()

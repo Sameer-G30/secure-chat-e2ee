@@ -36,14 +36,14 @@ Sidecars (not in the ONNX column): DistilBERT WordPiece vocab 322 KiB; LSTM `lst
 
 ## ChatScreen default
 
-**Eager ChatScreen model: published TF-IDF default** (`tfidf_default`, 50k terms, C=0.25, threshold 0.30).
+**Eager ChatScreen model: TF-IDF Best** (`tfidf_best`, 10k terms, C=1.0, threshold 0.20).
 
 Why this, after all six loaded successfully:
 
-- DistilBERT 512 is the offline quality winner but costs ~65 MiB WASM plus ~759 ms per short DM (padded to 512). Too heavy to eager-load on every chat (A6).
-- DistilBERT 256 is the Slice 5 switch-back: still ~65 MiB and ~345 ms/msg. **Lazy opt-in** via the ChatScreen checkbox (“Use DistilBERT (large download)”), not the always-on default.
-- Word BiLSTM is fast (~73 ms init, ~1 ms/msg, 13 MiB) and all fixtures matched, but this slice does **not** wire it into ChatScreen. If a later slice exports LSTM for chat, start with the published 4-epoch / 0.30 point, not 8-epoch / 0.20.
-- Published TF-IDF is the A5 path: TypeScript TF-IDF + 196 KiB logistic ONNX, 37 ms init, ~1 ms/msg. Same frozen C/threshold as `ml/reports/baseline_metrics.json`. The 10k sweep winner is kept as a switch-back if the 50k vocab JSON is a poor fit on a smaller device; do not delete the 50k artifacts.
+- DistilBERT 512 is the offline quality winner but costs ~65 MiB WASM plus ~759 ms per short DM when padded to 512. Too heavy to eager-load on every chat (A6). ChatScreen never selects this graph.
+- DistilBERT 256 is the Slice 5 switch-back: still ~65 MiB. **Lazy opt-in** via the ChatScreen checkbox (“Use DistilBERT (large download)”). ChatScreen DistilBERT now **does not pad** short DMs to 256 (the ONNX graph already has a dynamic sequence axis) and runs `session.run` in an ORT Web Worker, with extra WASM threads when the page is cross-origin isolated (Vite COOP/COEP). The 345 ms/msg figure below is the original **padded** sequential measurement; short DMs should be much cheaper.
+- Word BiLSTM Best (~76 ms init, ~1.3 ms/msg, 13 MiB) is a second **lazy opt-in** (“Use Word BiLSTM Best”). Only one heavy graph is resident at a time. The published 4-epoch / 0.30 LSTM remains the switch-back, not the ChatScreen toggle.
+- TF-IDF Best is the A5 eager path: TypeScript TF-IDF + 39 KiB logistic ONNX, 17 ms init, ~0.7 ms/msg. Same frozen C/threshold as `ml/reports/baseline_param_sweep/01_max_features_10000/`. The published 50k TF-IDF default stays exported as a switch-back; do not delete those artifacts.
 
 Trainer defaults (`train_baseline.py` / `train_distilbert.py` / `train_lstm.py`) were **not** changed.
 
@@ -64,5 +64,5 @@ Published TF-IDF has no `models/baseline/pipeline.joblib`. The exporter fits TRA
 2. Two tabs at `http://localhost:5173`. Register/login `alice` and `bob` as in the Slice 4 proof.
 3. Start the encrypted chat both ways. Send a DM. Network/WebSocket frames are still `{ciphertext, nonce, key_epoch}` only.
 4. Verified plaintext (sent locally and received after decrypt) may show **This message shows signs of a scam**. Verification-failed rows never get a banner. The banner does not hide, block, or delete the text. Scores never leave the tab.
-5. Optional: check **Use DistilBERT (large download)** to lazy-load the Slice 5 256-token int8 graph. Uncheck to unload it and return to TF-IDF.
+5. Optional: check **Use DistilBERT (large download)** to lazy-load the Slice 5 256-token int8 graph (unpadded sequences, Web Worker). Check **Use Word BiLSTM Best** instead to lazy-load the 8-epoch LSTM. Uncheck either to unload that heavy graph and return to TF-IDF Best.
 6. Sequential measurement page: `http://localhost:5173/?mlLoadCheck=1`.

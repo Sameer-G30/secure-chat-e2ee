@@ -11,7 +11,7 @@ export interface WordpieceVocab {
   cls_token: string
   // Separator token appended to every sequence.
   sep_token: string
-  // Padding token used when we pad to max_length.
+  // Padding token kept in the sidecar; ChatScreen DistilBERT no longer pads to max_length.
   pad_token: string
   // Integer ids for the special tokens (DistilBERT: 100/101/102/0).
   unk_id: number
@@ -28,9 +28,9 @@ export interface WordpieceVocab {
 
 // Encoded tensors DistilBERT ONNX expects (int64 in ORT, number[] here).
 export interface WordpieceEncoding {
-  // Token ids including [CLS] / [SEP] / [PAD].
+  // Token ids including [CLS] / [SEP]; no trailing [PAD] (dynamic sequence axis).
   inputIds: number[]
-  // 1 for real tokens, 0 for pad.
+  // 1 for every real token; length matches inputIds because we do not pad.
   attentionMask: number[]
 }
 
@@ -275,7 +275,7 @@ export function buildWordpieceIndex(vocab: WordpieceVocab): Map<string, number> 
   return index
 }
 
-// Encode one DM to DistilBERT input_ids and attention_mask (truncate, pad).
+// Encode one DM to DistilBERT input_ids and attention_mask (truncate only, never pad).
 export function encodeWordpiece(
   text: string,
   vocab: WordpieceVocab,
@@ -310,15 +310,9 @@ export function encodeWordpiece(
   }
   // Map pieces to ids; unknown strings become unk_id.
   const inputIds = pieces.map((piece) => tokenToId.get(piece) ?? vocab.unk_id)
-  // Attention mask is 1 for every real token before padding.
+  // Attention mask is 1 for every real token; the ONNX graph has a dynamic sequence axis.
   const attentionMask = inputIds.map(() => 1)
-  // Pad to max_length so the DistilBERT graph sees a rectangular tensor.
-  while (inputIds.length < maxLength) {
-    // Pad id is 0 for DistilBERT.
-    inputIds.push(vocab.pad_id)
-    // Pad positions are masked out.
-    attentionMask.push(0)
-  }
-  // Return tensors the ORT DistilBERT session consumes.
+  // Do not pad to max_length: a 20-token DM must not pay 256² / 512² attention.
+  // Return tensors the ORT DistilBERT session consumes (batch=1, seq=inputIds.length).
   return { inputIds, attentionMask }
 }

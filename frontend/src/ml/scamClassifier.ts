@@ -9,7 +9,7 @@ import type { TfidfSidecar } from './tfidf'
 // Import DistilBERT WordPiece helpers (A6).
 import { buildWordpieceIndex, encodeWordpiece } from './wordpiece'
 import type { WordpieceVocab } from './wordpiece'
-// Import the word-BiLSTM tokenizer (measured in Slice 6, not wired into ChatScreen).
+// Import the word-BiLSTM tokenizer (ChatScreen lazy-loads lstm_best behind a toggle).
 import { encodeLstmUnpadded } from './lstmTokenizer'
 import type { LstmMetaSidecar } from './lstmTokenizer'
 // Import ORT session helpers that enforce one heavy graph at a time.
@@ -26,12 +26,13 @@ import {
 } from './ortRuntime'
 import { checkpointAssetUrl, manifestUrl } from './paths'
 import type {
+  ChatHeavyPreference,
   CheckpointId,
   CheckpointManifest,
   ClassifyResult,
   FixtureScore,
 } from './types'
-import { CHATSCREEN_DEFAULT_ID, DISTILBERT_OPT_IN_ID } from './types'
+import { CHATSCREEN_DEFAULT_ID, DISTILBERT_OPT_IN_ID, LSTM_OPT_IN_ID } from './types'
 
 // Convert DistilBERT/LSTM [logit0, logit1] into P(scam) with a stable softmax.
 function softmaxScam(logit0: number, logit1: number): number {
@@ -132,6 +133,8 @@ export async function loadDistilbertCheckpoint(id: CheckpointId): Promise<Checkp
   const session = await createSessionFromBuffer(buffer)
   // Dispose any LSTM/other DistilBERT session first.
   await registerHeavySession(id, 'distilbert', session)
+  // DistilBERT replaced any LSTM graph; drop the LSTM tokenizer cache.
+  lstmMeta = null
   // Build the token → id map once.
   const tokenToId = buildWordpieceIndex(vocab)
   // Cache vocab for classifyDistilbert.
@@ -159,6 +162,8 @@ export async function loadLstmCheckpoint(id: CheckpointId): Promise<CheckpointMa
   const session = await createSessionFromBuffer(buffer)
   // Dispose any DistilBERT session first (one heavy graph at a time).
   await registerHeavySession(id, 'lstm', session)
+  // LSTM replaced any DistilBERT graph; drop the WordPiece cache.
+  distilbertVocab = null
   // Cache meta for classifyLstm.
   lstmMeta = { id, meta, scaler }
   // Return the manifest.
@@ -219,7 +224,7 @@ export async function classifyDistilbert(text: string): Promise<ClassifyResult> 
   }
   // Time tokenize + MatMul path.
   const started = performance.now()
-  // WordPiece encode with this checkpoint's max_length.
+  // WordPiece encode with truncation only (no pad-to-max_length; dynamic sequence axis).
   const encoded = encodeWordpiece(text, loaded.vocab, loaded.tokenToId)
   // ORT wants int64 input_ids.
   const inputIds = new OrtTensor(
@@ -302,33 +307,38 @@ export async function fetchFixtureScores(id: CheckpointId, filename: string): Pr
   return fetchJson<FixtureScore[]>(id, filename)
 }
 
-// ChatScreen eager default: published TF-IDF (A5/A6) until the six-way log says otherwise.
+// ChatScreen eager default: TF-IDF Best (10k terms, C=1.0, threshold 0.20).
 let chatDefaultReady: Promise<void> | null = null
 
-// Load the published TF-IDF default once (idempotent).
+// Load TF-IDF Best once (idempotent).
 export function ensureChatDefaultClassifier(): Promise<void> {
   // Reuse the in-flight load so StrictMode double-mount does not fetch twice.
   if (chatDefaultReady === null) {
-    // Load tfidf_default; failures surface to ChatScreen as a quiet no-banner state.
+    // Load tfidf_best; failures surface to ChatScreen as a quiet no-banner state.
     chatDefaultReady = loadTfidfCheckpoint(CHATSCREEN_DEFAULT_ID).then(() => undefined)
   }
   // Return the memoized promise.
   return chatDefaultReady
 }
 
-// Classify verified plaintext with DistilBERT when opted in, else TF-IDF default.
+// Classify verified plaintext with the selected heavy graph, else TF-IDF Best.
 export async function classifyVerifiedPlaintext(
   text: string,
-  preferDistilbert: boolean,
+  heavy: ChatHeavyPreference,
 ): Promise<ClassifyResult | null> {
   // DistilBERT opt-in uses the 256-token Slice 5 graph when it is loaded.
-  if (preferDistilbert && distilbertVocab?.id === DISTILBERT_OPT_IN_ID) {
+  if (heavy === 'distilbert' && distilbertVocab?.id === DISTILBERT_OPT_IN_ID) {
     // Score with DistilBERT; A6 lazy-load must have completed first.
     return classifyDistilbert(text)
   }
-  // Eager TF-IDF path (A5).
+  // Word BiLSTM Best opt-in uses the 8-epoch graph when it is loaded.
+  if (heavy === 'lstm' && lstmMeta?.id === LSTM_OPT_IN_ID) {
+    // Score with LSTM; lazy-load must have completed first.
+    return classifyLstm(text)
+  }
+  // Eager TF-IDF Best path (A5).
   try {
-    // Ensure the published default is loaded.
+    // Ensure TF-IDF Best is loaded.
     await ensureChatDefaultClassifier()
     // Score with the logistic head.
     return classifyTfidf(text)
@@ -344,12 +354,36 @@ export async function enableDistilbertOptIn(): Promise<void> {
   await loadDistilbertCheckpoint(DISTILBERT_OPT_IN_ID)
 }
 
-// Unload DistilBERT so ChatScreen falls back to TF-IDF.
+// Unload DistilBERT so ChatScreen falls back to TF-IDF Best.
 export async function disableDistilbertOptIn(): Promise<void> {
-  // Drop the heavy graph; TF-IDF stays loaded.
-  await unloadHeavySession()
+  // Only dispose DistilBERT; leave an LSTM session alone if that toggle is active.
+  const heavy = getHeavySession()
+  // Unload when the heavy singleton is the DistilBERT graph.
+  if (heavy?.family === 'distilbert') {
+    // Drop the transformer WASM session; TF-IDF stays loaded.
+    await unloadHeavySession()
+  }
   // Clear the WordPiece cache.
   distilbertVocab = null
+}
+
+// Lazy-load Word BiLSTM Best behind the ChatScreen opt-in toggle.
+export async function enableLstmOptIn(): Promise<void> {
+  // Load the 8-epoch sweep winner (not the published 4-epoch default).
+  await loadLstmCheckpoint(LSTM_OPT_IN_ID)
+}
+
+// Unload the word BiLSTM so ChatScreen falls back to TF-IDF Best.
+export async function disableLstmOptIn(): Promise<void> {
+  // Only dispose LSTM; leave DistilBERT alone if that toggle is active.
+  const heavy = getHeavySession()
+  // Unload when the heavy singleton is the LSTM graph.
+  if (heavy?.family === 'lstm') {
+    // Drop the LSTM WASM session; TF-IDF stays loaded.
+    await unloadHeavySession()
+  }
+  // Clear the LSTM tokenizer cache.
+  lstmMeta = null
 }
 
 // Unload everything (sequential load-check between the six steps).

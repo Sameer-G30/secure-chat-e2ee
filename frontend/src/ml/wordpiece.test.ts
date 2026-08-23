@@ -12,7 +12,7 @@ describe('wordpiece', () => {
     expect(tokens).toEqual(['hello', ',', 'world'])
   })
 
-  it('wraps WordPiece ids with [CLS] and [SEP] and pads to max_length', () => {
+  it('wraps WordPiece ids with [CLS] and [SEP] without padding to max_length', () => {
     // Tiny vocab with DistilBERT special-token ids.
     const vocab: WordpieceVocab = {
       tokens: ['[PAD]', 'hello', '[UNK]', '[CLS]', '[SEP]'],
@@ -32,12 +32,11 @@ describe('wordpiece', () => {
     const index = buildWordpieceIndex(vocab)
     // Encode a single in-vocab token.
     const encoded = encodeWordpiece('hello', vocab, index)
-    // [CLS] hello [SEP] then pad.
-    expect(encoded.inputIds.slice(0, 3)).toEqual([3, 1, 4])
-    // Padded to max_length.
-    expect(encoded.inputIds).toHaveLength(8)
-    // Attention mask is 1 for the three real tokens.
-    expect(encoded.attentionMask.slice(0, 3)).toEqual([1, 1, 1])
-    expect(encoded.attentionMask.slice(3)).toEqual([0, 0, 0, 0, 0])
+    // [CLS] hello [SEP] only; DistilBERT ONNX has a dynamic sequence axis.
+    expect(encoded.inputIds).toEqual([3, 1, 4])
+    // Short DMs must not be padded to max_length (that would cost 8² attention here).
+    expect(encoded.inputIds).toHaveLength(3)
+    // Attention mask is 1 for every real token and the same length as input ids.
+    expect(encoded.attentionMask).toEqual([1, 1, 1])
   })
 })

@@ -25,13 +25,16 @@ import {
   initializeSodium,
 } from '../crypto/keyExchange'
 import type { DirectionalSessionKeys } from '../crypto/keyExchange'
-// Import the on-device scam classifier (TF-IDF eager, DistilBERT opt-in).
+// Import the on-device scam classifier (TF-IDF Best eager; DistilBERT / BiLSTM opt-in).
 import {
   classifyVerifiedPlaintext,
   disableDistilbertOptIn,
+  disableLstmOptIn,
   enableDistilbertOptIn,
+  enableLstmOptIn,
   ensureChatDefaultClassifier,
 } from '../ml/scamClassifier'
+import type { ChatHeavyPreference } from '../ml/types'
 
 // Describe one bubble in the in-memory message list (Slice 4 has no history pagination).
 interface ChatMessage {
@@ -83,27 +86,29 @@ export function ChatScreen() {
   const [activeChat, setActiveChat] = useState<ActiveChat | null>(null)
   // Hold whether the operator opted into lazy-loaded DistilBERT (A6).
   const [useDistilbert, setUseDistilbert] = useState(false)
-  // Hold DistilBERT load status so the toggle can show a failure without blocking chat.
-  const [distilbertStatus, setDistilbertStatus] = useState<string | null>(null)
+  // Hold whether the operator opted into lazy-loaded Word BiLSTM Best.
+  const [useLstm, setUseLstm] = useState(false)
+  // Hold classifier load status so toggles can show a failure without blocking chat.
+  const [classifierStatus, setClassifierStatus] = useState<string | null>(null)
 
   // Keep the live socket off React state so reconnects do not re-render on every frame.
   const socketRef = useRef<ChatSocket | null>(null)
   // Keep the latest active chat in a ref so socket callbacks never close over a stale epoch.
   const activeChatRef = useRef<ActiveChat | null>(null)
-  // Keep the DistilBERT opt-in flag in a ref so incoming envelopes use the current model.
-  const useDistilbertRef = useRef(false)
+  // Keep the selected classifier in a ref so incoming envelopes use the current model.
+  const heavyPreferenceRef = useRef<ChatHeavyPreference>('tfidf')
 
   // Mirror active chat into the ref whenever React state changes.
   useEffect(() => {
     activeChatRef.current = activeChat
   }, [activeChat])
 
-  // Mirror the DistilBERT toggle into the ref used by socket callbacks.
+  // Mirror the model toggles into the ref used by socket callbacks.
   useEffect(() => {
-    useDistilbertRef.current = useDistilbert
-  }, [useDistilbert])
+    heavyPreferenceRef.current = useDistilbert ? 'distilbert' : useLstm ? 'lstm' : 'tfidf'
+  }, [useDistilbert, useLstm])
 
-  // Eager-load the published TF-IDF default once ChatScreen mounts (A5).
+  // Eager-load TF-IDF Best once ChatScreen mounts (A5).
   useEffect(() => {
     void ensureChatDefaultClassifier().catch(() => {
       // Missing ONNX export must not block the encrypted conversation.
@@ -132,7 +137,7 @@ export function ChatScreen() {
       return
     }
     // Run after decrypt/send so the bubble appears before WASM returns.
-    void classifyVerifiedPlaintext(plaintext, useDistilbertRef.current).then((result) => {
+    void classifyVerifiedPlaintext(plaintext, heavyPreferenceRef.current).then((result) => {
       // A missing export or WASM abort leaves the message unwarned.
       if (result === null || !result.warned) {
         // No banner to attach.
@@ -326,35 +331,74 @@ export function ChatScreen() {
           </p>
         </div>
         <div className="chat-header-actions">
-          <label className="chat-distilbert-toggle">
-            <input
-              type="checkbox"
-              checked={useDistilbert}
-              onChange={(event) => {
-                const enabled = event.target.checked
-                setUseDistilbert(enabled)
-                if (enabled) {
-                  setDistilbertStatus('Loading DistilBERT on this device…')
-                  void enableDistilbertOptIn()
-                    .then(() => {
-                      setDistilbertStatus('DistilBERT is classifying on this device (not sent to the server).')
-                    })
-                    .catch((caught: unknown) => {
-                      setUseDistilbert(false)
-                      setDistilbertStatus(
-                        caught instanceof Error
-                          ? `DistilBERT failed to load: ${caught.message}`
-                          : 'DistilBERT failed to load; staying on TF-IDF.',
-                      )
-                    })
-                } else {
-                  void disableDistilbertOptIn()
-                  setDistilbertStatus('Using the on-device TF-IDF classifier.')
-                }
-              }}
-            />
-            Use DistilBERT (large download)
-          </label>
+          <div className="chat-model-toggles">
+            <label className="chat-model-toggle">
+              <input
+                type="checkbox"
+                checked={useDistilbert}
+                onChange={(event) => {
+                  const enabled = event.target.checked
+                  if (enabled) {
+                    setUseLstm(false)
+                    setUseDistilbert(true)
+                    setClassifierStatus('Loading DistilBERT on this device…')
+                    void enableDistilbertOptIn()
+                      .then(() => {
+                        setClassifierStatus(
+                          'DistilBERT is classifying on this device (not sent to the server).',
+                        )
+                      })
+                      .catch((caught: unknown) => {
+                        setUseDistilbert(false)
+                        setClassifierStatus(
+                          caught instanceof Error
+                            ? `DistilBERT failed to load: ${caught.message}`
+                            : 'DistilBERT failed to load; staying on TF-IDF Best.',
+                        )
+                      })
+                  } else {
+                    setUseDistilbert(false)
+                    void disableDistilbertOptIn()
+                    setClassifierStatus('Using the on-device TF-IDF Best classifier.')
+                  }
+                }}
+              />
+              Use DistilBERT (large download)
+            </label>
+            <label className="chat-model-toggle">
+              <input
+                type="checkbox"
+                checked={useLstm}
+                onChange={(event) => {
+                  const enabled = event.target.checked
+                  if (enabled) {
+                    setUseDistilbert(false)
+                    setUseLstm(true)
+                    setClassifierStatus('Loading Word BiLSTM Best on this device…')
+                    void enableLstmOptIn()
+                      .then(() => {
+                        setClassifierStatus(
+                          'Word BiLSTM Best is classifying on this device (not sent to the server).',
+                        )
+                      })
+                      .catch((caught: unknown) => {
+                        setUseLstm(false)
+                        setClassifierStatus(
+                          caught instanceof Error
+                            ? `Word BiLSTM Best failed to load: ${caught.message}`
+                            : 'Word BiLSTM Best failed to load; staying on TF-IDF Best.',
+                        )
+                      })
+                  } else {
+                    setUseLstm(false)
+                    void disableLstmOptIn()
+                    setClassifierStatus('Using the on-device TF-IDF Best classifier.')
+                  }
+                }}
+              />
+              Use Word BiLSTM Best
+            </label>
+          </div>
           <button type="button" className="text-button" onClick={() => void logout()}>
             Log out
           </button>
@@ -388,9 +432,9 @@ export function ChatScreen() {
         </p>
       ) : null}
 
-      {distilbertStatus ? (
+      {classifierStatus ? (
         <p className="chat-status" role="status">
-          {distilbertStatus}
+          {classifierStatus}
         </p>
       ) : null}
 
@@ -450,8 +494,9 @@ export function ChatScreen() {
       <p className="slice-note" role="status">
         Slice 6: two browser tabs still hold a real encrypted conversation through the server.
         After decrypt (and on send), this tab classifies plaintext locally with ONNX Runtime Web.
-        The default model is the published TF-IDF + logistic head (A5). DistilBERT is opt-in (A6).
-        The word BiLSTM is exported and measured on ?mlLoadCheck=1 but is not wired into ChatScreen.
+        The eager default is TF-IDF Best (10k terms, A5). DistilBERT default and Word BiLSTM Best
+        are lazy opt-in toggles (one heavy graph at a time). DistilBERT encodes real token length
+        only and runs in an ORT Web Worker so the composer stays responsive.
         Contacts, history pagination, typing/presence, and dark mode stay later slices.
       </p>
     </main>

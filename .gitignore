@@ -27,8 +27,9 @@ ml/models/
 ml/exports/
 .ipynb_checkpoints/
 
-# Exclude browser ONNX Runtime Web artifacts copied from ml/exports/.
+# Exclude browser ONNX checkpoints copied from ml/exports/ into Vite public/.
 frontend/public/ml/
+# Leftover ORT WASM copies are unused; ChatScreen loads WASM from node_modules via Vite.
 frontend/public/ort/
 
 # Exclude editor and operating-system metadata.

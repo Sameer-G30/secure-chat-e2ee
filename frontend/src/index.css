@@ -438,8 +438,16 @@ body {
   gap: 16px;
 }
 
-/* Keep the A6 DistilBERT toggle readable on the light chat surface. */
-.chat-distilbert-toggle {
+/* Stack DistilBERT and Word BiLSTM opt-in toggles on the header's trailing edge. */
+.chat-model-toggles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* Keep the on-device model toggles readable on the light chat surface. */
+.chat-model-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
