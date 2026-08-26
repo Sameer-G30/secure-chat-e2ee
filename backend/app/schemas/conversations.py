@@ -63,5 +63,5 @@ class EpochResponse(BaseModel):
 
     # Identify which conversation this counter belongs to.
     conversation_id: UUID
-    # Return the current non-secret epoch integer (default 0 until later rotation).
+    # Return the current non-secret epoch integer (starts at 0; Slice 8 bumps it).
     current_epoch: int

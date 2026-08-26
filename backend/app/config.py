@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     # Let refresh tokens live far longer, since rotation-on-use limits replay risk.
     refresh_token_expire_days: int = 7
+    # Bump conversations.current_epoch after this many persisted envelopes since the last bump.
+    #
+    # Spec §6.7 / Slice 8. Default 50 so a quiet chat does not rotate every send.
+    # Set to 0 to disable the message-count trigger (time trigger can still fire).
+    # Tests and the two-tab demo set this to 2 via EPOCH_ROTATE_AFTER_MESSAGES.
+    epoch_rotate_after_messages: int = 50
+    # Also bump when this many hours have passed since last_rotated_at or created_at.
+    #
+    # Combined with the message-count rule by OR: either trigger is enough.
+    # Set to 0 to disable the wall-clock trigger (message-count can still fire).
+    epoch_rotate_after_hours: int = 24
     # Read case-insensitive variables without silently accepting unknown keys.
     model_config = SettingsConfigDict(
         # Load a local untracked file when the API runs outside Docker.

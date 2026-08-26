@@ -32,6 +32,8 @@ export interface ChatSocketHandlers {
   onTyping?: (userId: string, isTyping: boolean) => void
   // Receive a presence metadata event; this is not a secret.
   onPresence?: (userId: string, online: boolean) => void
+  // Receive a non-secret epoch counter bump; clients re-derive the next encrypt subkey locally.
+  onEpoch?: (currentEpoch: number) => void
 }
 
 // Describe the handle ChatScreen uses to send envelopes and tear the socket down.
@@ -89,6 +91,102 @@ export function parseRelayedEnvelope(value: unknown): RelayedEnvelope | null {
   }
 }
 
+// Narrow an unknown JSON value into the non-secret epoch counter, or return null.
+export function parseEpochFrame(value: unknown): number | null {
+  // Reject primitives and null; an epoch frame is always a JSON object.
+  if (!value || typeof value !== 'object') {
+    // Callers treat null as "not an epoch frame".
+    return null
+  }
+  // Read only the two fields the server is allowed to put on this metadata frame.
+  const frame = value as { type?: unknown; current_epoch?: unknown }
+  // Ignore envelopes, typing, presence, and acks.
+  if (frame.type !== 'epoch') {
+    // This is some other relay frame.
+    return null
+  }
+  // Require a non-negative safe integer; the server never sends a key here.
+  if (typeof frame.current_epoch !== 'number' || !Number.isSafeInteger(frame.current_epoch)) {
+    // A malformed counter must not update encrypt state.
+    return null
+  }
+  // Reject negative ids the KDF would also refuse.
+  if (frame.current_epoch < 0) {
+    // Keep the previous in-memory epoch.
+    return null
+  }
+  // Return the public counter clients pass to deriveEpochKey on the next encrypt.
+  return frame.current_epoch
+}
+
+// Dispatch one already-parsed relay JSON object to the matching ChatScreen callback.
+export function handleRelayJson(parsed: unknown, handlers: ChatSocketHandlers): void {
+  // Metadata frames are identified by a string type discriminator.
+  if (parsed && typeof parsed === 'object' && 'type' in parsed) {
+    // Read the discriminator once so each branch stays narrow.
+    const type = (parsed as { type: unknown }).type
+    // Protocol errors never include ciphertext or plaintext.
+    if (type === 'error' && 'detail' in parsed && typeof (parsed as { detail: unknown }).detail === 'string') {
+      // Surface the rejection in the chat status line.
+      handlers.onProtocolError((parsed as { detail: string }).detail)
+      // Stop; this is not an envelope.
+      return
+    }
+    // Persist acks are optional metadata for the sender tab.
+    if (type === 'accepted') {
+      // The sender already rendered plaintext locally.
+      return
+    }
+    // Typing frames must never carry draft text.
+    if (type === 'typing') {
+      // Narrow the metadata fields the UI actually uses.
+      const typingFrame = parsed as { user_id?: unknown; is_typing?: unknown }
+      // Ignore malformed typing metadata rather than treating it as ciphertext.
+      if (typeof typingFrame.user_id === 'string' && typeof typingFrame.is_typing === 'boolean') {
+        // Fan-out already excluded the sender on the server.
+        handlers.onTyping?.(typingFrame.user_id, typingFrame.is_typing)
+      }
+      // Never fall through to envelope parsing.
+      return
+    }
+    // Presence is online/offline metadata the server can already see.
+    if (type === 'presence') {
+      // Narrow the metadata fields the UI actually uses.
+      const presenceFrame = parsed as { user_id?: unknown; online?: unknown }
+      // Ignore malformed presence rather than showing an unreadable-envelope error.
+      if (typeof presenceFrame.user_id === 'string' && typeof presenceFrame.online === 'boolean') {
+        // Update the online dot for this peer.
+        handlers.onPresence?.(presenceFrame.user_id, presenceFrame.online)
+      }
+      // Never fall through to envelope parsing.
+      return
+    }
+    // Epoch bumps are a public counter; the server never sends a key.
+    if (type === 'epoch') {
+      // Parse the integer clients will use for the next encrypt only.
+      const currentEpoch = parseEpochFrame(parsed)
+      // A well-formed bump updates in-memory currentEpoch without touching draft text.
+      if (currentEpoch !== null) {
+        // Decrypt still uses each envelope's own key_epoch.
+        handlers.onEpoch?.(currentEpoch)
+      }
+      // Always consume epoch frames so they are not reported as unreadable envelopes.
+      return
+    }
+  }
+  // Remaining frames must be ciphertext envelopes, or they are protocol noise.
+  const envelope = parseRelayedEnvelope(parsed)
+  // A missing type=envelope (or bad base64) is not recoverable plaintext.
+  if (envelope === null) {
+    // Tell the UI without inventing a body.
+    handlers.onProtocolError('Received an unreadable ciphertext envelope.')
+    // Stop before calling onEnvelope.
+    return
+  }
+  // Hand the ciphertext to ChatScreen for local decrypt+verify.
+  handlers.onEnvelope(envelope)
+}
+
 // Open an authenticated WebSocket to the ciphertext relay for one conversation.
 export function connectChatSocket(
   conversationId: string,
@@ -105,37 +203,7 @@ export function connectChatSocket(
       handlers.onProtocolError('Received a malformed relay frame.')
       return
     }
-    if (parsed && typeof parsed === 'object' && 'type' in parsed) {
-      const type = (parsed as { type: unknown }).type
-      if (type === 'error' && 'detail' in parsed && typeof (parsed as { detail: unknown }).detail === 'string') {
-        handlers.onProtocolError((parsed as { detail: string }).detail)
-        return
-      }
-      if (type === 'accepted') {
-        // The sender already rendered plaintext locally; the id is optional metadata.
-        return
-      }
-      if (type === 'typing') {
-        const typingFrame = parsed as { user_id?: unknown; is_typing?: unknown }
-        if (typeof typingFrame.user_id === 'string' && typeof typingFrame.is_typing === 'boolean') {
-          handlers.onTyping?.(typingFrame.user_id, typingFrame.is_typing)
-        }
-        return
-      }
-      if (type === 'presence') {
-        const presenceFrame = parsed as { user_id?: unknown; online?: unknown }
-        if (typeof presenceFrame.user_id === 'string' && typeof presenceFrame.online === 'boolean') {
-          handlers.onPresence?.(presenceFrame.user_id, presenceFrame.online)
-        }
-        return
-      }
-    }
-    const envelope = parseRelayedEnvelope(parsed)
-    if (envelope === null) {
-      handlers.onProtocolError('Received an unreadable ciphertext envelope.')
-      return
-    }
-    handlers.onEnvelope(envelope)
+    handleRelayJson(parsed, handlers)
   })
 
   socket.addEventListener('close', () => {

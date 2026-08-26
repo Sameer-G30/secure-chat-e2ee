@@ -123,8 +123,8 @@ async def conversation_relay(
             try:
                 # Validate ciphertext/nonce/epoch shape without attempting decryption.
                 envelope = RelayEnvelopeIn.model_validate(raw_frame)
-                # Persist BYTEA columns and build the outbound ciphertext-only frame.
-                outbound = await relay_envelope(
+                # Persist BYTEA columns, maybe bump current_epoch, build the outbound frame.
+                outbound, rotated_epoch = await relay_envelope(
                     db, conversation=conversation, sender=user, envelope=envelope
                 )
             except (ValidationError, EnvelopeRejected, ValueError) as exc:
@@ -145,6 +145,13 @@ async def conversation_relay(
             )
             # Acknowledge persistence so the sender can attach the server-assigned id.
             await websocket.send_json({"type": "accepted", "id": str(outbound.id)})
+            # Broadcast the new counter to every member, including the sender.
+            if rotated_epoch is not None:
+                # Metadata only: the integer clients use as the next KDF subkey id.
+                await connection_hub.broadcast(
+                    conversation.id,
+                    {"type": "epoch", "current_epoch": rotated_epoch},
+                )
     except WebSocketDisconnect:
         # Normal tab close; drop this socket from the room.
         connection_hub.leave(conversation.id, user.id, websocket)

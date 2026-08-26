@@ -126,6 +126,43 @@ describe('keyExchange', () => {
     expect(() => decryptMessage(envelope, bobSession.receiveKey, replayedMetadata)).toThrow()
   })
 
+  // Prove old envelopes still open after a later epoch subkey is derived (Slice 8).
+  it('decrypts an epoch-0 envelope after deriving an epoch-1 subkey', () => {
+    // Generate Alice's identity for the two-epoch round trip.
+    const alice = generateIdentityKeyPair()
+    // Generate Bob's complementary identity.
+    const bob = generateIdentityKeyPair()
+    // Derive Alice's sender direction from Bob's public key.
+    const aliceSession = deriveClientSessionKeys(alice, bob.publicKey)
+    // Derive Bob's recipient direction from Alice's public key.
+    const bobSession = deriveServerSessionKeys(bob, alice.publicKey)
+    // Bind both envelopes to the same conversation and sender.
+    const metadata = {
+      // Use a stable conversation identifier for this proof.
+      conversationId: '00000000-0000-4000-8000-000000000008',
+      // Use Alice's stable sender identifier for this proof.
+      senderId: '00000000-0000-4000-8000-000000000009',
+    }
+    // Encrypt under epoch 0 the way history rows keep their original key_epoch.
+    const oldEnvelope = encryptMessage('history from epoch zero', aliceSession.transmitKey, 0, metadata)
+    // Encrypt a later send under epoch 1 without deleting the epoch-0 subkey.
+    const newEnvelope = encryptMessage('fresh from epoch one', aliceSession.transmitKey, 1, metadata)
+    // History decrypt uses the envelope's keyEpoch, not "whatever current is".
+    expect(decryptMessage(oldEnvelope, bobSession.receiveKey, metadata)).toBe(
+      'history from epoch zero',
+    )
+    // The new send uses the bumped subkey id.
+    expect(decryptMessage(newEnvelope, bobSession.receiveKey, metadata)).toBe('fresh from epoch one')
+    // Mixing the epoch id with the other envelope must fail authentication.
+    expect(() =>
+      decryptMessage(
+        { ...oldEnvelope, keyEpoch: 1 },
+        bobSession.receiveKey,
+        metadata,
+      ),
+    ).toThrow()
+  })
+
   // Prove role derivation is a stable, symmetric, and deterministic rule.
   describe('determineSessionRole', () => {
     // Prove the lexicographically earlier username always plays "client".

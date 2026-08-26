@@ -79,7 +79,7 @@ interface ActiveChat {
   selfId: string
   // Identify the peer UUID for received-envelope associated data.
   peerId: string
-  // Pass the server's current epoch into encrypt; decrypt uses the envelope's keyEpoch.
+  // Pass the server's current epoch into the NEXT encrypt only; decrypt uses envelope.keyEpoch.
   currentEpoch: number
   // Hold directional crypto_kx keys derived locally; never sent to the server.
   sessionKeys: DirectionalSessionKeys
@@ -298,6 +298,32 @@ export function ChatScreen() {
     }
   }
 
+  // Update the in-memory encrypt epoch after a WS bump or a GET .../epoch refetch.
+  function applyCurrentEpoch(nextEpoch: number) {
+    // Read the live conversation so socket callbacks never close over a stale render.
+    const current = activeChatRef.current
+    // Ignore a bump that arrives before session keys exist.
+    if (current === null) {
+      // Keep the composer draft untouched.
+      return
+    }
+    // Ignore a stale counter that would encrypt with an older subkey id.
+    if (nextEpoch < current.currentEpoch) {
+      // Leave currentEpoch and the draft as they are.
+      return
+    }
+    // Keep directional session keys; only the KDF subkey id changes.
+    const updated: ActiveChat = { ...current, currentEpoch: nextEpoch }
+    // Encrypt must use the new id on the next send, even before React re-renders.
+    activeChatRef.current = updated
+    // Re-render header/status without calling setDraft.
+    setActiveChat(updated)
+    // Announce the public counter; this is not a key.
+    setStatusMessage(
+      `Encrypted chat with ${updated.peerUsername} is ready (epoch ${nextEpoch}).`,
+    )
+  }
+
   // Look up the peer, derive session keys, load scoped history, and open the ciphertext relay.
   async function openConversation(peerUsername: string) {
     setIsConnecting(true)
@@ -364,6 +390,10 @@ export function ChatScreen() {
           if (activeChatRef.current?.peerId === userId) {
             setPeerOnline(online)
           }
+        },
+        onEpoch: (currentEpoch) => {
+          // Re-derive the next encrypt subkey only; do not clear the composer.
+          applyCurrentEpoch(currentEpoch)
         },
       })
       setStatusMessage(
@@ -746,10 +776,13 @@ export function ChatScreen() {
         </form>
 
         <p className="slice-note" role="status">
-          Slice 7: contacts live on the server, not in localStorage. Opening a chat loads that
-          conversation&apos;s ciphertext envelopes, then this tab decrypts and classifies them
-          locally (TF-IDF Best eager; DistilBERT / Word BiLSTM Best are lazy XOR opt-ins). Typing
-          and presence are metadata the server can see; draft text never leaves this device.
+          Slice 8: the server increments current_epoch after 50 persisted messages in this
+          conversation or 24h since the last bump, and broadcasts that integer as a WebSocket
+          epoch frame. This tab encrypts the next send with the new id and still decrypts
+          history using each envelope&apos;s key_epoch. Rotation is key separation, not
+          forward secrecy. Contacts live on the server. Typing and presence are metadata;
+          draft text never leaves this device. Classification stays on-device after decrypt
+          (TF-IDF Best eager; DistilBERT / Word BiLSTM Best are lazy XOR opt-ins).
         </p>
       </main>
     </div>

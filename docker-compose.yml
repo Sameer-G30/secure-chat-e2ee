@@ -28,6 +28,10 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       # Let rotated refresh tokens live longer than access tokens.
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      # Slice 8: persist an epoch bump after this many envelopes since the last bump (0 disables).
+      EPOCH_ROTATE_AFTER_MESSAGES: ${EPOCH_ROTATE_AFTER_MESSAGES:-50}
+      # Slice 8: also bump after this many hours since last_rotated_at / created_at (0 disables).
+      EPOCH_ROTATE_AFTER_HOURS: ${EPOCH_ROTATE_AFTER_HOURS:-24}
     # Start the API only after PostgreSQL accepts connections.
     depends_on:
       # Reference the database service by its private DNS name.

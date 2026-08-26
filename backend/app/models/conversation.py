@@ -41,10 +41,19 @@ class Conversation(Base):
     )
     # Store the non-secret epoch counter the clients use for KDF subkey ids.
     #
-    # Slice 4 only *reads* this counter; scheduled rotation (every 50 messages
-    # or 24h) is a later-slice job. Default 0 matches spec §5.
+    # Slice 8 increments this integer on a documented schedule (N messages since
+    # the last bump, default 50, OR 24h since last_rotated_at / created_at).
+    # The server never derives or stores the corresponding key. Default 0
+    # matches spec §5.
     current_epoch: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
+    )
+    # Record when the server last incremented current_epoch (NULL = never).
+    #
+    # Used for the 24h half of the rotation rule and to count envelopes since
+    # the last bump. This is a timestamp, not a key.
+    last_rotated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
     )
     # Record conversation creation time using the database server's clock.
     created_at: Mapped[datetime] = mapped_column(

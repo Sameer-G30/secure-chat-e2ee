@@ -104,6 +104,7 @@ import {
 import { connectChatSocket } from '../api/chatSocket'
 import { addContact, listContacts } from '../api/contactsClient'
 import { classifyVerifiedPlaintext } from '../ml/scamClassifier'
+import { decryptMessage } from '../crypto/keyExchange'
 
 const mockedFetchPublicKey = vi.mocked(fetchPublicKey)
 const mockedStartOrFetchConversation = vi.mocked(startOrFetchConversation)
@@ -164,21 +165,26 @@ function renderChatScreen() {
 }
 
 // Complete the peer lookup + conversation + epoch + socket handshake with mocks.
-async function startChatWithBob(history: RelayedEnvelope[] = []) {
+async function startChatWithBob(
+  history: RelayedEnvelope[] = [],
+  options: { currentEpoch?: number } = {},
+) {
+  // Default the mock conversation to epoch 0 unless a test is proving a later counter.
+  const currentEpoch = options.currentEpoch ?? 0
   mockedFetchPublicKey.mockResolvedValue({
     username: 'bob',
     publicKey: encodeBase64(bobKeys.publicKey),
   })
   mockedStartOrFetchConversation.mockResolvedValue({
     id: conversationId,
-    currentEpoch: 0,
+    currentEpoch,
     createdAt: '2026-08-14T00:00:00Z',
     self: { id: aliceId, username: 'alice', publicKey: encodeBase64(aliceKeys.publicKey) },
     peer: { id: bobId, username: 'bob', publicKey: encodeBase64(bobKeys.publicKey) },
   })
   mockedFetchConversationEpoch.mockResolvedValue({
     conversationId,
-    currentEpoch: 0,
+    currentEpoch,
   })
   mockedFetchConversationMessages.mockResolvedValue(history)
   mockedListContacts.mockResolvedValue([])
@@ -334,5 +340,63 @@ describe('ChatScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Switch to dark mode' }))
     expect(window.localStorage.getItem('secure-chat-theme:alice')).toBe('dark')
     expect(document.documentElement.dataset.theme).toBe('dark')
+  })
+
+  it('encrypts the next send with a bumped epoch and keeps the composer draft', async () => {
+    // Render Alice's chat shell with an in-memory session.
+    renderChatScreen()
+    // Wait until the §8 chrome is on screen.
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    // Open Bob at epoch 0 so the first send would have used key_epoch 0.
+    await startChatWithBob()
+    // Type a draft that must survive the bump (do not send yet).
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: 'still typing through rotation' },
+    })
+    // Simulate the server broadcasting {type:"epoch", current_epoch:1} to both tabs.
+    capturedHandlers?.onEpoch?.(1)
+    // The composer must not be cleared by the metadata frame.
+    expect(screen.getByLabelText('Message')).toHaveValue('still typing through rotation')
+    // Send after the bump so encrypt uses the new subkey id.
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    // The relay payload must carry key_epoch 1, never the draft as plaintext.
+    expect(sendEnvelope).toHaveBeenCalledTimes(1)
+    const [envelope] = sendEnvelope.mock.calls[0] as [
+      { ciphertext: Uint8Array; nonce: Uint8Array; keyEpoch: number },
+    ]
+    expect(envelope.keyEpoch).toBe(1)
+    expect(new TextDecoder().decode(envelope.ciphertext)).not.toContain(
+      'still typing through rotation',
+    )
+    // The status line should mention the public counter.
+    expect(screen.getByText(/epoch 1/)).toBeInTheDocument()
+  })
+
+  it('decrypts epoch-0 history after the conversation has already bumped to 1', async () => {
+    // Render Alice's chat shell with an in-memory session.
+    renderChatScreen()
+    // Wait until the §8 chrome is on screen.
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    // Open Bob at current_epoch 1 with a stored envelope that still uses key_epoch 0.
+    await startChatWithBob(
+      [
+        {
+          id: 'hist-epoch-0',
+          conversationId,
+          senderId: bobId,
+          ciphertext: new Uint8Array(32).fill(1),
+          nonce: new Uint8Array(24).fill(2),
+          keyEpoch: 0,
+        },
+      ],
+      { currentEpoch: 1 },
+    )
+    // History must still decrypt; decrypt uses the envelope's keyEpoch, not currentEpoch.
+    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(vi.mocked(decryptMessage)).toHaveBeenCalledWith(
+      expect.objectContaining({ keyEpoch: 0 }),
+      expect.any(Uint8Array),
+      expect.objectContaining({ conversationId, senderId: bobId }),
+    )
   })
 })

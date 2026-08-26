@@ -67,7 +67,11 @@ async def _receive_until(ws: AsyncWebSocketSession, expected_type: str) -> dict[
         frame = await ws.receive_json()
         assert isinstance(frame, dict)
         frame_type = frame.get("type")
-        if frame_type in {"presence", "typing"} and expected_type not in {"presence", "typing"}:
+        if frame_type in {"presence", "typing", "epoch"} and expected_type not in {
+            "presence",
+            "typing",
+            "epoch",
+        }:
             continue
         if expected_type != "any" and frame_type != expected_type:
             continue

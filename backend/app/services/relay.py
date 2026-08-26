@@ -13,6 +13,9 @@ from fastapi import WebSocket
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# Import validated settings so rotation thresholds are read at persist time.
+from app.config import get_settings
+
 # Import the ORM models this service reads and writes.
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -27,6 +30,9 @@ from app.services.conversations import (
     other_user_id,
     require_both_public_keys,
 )
+
+# Import Slice 8 epoch-counter rotation; this module still never derives a key.
+from app.services.epoch import maybe_rotate_epoch
 
 
 # Raised when an envelope's routing metadata does not match the authenticated context.
@@ -219,12 +225,16 @@ async def relay_envelope(
     conversation: Conversation,
     sender: User,
     envelope: RelayEnvelopeIn,
-) -> RelayEnvelopeOut:
-    """Validate routing, store ciphertext only, and return the outbound frame.
+) -> tuple[RelayEnvelopeOut, int | None]:
+    """Validate routing, store ciphertext only, and maybe bump current_epoch.
 
-    The server never decrypts. Associated-data verification is the client's job.
+    Returns (outbound envelope, new current_epoch or None). The server never
+    decrypts. Associated-data verification is the client's job. A peer socket
+    may have already bumped the counter, so current_epoch is refreshed first.
     """
 
+    # Reload membership + epoch so a bump on the other socket is visible here.
+    await db.refresh(conversation)
     # Reject claimed conversation/sender/epoch that do not match this connection.
     assert_envelope_routing(envelope, conversation.id, sender.id, conversation.current_epoch)
     # Decode wire base64 into BYTEA columns; lengths were already validated.
@@ -238,7 +248,19 @@ async def relay_envelope(
         nonce=nonce,
         key_epoch=envelope.key_epoch,
     )
-    return serialize_envelope(message)
+    # Reload last_rotated_at in case another persist just stamped a bump.
+    await db.refresh(conversation)
+    # Read rotation thresholds at call time so tests can override via env.
+    settings = get_settings()
+    # Bump only on the documented N-messages OR 24h rule; never every send by default.
+    rotated_epoch = await maybe_rotate_epoch(
+        db,
+        conversation,
+        rotate_after_messages=settings.epoch_rotate_after_messages,
+        rotate_after_hours=settings.epoch_rotate_after_hours,
+    )
+    # Return the ciphertext-only frame plus the new counter when a bump happened.
+    return serialize_envelope(message), rotated_epoch
 
 
 # Confirm the socket's user may join this conversation and that both keys exist.
