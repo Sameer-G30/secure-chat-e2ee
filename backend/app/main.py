@@ -30,8 +30,8 @@ app = FastAPI(
     title="Secure Chat API",
     # Describe the server's ciphertext-only trust boundary.
     description="Stores and relays encrypted message envelopes without plaintext access.",
-    # Identify the eighth vertical-slice API version.
-    version="0.8.0",
+    # Identify the ninth vertical-slice API version.
+    version="0.9.0",
 )
 
 # Attach the limiter so every @limiter.limit(...) decorator can read shared state.

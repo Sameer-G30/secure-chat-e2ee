@@ -10,8 +10,8 @@ keyVault.ts).
 from typing import Annotated
 from uuid import UUID
 
-# Import FastAPI's routing, dependency, and HTTP-error primitives.
-from fastapi import APIRouter, Depends, HTTPException, status
+# Import FastAPI's routing, dependency, path-constraint, and HTTP-error primitives.
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 # Import SQLAlchemy's async session type and the scoped username lookup helper.
 from sqlalchemy import select
@@ -28,6 +28,9 @@ from app.schemas.conversations import EpochResponse
 
 # Import the validated request and response shapes for this router's endpoints.
 from app.schemas.keys import PublicKeyResponse, PublicKeyUploadRequest
+
+# Import shared username bounds so GET /keys/{username} rejects empty or oversized handles.
+from app.schemas.usernames import USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH, USERNAME_PATTERN
 
 # Import the shared bearer-token authentication dependency.
 from app.security.dependencies import get_current_user
@@ -87,8 +90,15 @@ async def upload_my_public_key(
 # Look up any account's public key so a peer can derive shared session keys.
 @router.get("/{username}", response_model=PublicKeyResponse)
 async def get_public_key(
-    # Identify which account's public key to return.
-    username: str,
+    # Identify which account's public key to return; reject empty/oversized/unsafe handles.
+    username: Annotated[
+        str,
+        Path(
+            min_length=USERNAME_MIN_LENGTH,
+            max_length=USERNAME_MAX_LENGTH,
+            pattern=USERNAME_PATTERN,
+        ),
+    ],
     # Require authentication; the spec calls this "not secret data" but still gates
     # it behind login so the endpoint cannot be used for unauthenticated account enumeration.
     current_user: Annotated[User, Depends(get_current_user)],

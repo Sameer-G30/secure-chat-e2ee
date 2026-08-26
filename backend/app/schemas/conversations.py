@@ -6,12 +6,11 @@ from datetime import datetime
 # Import UUID for typed conversation and account identifiers.
 from uuid import UUID
 
-# Import Pydantic's model base and field-level validation helpers.
-from pydantic import BaseModel, Field
+# Import Pydantic's model base used by request and response payloads.
+from pydantic import BaseModel
 
-# Reuse the same username bounds the auth schema already documents.
-_USERNAME_MIN_LENGTH = 3
-_USERNAME_MAX_LENGTH = 32
+# Reuse the same URL-safe username type register and contacts already enforce.
+from app.schemas.usernames import Username
 
 
 # Validate the single field a conversation start-or-fetch request must supply.
@@ -19,7 +18,7 @@ class CreateConversationRequest(BaseModel):
     """Represent the client-submitted 1:1 conversation lookup payload."""
 
     # Identify the other participant by the same handle used for GET /keys/{username}.
-    peer_username: str = Field(min_length=_USERNAME_MIN_LENGTH, max_length=_USERNAME_MAX_LENGTH)
+    peer_username: Username
 
 
 # Describe one participant as returned to an authenticated conversation member.

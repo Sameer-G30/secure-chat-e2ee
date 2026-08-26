@@ -398,3 +398,38 @@ async def test_websocket_presence_announces_online_and_offline(client: AsyncClie
             assert offline["user_id"] == bob_id
             assert offline["online"] is False
     assert bob_token
+
+
+# Confirm an empty ciphertext string is a protocol error, not a stored row.
+async def test_websocket_rejects_empty_ciphertext(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Send ciphertext="" and require an error frame, never a messages insert."""
+
+    # Open the Alice/Bob conversation used by the other relay tests.
+    alice_token, bob_token, conversation_id = await _alice_bob_conversation(client)
+    # Build Alice's authenticated WebSocket URL.
+    alice_url = f"http://testserver/ws/conversations/{conversation_id}?access_token={alice_token}"
+    # Open one sender socket; Bob does not need to be connected for a reject.
+    async with _ws_client() as ws_client:
+        # Connect Alice so the next JSON frame is validated as an envelope.
+        async with _connect_ws(alice_url, ws_client) as alice_ws:
+            # Submit a body that fails RelayEnvelopeIn min_length on ciphertext.
+            await alice_ws.send_json(
+                {
+                    "ciphertext": "",
+                    "nonce": _fake_nonce(),
+                    "key_epoch": 0,
+                }
+            )
+            # Drain presence, then require the protocol error.
+            error = await _receive_until(alice_ws, "error")
+    # Require the discriminator used by the frontend error handler.
+    assert error["type"] == "error"
+    # Load every message row this isolated test database may hold.
+    stored = list((await db_session.scalars(select(Message))).all())
+    # An empty ciphertext must never be persisted.
+    assert stored == []
+    # Keep Bob's token referenced so the fixture setup is not flagged unused.
+    assert bob_token
+

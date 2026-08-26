@@ -2,11 +2,30 @@
 
 Secure Chat is a portfolio-grade real-time messaging system designed so the server stores and relays ciphertext but never receives message plaintext or private/symmetric key material. Decrypted messages are classified for phishing and scam indicators locally in the recipient's browser.
 
-> Status: Slice 8. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. Contacts live in a server-side `contacts` table (not localStorage). Opening a chat loads conversation-scoped ciphertext history; this tab decrypts and classifies locally. Typing and presence travel as WebSocket metadata the server can see; draft text never leaves the device. Dark mode is persisted per signed-in username. The server increments `conversations.current_epoch` after **50 persisted messages since the last bump** in that conversation **or 24 hours** since `last_rotated_at` (or `created_at` if never bumped), then broadcasts `{type: "epoch", current_epoch: <int>}` on the existing conversation WebSocket. Clients encrypt the next send with that integer and still decrypt history using each envelope's `key_epoch`. DistilBERT remains the Slice 5 offline default (`max_length` 256, threshold 0.30) in `ml/reports/distilbert/`; the later one-at-a-time sweep winner (`max_length` 512, threshold 0.20) stays under `ml/reports/distilbert_param_sweep/` and is **not** the ChatScreen DistilBERT opt-in. ChatScreen eagerly classifies verified plaintext with **TF-IDF Best** (10k terms, C=1.0, threshold 0.20) via the TypeScript vectorizer + logistic-head ONNX. The published TF-IDF default (50k terms, C=0.25, threshold 0.30) remains the trainer default and a measured switch-back. DistilBERT-default (256-token int8) is a lazy opt-in checkbox; Word BiLSTM Best (8 epochs, threshold 0.20) is a second lazy opt-in (one heavy graph at a time). DistilBERT encodes the real token length (no pad-to-256/512) and runs in an ONNX Runtime Web Worker. All six checkpoints were exported to ONNX Runtime Web and loaded **one at a time** in Chromium (all six succeeded; banners matched Python fixtures 4/4). Full six-row table: `ml/reports/onnx_web_load_check.md`. Trainer defaults were not changed.
+> Status: Slice 9. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. Contacts live in a server-side `contacts` table (not localStorage). Opening a chat loads conversation-scoped ciphertext history; this tab decrypts and classifies locally. Typing and presence travel as WebSocket metadata the server can see; draft text never leaves the device. Dark mode is persisted per signed-in username. The server increments `conversations.current_epoch` after **50 persisted messages since the last bump** in that conversation **or 24 hours** since `last_rotated_at` (or `created_at` if never bumped), then broadcasts `{type: "epoch", current_epoch: <int>}` on the existing conversation WebSocket. Clients encrypt the next send with that integer and still decrypt history using each envelope's `key_epoch`. `docker compose up` applies Alembic (including `last_rotated_at`) before uvicorn — no extra migrate command. Architecture diagram, local Compose deployment, and `docs/01-demo-script.md` are in this README; hosted deploy is Slice 10. DistilBERT remains the Slice 5 offline default (`max_length` 256, threshold 0.30) in `ml/reports/distilbert/`; the later one-at-a-time sweep winner (`max_length` 512, threshold 0.20) stays under `ml/reports/distilbert_param_sweep/` and is **not** the ChatScreen DistilBERT opt-in. ChatScreen eagerly classifies verified plaintext with **TF-IDF Best** (10k terms, C=1.0, threshold 0.20) via the TypeScript vectorizer + logistic-head ONNX. The published TF-IDF default (50k terms, C=0.25, threshold 0.30) remains the trainer default and a measured switch-back. DistilBERT-default (256-token int8) is a lazy opt-in checkbox; Word BiLSTM Best (8 epochs, threshold 0.20) is a second lazy opt-in (one heavy graph at a time). DistilBERT encodes the real token length (no pad-to-256/512) and runs in an ONNX Runtime Web Worker. All six checkpoints were exported to ONNX Runtime Web and loaded **one at a time** in Chromium (all six succeeded; banners matched Python fixtures 4/4). Full six-row table: `ml/reports/onnx_web_load_check.md`. Trainer defaults were not changed.
 
 ## Architecture
 
 The browser generates its X25519 identity keypair locally (`crypto/keyExchange.ts`), seals the private half in IndexedDB with a password-derived Argon2id key (`crypto/keyVault.ts`), derives directional session/epoch keys, encrypts with XChaCha20-Poly1305, and decrypts authenticated envelopes. FastAPI authenticates users, issues/rotates JWTs, stores/serves public keys, coordinates the non-secret per-conversation epoch counter (and increments it on the Slice 8 schedule), and relays conversation-scoped ciphertext over WebSocket. PostgreSQL stores account metadata (`users`), refresh-token hashes (`refresh_tokens`), 1:1 membership plus `current_epoch` and `last_rotated_at` (`conversations`), encrypted envelopes only (`messages`: ciphertext, nonce, key_epoch), and per-owner address-book edges (`contacts`: `owner_id`, `contact_id` only). The server has no code path that decrypts a message or handles a private/symmetric key.
+
+```mermaid
+flowchart LR
+  subgraph senderDevice [Sender device]
+    plainOut["Plaintext"]
+    encrypt["XChaCha20-Poly1305 encrypt<br/>epoch key"]
+  end
+  subgraph server [FastAPI plus Postgres]
+    relay["Relay and store<br/>ciphertext, nonce, epoch"]
+  end
+  subgraph recipientDevice [Recipient device]
+    decrypt["Decrypt plus verify tag"]
+    onnx["ONNX scam classifier"]
+    render["Render with warning banner"]
+  end
+  plainOut --> encrypt --> relay --> decrypt --> onnx --> render
+```
+
+Everything inside the two device boxes is plaintext-capable. The server box has no decryption key, which is why scam classification runs on the endpoint after decrypt rather than as a server API. Typing, presence, and epoch-counter frames are metadata the server can see; they are not secrets. Epoch rotation still only increments a public integer — it is not forward secrecy.
 
 ## Threat model
 
@@ -103,22 +122,26 @@ The health endpoint is `http://localhost:8000/health`. Point `DATABASE_URL` at a
 
 ### Database migrations
 
+`docker compose up` applies `alembic upgrade head` inside the API container **before** uvicorn binds (`backend/docker-entrypoint.py`). A copied `.env` plus a healthy API is enough: the schema includes `users`, `refresh_tokens`, `conversations` (with `last_rotated_at`), `messages`, and `contacts`. You should not need a second `docker compose run ... alembic` command. If the named Postgres volume was created before Slice 8, the same entrypoint still applies revision `a9f3c6e12b80` on the next API start. pytest does **not** run this entrypoint; tests use in-memory SQLite and `create_all`.
+
+Without Docker, apply migrations against `DATABASE_URL` yourself:
+
 ```bash
 cd backend
 uv run alembic upgrade head   # apply migrations against DATABASE_URL
 uv run alembic downgrade base # roll back everything (local development only)
 ```
 
-Inside Docker Compose, run the same commands from the `api` container: `docker compose run --rm api uv run --no-sync alembic upgrade head`. The API container does not run migrations automatically on startup in this slice; run them once after `docker compose up` against a fresh database.
-
 ### Full local stack
 
 ```bash
-docker compose up --build # --build only when image needs rebuilding or when you changed something that goes into docker image, otherwise do only docker compose up
-docker compose run --rm api uv run --no-sync alembic upgrade head # first time, or after a new migration
+cp .env.example .env          # first time only; then replace placeholder secrets
+docker compose up --build     # --build when the API image changed; otherwise docker compose up
 ```
 
-Docker Compose starts FastAPI and PostgreSQL. The database has no host port because only the API should access it. Try the full auth + key flow once migrated:
+Wait until the `api` service is healthy (`GET http://localhost:8000/health`). Compose starts FastAPI and PostgreSQL only. Postgres has **no host port** because only the API should access it. The frontend is still Vite on the host (`cd frontend && npm run dev`), not a Compose/Nginx service. `FRONTEND_ORIGIN` must match the origin in the address bar (default `http://localhost:5173`; if Vite prints 5174 or you use `127.0.0.1`, login looks like it failed until CORS matches).
+
+Try the full auth + key flow once the API is healthy:
 
 ```bash
 # Register (no tokens issued; matches the tested Slice 2 registration contract).
@@ -167,7 +190,7 @@ Open `http://localhost:5173`. Register an account, then log in: the first succes
 
 ### Two-tab encrypted conversation (Slice 4 proof)
 
-Both API and frontend must be running, and migrations must include `conversations`, `messages`, `contacts`, and `conversations.last_rotated_at` (`alembic upgrade head` as shown above). CORS allows a **single** `FRONTEND_ORIGIN` (default `http://localhost:5173`). If Vite prints 5174, or you open `127.0.0.1` instead of `localhost`, login looks like it failed until `FRONTEND_ORIGIN` matches the origin in the address bar.
+Both API and frontend must be running. Compose migrate-on-start already includes `conversations`, `messages`, `contacts`, and `conversations.last_rotated_at`. CORS allows a **single** `FRONTEND_ORIGIN` (default `http://localhost:5173`). If Vite prints 5174, or you open `127.0.0.1` instead of `localhost`, login looks like it failed until `FRONTEND_ORIGIN` matches the origin in the address bar.
 
 1. Open `http://localhost:5173` in **two browser tabs**.
 2. Tab A: register `alice` (or any distinct handle), then log in. Wait until the chat shell appears — that means key upload finished.
@@ -263,7 +286,7 @@ Checkpointing uses `data/processed_chat_llm/_rewrite_checkpoint.sqlite` so a cra
 - Frontend lint: `cd frontend && npm run lint`
 - ML unit tests (synthetic data, no download required): `cd ml && uv run pytest`
 - ML lint: `cd ml && uv run ruff check scripts src tests`
-- Full service health: `docker compose up --build`, migrate, then exercise `/health`, `/auth/register`, `/auth/login`, `/keys/me`, `/keys/{username}`, `/auth/refresh`, `GET/POST /contacts`, `POST /conversations`, `GET /conversations/{id}/messages`, `GET /conversations/{id}/epoch` (or `GET /keys/conversations/{id}/epoch`), a two-tab WebSocket conversation as shown above, and an epoch bump (`EPOCH_ROTATE_AFTER_MESSAGES=2` or `tests/test_epoch_rotation.py`)
+- Full service health: `docker compose up --build`, wait until the API is healthy (migrations already ran), then exercise `/health`, `/auth/register`, `/auth/login`, `/keys/me`, `/keys/{username}`, `/auth/refresh`, `GET/POST /contacts`, `POST /conversations`, `GET /conversations/{id}/messages`, `GET /conversations/{id}/epoch` (or `GET /keys/conversations/{id}/epoch`), a two-tab WebSocket conversation as shown above, and an epoch bump (`EPOCH_ROTATE_AFTER_MESSAGES=2` or `tests/test_epoch_rotation.py`). Step-by-step reviewer walkthrough: `docs/01-demo-script.md`.
 
 Slice 1 proved the API health contract, a complete libsodium key-exchange/KDF/AEAD round trip, rejection of tampered ciphertext, and a production frontend build. Slice 2 added: a migrated `users` table; Argon2id-hashed, rate-limited, uniqueness-enforced registration exercised end-to-end through Docker Compose against real Postgres; the crypto spike productionized into `keyExchange.ts`; `AuthScreen` wired to real registration; and a trained, evaluated TF-IDF baseline.
 
@@ -315,9 +338,18 @@ Slice 8 adds:
 - **Frontend:** `onEpoch` updates the in-memory current epoch used for the **next encrypt only**. Decrypt/verify still uses the envelope's `key_epoch`. A bump does not clear the composer draft. DistilBERT/LSTM XOR, unpadded DistilBERT, ORT worker, and package-export `wasmPaths` are unchanged.
 - **ML:** none. Trainer defaults, ONNX exports, ChatScreen eager TF-IDF Best, and the six-row browser table are unchanged.
 
+Slice 9 adds:
+
+- **Backend:** migrate-on-start (`backend/docker-entrypoint.py`: `alembic upgrade head`, then uvicorn). Validation sweep on inbound REST/WS: shared URL-safe usernames, email/refresh length caps, Path bounds on `GET /keys/{username}`, empty-ciphertext WS reject. `.env.example` stays in lockstep with every `Settings` field (including `EPOCH_ROTATE_*` and `FRONTEND_ORIGIN`). Ciphertext-boundary tests now also pin `conversations.last_rotated_at`, `contacts` columns, conversation-scoped Message SELECTs, and the absence of a flat `/messages` route. CORS remains a single `FRONTEND_ORIGIN` with `GET`/`POST` only. Slice 8 rotation (50 messages OR 24h, WS `{type: "epoch", current_epoch}`) is unchanged. API version **0.9.0**.
+- **Frontend:** CI test that product TypeScript never uses `dangerouslySetInnerHTML` or `.innerHTML`. ChatScreen ML default, DistilBERT/LSTM XOR, unpadded DistilBERT, ORT worker, and package-export `wasmPaths` are unchanged. `frontend/.env.example` points at `http://localhost:8000`.
+- **ML:** none. Trainer defaults, ONNX exports, ChatScreen eager TF-IDF Best, and the six-row browser table are unchanged.
+- **Docs:** architecture mermaid (plaintext boundary), local Compose deployment, `docs/01-demo-script.md`. Hosted Render/Railway/Fly.io remains Slice 10. No demo video is checked in.
+
 ## E2EE and client-side AI
 
-The sender encrypts before network transmission. The server stores and relays only an authenticated encrypted envelope. The recipient verifies and decrypts locally. Slice 6 classifies that verified plaintext in the browser with ONNX Runtime Web. Scores never leave the tab. The default ChatScreen model is TF-IDF Best (10k terms); DistilBERT default and Word BiLSTM Best are opt-in. Slice 8 still classifies only after decrypt (or on plaintext the sender already has). Typing, presence, and epoch-counter broadcasts are metadata the server can see; they are not secrets. Epoch rotation is still not forward secrecy.
+The conflict is: a useful scam detector needs plaintext, and E2EE forbids the server from having plaintext. This project does not “upload messages to an AI API.” The sender encrypts before the network. The server stores and relays only `{ciphertext, nonce, key_epoch}`. The recipient verifies the Poly1305 tag and decrypts locally. Only then does ONNX Runtime Web classify that verified plaintext in the same tab (eager TF-IDF Best; DistilBERT default and Word BiLSTM Best are opt-in). Scores never leave the device. A verification-failed row never reaches the classifier and never gets a banner.
+
+That placement is required by the trust boundary in the architecture diagram, not an optional privacy extra. A server-side classification endpoint would need plaintext or a decryption key; neither exists here. Typing, presence, and epoch-counter broadcasts remain metadata the server can see; they are not secrets. Epoch rotation is still not forward secrecy: compromising the static master session key still derives every epoch.
 
 ## ML evaluation
 
@@ -665,8 +697,15 @@ uv run python scripts/train_lstm.py \
 
 ## Deployment
 
-Deployment is scheduled for later slices after authentication, conversation-scoped storage, E2EE relay, model integration, and security verification are complete.
+Local Docker Compose is the Slice 9 deploy path. Hosted Render/Railway/Fly.io (TLS, custom domains, production frontend hosting) is **Slice 10**.
+
+1. Copy `.env.example` to `.env` and replace placeholder passwords and `JWT_SECRET_KEY`. Never commit `.env`.
+2. `docker compose up --build` from the repository root. Postgres stays on the Compose network with **no host port**. The API publishes `8000`.
+3. Wait until the API healthcheck passes. The container entrypoint already ran `alembic upgrade head`; do not run a separate migrate command.
+4. `cd frontend && npm run dev` on the host. There is no production Nginx/Vite image in this slice.
+5. Set `FRONTEND_ORIGIN` to the exact Vite origin in the address bar (`http://localhost:5173` by default). CORS allows that **one** origin and **GET/POST** only.
+6. Optional two-tab epoch demo: `EPOCH_ROTATE_AFTER_MESSAGES=2` in `.env`, then recreate the API container. There is no unauthenticated rotate endpoint.
 
 ## Demo
 
-A short two-browser E2EE demonstration is the Slice 4 proof above. After decrypt (and on send), the same tabs may show a non-blocking scam banner from the on-device TF-IDF classifier. Sequential ORT Web measurement: `http://localhost:5173/?mlLoadCheck=1`. Six-row cost table: `ml/reports/onnx_web_load_check.md`. To watch an epoch bump without sending 50 messages, set `EPOCH_ROTATE_AFTER_MESSAGES=2` as documented in the two-tab section.
+Follow `docs/01-demo-script.md`: two-tab E2EE, Network panel ciphertext-only, history reload ciphertext-only, optional `EPOCH_ROTATE_AFTER_MESSAGES=2` bump, scam banner on verified plaintext, verification-failed row. A filmed recording is not checked in (this environment cannot capture an interactive two-browser video). Sequential ORT Web measurement: `http://localhost:5173/?mlLoadCheck=1`. Six-row cost table: `ml/reports/onnx_web_load_check.md`.

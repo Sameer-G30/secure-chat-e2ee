@@ -25,9 +25,11 @@ COPY app ./app
 COPY alembic.ini ./
 # Copy the initialized Alembic environment for schema management.
 COPY alembic ./alembic
+# Copy the Slice 9 startup script that migrates, then execs uvicorn.
+COPY docker-entrypoint.py ./
 
 # Document the HTTP port served by the ASGI process.
 EXPOSE 8000
 
-# Start the API through uv without modifying the locked environment.
-CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Apply alembic upgrade head, then start uvicorn (no extra migrate command).
+ENTRYPOINT ["uv", "run", "--no-sync", "python", "docker-entrypoint.py"]

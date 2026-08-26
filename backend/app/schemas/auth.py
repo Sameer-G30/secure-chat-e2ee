@@ -7,14 +7,18 @@ from datetime import datetime
 from uuid import UUID
 
 # Import Pydantic's model base, email type, and field-level validation helpers.
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field
+
+# Import the shared username type so register uses the same handle rules as contacts.
+from app.schemas.usernames import USERNAME_MAX_LENGTH, Username
 
 # Import the shared minimum-length policy so the API and hasher stay in sync.
 from app.security.passwords import MINIMUM_PASSWORD_LENGTH
 
-# Bound the username so it is usable in URLs (public key lookup) and readable in UI.
-_USERNAME_MIN_LENGTH = 3
-_USERNAME_MAX_LENGTH = 32
+# RFC 5321 practical cap so a registration body cannot carry an unbounded mailbox string.
+_EMAIL_MAX_LENGTH = 254
+# Cap refresh JWTs so a huge body cannot be used as an unauthenticated dump target.
+REFRESH_TOKEN_MAX_LENGTH = 8192
 
 
 # Validate the exact fields a new account must supply.
@@ -22,24 +26,11 @@ class RegisterRequest(BaseModel):
     """Represent the client-submitted registration payload."""
 
     # Require a handle usable later for GET /keys/{username} lookups.
-    username: str = Field(min_length=_USERNAME_MIN_LENGTH, max_length=_USERNAME_MAX_LENGTH)
-    # Require a syntactically valid, normalizable email address.
-    email: EmailStr
+    username: Username
+    # Require a syntactically valid, length-capped, normalizable email address.
+    email: EmailStr = Field(max_length=_EMAIL_MAX_LENGTH)
     # Require a minimum-length password; Argon2id, not complexity rules, does the real work.
     password: str = Field(min_length=MINIMUM_PASSWORD_LENGTH, max_length=256)
-
-    # Reject usernames that are not plain alphanumeric/underscore/hyphen handles.
-    @field_validator("username")
-    @classmethod
-    def username_must_be_url_safe(cls, value: str) -> str:
-        """Keep usernames safe to embed in a future /keys/{username} path segment."""
-
-        # Restrict to characters that need no percent-encoding in a URL path.
-        if not all(character.isalnum() or character in "_-" for character in value):
-            # Reject anything else before it ever reaches the database.
-            raise ValueError("username may only contain letters, digits, '_' and '-'")
-        # Return the validated value unchanged.
-        return value
 
 
 # Describe the account fields safe to return after registration.
@@ -64,7 +55,7 @@ class LoginRequest(BaseModel):
     """Represent the client-submitted login payload."""
 
     # Identify which account to authenticate.
-    username: str = Field(min_length=1, max_length=_USERNAME_MAX_LENGTH)
+    username: str = Field(min_length=1, max_length=USERNAME_MAX_LENGTH)
     # Accept the plaintext password only for the duration of this HTTPS request.
     #
     # Deliberately no min_length policy re-check here: enforcing the registration
@@ -79,7 +70,7 @@ class RefreshRequest(BaseModel):
     """Represent the client-submitted refresh-rotation payload."""
 
     # Carry the refresh token whose hash the server looks up and rotates.
-    refresh_token: str = Field(min_length=1)
+    refresh_token: str = Field(min_length=1, max_length=REFRESH_TOKEN_MAX_LENGTH)
 
 
 # Describe the token pair issued after a successful login or rotation.

@@ -32,6 +32,7 @@ services:
       EPOCH_ROTATE_AFTER_MESSAGES: ${EPOCH_ROTATE_AFTER_MESSAGES:-50}
       # Slice 8: also bump after this many hours since last_rotated_at / created_at (0 disables).
       EPOCH_ROTATE_AFTER_HOURS: ${EPOCH_ROTATE_AFTER_HOURS:-24}
+    # Migrations run in docker-entrypoint.py after this health condition passes.
     # Start the API only after PostgreSQL accepts connections.
     depends_on:
       # Reference the database service by its private DNS name.
@@ -54,8 +55,8 @@ services:
       timeout: 3s
       # Allow several startup probes before declaring the service unhealthy.
       retries: 5
-      # Give the ASGI server time to start before counting failures.
-      start_period: 5s
+      # Wait for alembic upgrade head plus uvicorn bind before counting failures.
+      start_period: 30s
 
   # Run PostgreSQL only on Compose's private network.
   postgres:

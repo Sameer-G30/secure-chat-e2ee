@@ -6,12 +6,11 @@ from datetime import datetime
 # Import UUID for typed account identifiers.
 from uuid import UUID
 
-# Import Pydantic's model base and field-level validation helpers.
-from pydantic import BaseModel, Field
+# Import Pydantic's model base used by request and response payloads.
+from pydantic import BaseModel
 
-# Reuse the same username bounds the conversation schema already documents.
-_USERNAME_MIN_LENGTH = 3
-_USERNAME_MAX_LENGTH = 32
+# Reuse the same URL-safe username type register and conversations already enforce.
+from app.schemas.usernames import Username
 
 
 # Validate the single field an add-contact request must supply.
@@ -19,7 +18,7 @@ class AddContactRequest(BaseModel):
     """Represent the client-submitted handle to save on the owner's address book."""
 
     # Identify the other account by the same handle used for GET /keys/{username}.
-    username: str = Field(min_length=_USERNAME_MIN_LENGTH, max_length=_USERNAME_MAX_LENGTH)
+    username: Username
 
 
 # Describe one saved contact as returned to the authenticated owner.
