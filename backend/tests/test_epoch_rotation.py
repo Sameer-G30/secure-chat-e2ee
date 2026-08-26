@@ -3,6 +3,9 @@
 # Import base64 to build plausible AEAD-sized envelopes the server will not decrypt.
 import base64
 
+# Import Counter so history assertions do not depend on same-second UUID order.
+from collections import Counter
+
 # Import AsyncIterator and Iterator for the WS client and settings fixtures.
 from collections.abc import AsyncIterator, Iterator
 
@@ -340,8 +343,9 @@ async def test_after_bump_accepts_old_epoch_and_new_epoch_rejects_future(
     )
     assert history.status_code == 200
     epochs = [row["key_epoch"] for row in history.json()["messages"]]
-    # Two Alice epoch-0 envelopes, Bob's epoch-1, Alice's late epoch-0; the future id is absent.
-    assert epochs == [0, 0, 1, 0]
+    # SQLite created_at is second-precision; same-second rows order by UUID, not send order.
+    # The contract is the multiset: three accepted epoch-0 rows, one epoch-1, no future id.
+    assert Counter(epochs) == Counter([0, 0, 0, 1])
     for row in history.json()["messages"]:
         assert row["type"] == "envelope"
         assert "plaintext" not in row
