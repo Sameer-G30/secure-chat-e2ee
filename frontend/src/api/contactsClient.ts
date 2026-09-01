@@ -87,3 +87,19 @@ export async function addContact(accessToken: string, username: string): Promise
   }
   return parseContact(body as { id: string; username: string; created_at: string })
 }
+
+// Remove a named account from the owner's address book. The legacy React prototype
+// never implemented this at all (its address book was add-only).
+export async function deleteContact(accessToken: string, username: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/contacts/${encodeURIComponent(username)}`, {
+    method: 'DELETE',
+    headers: authHeaders(accessToken),
+  })
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null)
+    throw new ContactsApiError(
+      extractErrorDetail(body, 'Could not remove that contact. Please try again shortly.'),
+      response.status,
+    )
+  }
+}

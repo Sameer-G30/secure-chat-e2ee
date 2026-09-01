@@ -3,8 +3,8 @@
 # Import Annotated for dependency metadata.
 from typing import Annotated
 
-# Import FastAPI's routing and dependency primitives.
-from fastapi import APIRouter, Depends
+# Import FastAPI's routing, dependency, and status primitives.
+from fastapi import APIRouter, Depends, status
 
 # Import SQLAlchemy's async session type used by the injected database dependency.
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,8 +21,12 @@ from app.schemas.contacts import AddContactRequest, ContactListResponse, Contact
 # Import the shared bearer-token authentication dependency.
 from app.security.dependencies import get_current_user
 
-# Import contact load/create helpers so routers stay thin.
-from app.services.contacts import add_contact_for_owner, list_contacts_for_owner
+# Import contact load/create/remove helpers so routers stay thin.
+from app.services.contacts import (
+    add_contact_for_owner,
+    list_contacts_for_owner,
+    remove_contact_for_owner,
+)
 
 # Group contact REST under one versionable tag; paths are absolute.
 router = APIRouter(tags=["contacts"])
@@ -54,3 +58,22 @@ async def add_contact(
     """Add a contact by username. Idempotent when the edge already exists."""
 
     return await add_contact_for_owner(db, current_user, payload.username)
+
+
+# Remove a named account from the caller's address book.
+@router.delete("/contacts/{username}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_contact(
+    # Identify which saved handle to remove.
+    username: str,
+    # Require a valid access token.
+    current_user: Annotated[User, Depends(get_current_user)],
+    # Inject a request-scoped async database session.
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """Remove a contact by username. Never errors when the account was not a contact.
+
+    The legacy React prototype never implemented this at all (its address
+    book was add-only).
+    """
+
+    await remove_contact_for_owner(db, current_user, username)

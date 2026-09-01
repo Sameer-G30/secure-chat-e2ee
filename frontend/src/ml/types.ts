@@ -97,6 +97,10 @@ export interface LoadCheckRow {
   initMs: number | null
   // Mean inference milliseconds per fixture DM.
   inferenceMsPerMessage: number | null
+  // In-tab percentiles over the same fixture DMs (null when inference failed).
+  inferenceMsP50: number | null
+  inferenceMsP95: number | null
+  inferenceMsP99: number | null
   // Serving ONNX bytes from the manifest.
   onnxBytes: number | null
   // Approximate JS heap after load, when performance.memory exists.

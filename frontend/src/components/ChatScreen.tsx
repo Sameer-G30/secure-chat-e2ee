@@ -1,47 +1,50 @@
-// Import React state and lifecycle hooks used to drive the live conversation.
-import { useEffect, useRef, useState } from 'react'
+// Import React's state/callback hooks used by the small amount of state this
+// presentational shell still owns directly (shared status/error banners, the
+// add-contact input, overlays, and conversation-start in-flight flag).
+import { useCallback, useState } from 'react'
 // Import the form-event type separately; verbatimModuleSyntax requires type-only imports.
 import type { FormEvent } from 'react'
 
-// Import the public-key lookup used before session-key derivation.
-import { fetchPublicKey, KeysApiError } from '../api/keysClient'
-// Import conversation create/fetch and the spec §6.4 epoch reader.
-import {
-  ConversationsApiError,
-  fetchConversationEpoch,
-  fetchConversationMessages,
-  startOrFetchConversation,
-} from '../api/conversationsClient'
-// Import the authenticated ciphertext-only WebSocket wrapper.
-import { connectChatSocket } from '../api/chatSocket'
-import type { ChatSocket, RelayedEnvelope } from '../api/chatSocket'
-// Import the server-side address book so contacts never live in localStorage.
-import { addContact, ContactsApiError, listContacts } from '../api/contactsClient'
-import type { ContactRecord } from '../api/contactsClient'
+// Import the shared error-message narrowing types used when reporting add-contact failures.
+import { ContactsApiError } from '../api/contactsClient'
+// Import the server-side block client used by the more-options menu.
+import { BlocksApiError, blockUser, listBlocks, unblockUser } from '../api/blocksClient'
+// Import the metadata-only report client; message contents are never attached.
+import { ReportsApiError, reportUser } from '../api/reportsClient'
 // Import the session context so this screen can show identity and offer logout.
 import { useAuth } from '../context/AuthContext'
-// Import the production crypto helpers used to encrypt before send and verify on receive.
-import {
-  decodeBase64,
-  decryptMessage,
-  deriveSessionKeys,
-  encryptMessage,
-  initializeSodium,
-} from '../crypto/keyExchange'
-import type { DirectionalSessionKeys } from '../crypto/keyExchange'
-// Import the on-device scam classifier (TF-IDF Best eager; DistilBERT / BiLSTM opt-in).
-import {
-  classifyVerifiedPlaintext,
-  disableDistilbertOptIn,
-  disableLstmOptIn,
-  enableDistilbertOptIn,
-  enableLstmOptIn,
-  ensureChatDefaultClassifier,
-} from '../ml/scamClassifier'
-import type { ChatHeavyPreference } from '../ml/types'
 // Import per-username theme helpers; tokens stay out of localStorage.
-import { applyTheme, clearTheme, loadTheme, saveTheme } from '../theme'
-import type { ThemeName } from '../theme'
+import { clearTheme } from '../theme'
+import type { ThemePreference } from '../theme'
+// Import the plaintext-export helpers; the UI always warns before writing to disk.
+import { downloadTranscriptFile, formatTranscriptExport } from '../chat/exportTranscript'
+
+// Import the extracted hooks this screen now composes instead of owning every effect
+// and handler itself (Phase 3a of the pre-deployment review: ChatScreen had grown to
+// ~790 lines covering contacts, theming, ML toggles, and the whole conversation state
+// machine in one file; each concern now lives in its own testable hook module).
+import { useAuthorizedRequest } from '../hooks/useAuthorizedRequest'
+import { useChatTheme } from '../hooks/useChatTheme'
+import { useContacts } from '../hooks/useContacts'
+import { useEncryptedConversation } from '../hooks/useEncryptedConversation'
+import { useScamClassifierPreference } from '../hooks/useScamClassifierPreference'
+import { useUserSearch } from '../hooks/useUserSearch'
+import type { ChatMessage } from '../hooks/useEncryptedConversation'
+
+// Import the Phase 1 overlays this shell now mounts on demand.
+import { ChatMoreMenu } from './ChatMoreMenu'
+import { MessageActionsModal } from './MessageActionsModal'
+import { Modal } from './Modal'
+import { SettingsPanel } from './SettingsPanel'
+
+// Name the mutually exclusive overlays so only one dialog is open at a time.
+type ChatOverlay =
+  | { kind: 'none' }
+  | { kind: 'settings' }
+  | { kind: 'more' }
+  | { kind: 'message'; id: string }
+  | { kind: 'export' }
+  | { kind: 'report' }
 
 // Build a one-letter avatar label from a username.
 function initialsFromUsername(username: string): string {
@@ -55,362 +58,101 @@ function initialsFromUsername(username: string): string {
   return trimmed.slice(0, 1).toUpperCase()
 }
 
-// Describe one bubble in the in-memory message list (Slice 4 has no history pagination).
-interface ChatMessage {
-  // Identify the row for React reconciliation; server ids are used when available.
-  id: string
-  // Distinguish sent (purple) from received (gray) bubbles using the legacy palette.
-  direction: 'sent' | 'received'
-  // Carry verified plaintext, or null when authentication failed.
-  plaintext: string | null
-  // Signal that decrypt+verify failed; the UI must not invent corrupted text.
-  verificationFailed: boolean
-  // Non-blocking banner after local classification of verified plaintext.
-  scamWarning: boolean
+// Decide whether a verified bubble matches the in-chat search query.
+function messageMatchesQuery(message: ChatMessage, query: string): boolean {
+  const trimmed = query.trim().toLowerCase()
+  if (!trimmed) {
+    return true
+  }
+  if (message.verificationFailed || message.plaintext === null) {
+    return false
+  }
+  return message.plaintext.toLowerCase().includes(trimmed)
 }
 
-// Describe the live conversation this tab has derived keys for.
-interface ActiveChat {
-  // Bind AEAD associated data and WebSocket routing to this conversation UUID.
-  conversationId: string
-  // Display the peer handle in the header.
-  peerUsername: string
-  // Bind AEAD associated data to this tab's user UUID.
-  selfId: string
-  // Identify the peer UUID for received-envelope associated data.
-  peerId: string
-  // Pass the server's current epoch into the NEXT encrypt only; decrypt uses envelope.keyEpoch.
-  currentEpoch: number
-  // Hold directional crypto_kx keys derived locally; never sent to the server.
-  sessionKeys: DirectionalSessionKeys
-}
-
-// Render the Slice 4 two-tab encrypted conversation shell.
+// Render the Slice 4+ encrypted conversation shell.
 export function ChatScreen() {
-  const { session, logout } = useAuth()
+  const { session, updateTokens, logout } = useAuth()
 
   // Hold the add-contact field until the owner saves a handle on the server.
   const [peerInput, setPeerInput] = useState('')
-  // Hold the server-side address book loaded after login.
-  const [contacts, setContacts] = useState<ContactRecord[]>([])
-  // Hold a status string announced to assistive technology.
+  // Hold a status string announced to assistive technology; shared by the contacts
+  // form and the conversation state machine so only one line is ever shown at once.
   const [statusMessage, setStatusMessage] = useState(
     'Add a contact to start an encrypted chat.',
   )
   // Hold a form-level error distinct from per-message verification failures.
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  // Hold whether a conversation start is in flight so the form cannot double-submit.
-  const [isConnecting, setIsConnecting] = useState(false)
-  // Hold the in-memory transcript for this tab only (no server history UI in this slice).
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  // Hold the composer text until send encrypts and clears it.
-  const [draft, setDraft] = useState('')
-  // Hold the derived conversation so encrypt/decrypt can read ids and epoch.
-  const [activeChat, setActiveChat] = useState<ActiveChat | null>(null)
-  // Hold whether the operator opted into lazy-loaded DistilBERT (A6).
-  const [useDistilbert, setUseDistilbert] = useState(false)
-  // Hold whether the operator opted into lazy-loaded Word BiLSTM Best.
-  const [useLstm, setUseLstm] = useState(false)
-  // Hold classifier load status so toggles can show a failure without blocking chat.
-  const [classifierStatus, setClassifierStatus] = useState<string | null>(null)
-  // Hold the per-user light/dark preference applied to the document.
-  const [theme, setTheme] = useState<ThemeName>('light')
-  // Hold whether the open peer currently has a live socket (metadata, not a secret).
-  const [peerOnline, setPeerOnline] = useState(false)
-  // Hold whether the open peer is currently typing (metadata, never draft text).
-  const [peerTyping, setPeerTyping] = useState(false)
+  // Hold which overlay is open; 'none' means the chat shell has the focus.
+  const [overlay, setOverlay] = useState<ChatOverlay>({ kind: 'none' })
+  // Hold the in-chat search needle; empty means show the full transcript.
+  const [inChatQuery, setInChatQuery] = useState('')
+  // Hold whether the in-chat search field is visible under the header.
+  const [searchOpen, setSearchOpen] = useState(false)
+  // Hold the metadata-only report reason until the user submits it.
+  const [reportReason, setReportReason] = useState('')
+  // Hold whether the currently open peer is on this account's server-side block list.
+  const [peerBlocked, setPeerBlocked] = useState(false)
 
-  // Keep the live socket off React state so reconnects do not re-render on every frame.
-  const socketRef = useRef<ChatSocket | null>(null)
-  // Keep the latest active chat in a ref so socket callbacks never close over a stale epoch.
-  const activeChatRef = useRef<ActiveChat | null>(null)
-  // Keep the selected classifier in a ref so incoming envelopes use the current model.
-  const heavyPreferenceRef = useRef<ChatHeavyPreference>('tfidf')
-  // Remember envelope ids already rendered so history and live frames do not duplicate.
-  const seenIdsRef = useRef<Set<string>>(new Set())
-  // Debounce the typing-false frame so keystrokes do not flood the metadata channel.
-  const typingTimeoutRef = useRef<number | null>(null)
+  // Publish a rotated token pair into AuthContext; every wrapped call in the hooks
+  // below reads the latest pair back out on its very next attempt. Memoized (like
+  // AuthContext's own updateTokens) so effects that depend on it do not re-run every render.
+  const handleTokensRotated = useCallback(
+    (accessToken: string, refreshToken: string) => {
+      updateTokens(accessToken, refreshToken)
+    },
+    [updateTokens],
+  )
 
-  // Mirror active chat into the ref whenever React state changes.
-  useEffect(() => {
-    activeChatRef.current = activeChat
-  }, [activeChat])
+  // Wire the single-flight refresh-and-retry behavior once; contacts and the live
+  // conversation both reuse it instead of each rolling their own.
+  const authorizedRequest = useAuthorizedRequest(session, handleTokensRotated)
 
-  // Mirror the model toggles into the ref used by socket callbacks.
-  useEffect(() => {
-    heavyPreferenceRef.current = useDistilbert ? 'distilbert' : useLstm ? 'lstm' : 'tfidf'
-  }, [useDistilbert, useLstm])
+  const { contacts, addContact, removeContact } = useContacts(
+    session?.username,
+    authorizedRequest,
+    setErrorMessage,
+  )
+  const { theme, themePreference, toggleTheme, setThemePreference } = useChatTheme(
+    session?.username,
+  )
+  const classifier = useScamClassifierPreference()
+  const userSearch = useUserSearch(peerInput, authorizedRequest, setErrorMessage)
 
-  // Eager-load TF-IDF Best once ChatScreen mounts (A5).
-  useEffect(() => {
-    void ensureChatDefaultClassifier().catch(() => {
-      // Missing ONNX export must not block the encrypted conversation.
-    })
-  }, [])
+  // Every hook must run unconditionally, on every render, per the Rules of Hooks —
+  // including the one render where `session` flips back to null on logout, right
+  // before AppRoutes swaps this screen back out for AuthScreen. useEncryptedConversation
+  // tolerates a null session internally (see its own doc comment) precisely so this
+  // call can sit before the early return below rather than after it.
+  const {
+    activeChat,
+    messages,
+    draft,
+    isConnecting,
+    peerOnline,
+    peerTyping,
+    openConversation,
+    handleSend,
+    handleDraftChange,
+    handleEditMessage,
+    handleDeleteMessage,
+    handleHideMessage,
+    handleClearLocalTranscript,
+    closeConversation,
+  } = useEncryptedConversation(
+    session,
+    authorizedRequest,
+    classifier.classify,
+    setStatusMessage,
+    setErrorMessage,
+  )
 
-  // Close any open relay socket when this screen unmounts (logout or session end).
-  useEffect(() => {
-    return () => {
-      socketRef.current?.close()
-      socketRef.current = null
-      if (typingTimeoutRef.current !== null) {
-        window.clearTimeout(typingTimeoutRef.current)
-      }
-    }
-  }, [])
-
-  // Load this username's theme, then restore the default palette when the session ends.
-  useEffect(() => {
-    if (!session) {
-      clearTheme()
-      return
-    }
-    const next = loadTheme(session.username)
-    setTheme(next)
-    applyTheme(next)
-    return () => {
-      clearTheme()
-    }
-  }, [session])
-
-  // Load the server-side address book once a session exists.
-  useEffect(() => {
-    if (!session) {
-      return
-    }
-    let cancelled = false
-    void listContacts(session.accessToken)
-      .then((rows) => {
-        if (!cancelled) {
-          setContacts(rows)
-        }
-      })
-      .catch((caught: unknown) => {
-        if (!cancelled) {
-          const message =
-            caught instanceof ContactsApiError
-              ? caught.message
-              : 'Could not load contacts. Please try again shortly.'
-          setErrorMessage(message)
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [session])
-
-  // This screen is only ever rendered while a session exists (see App.tsx routing).
+  // This screen is only ever rendered while a session exists (see App.tsx routing);
+  // this guard covers the one intermediate render described above.
   if (!session) {
     return null
   }
   const currentSession = session
-
-  // Classify verified plaintext locally and attach a non-blocking banner.
-  function classifyAndFlag(messageId: string, plaintext: string) {
-    // Skip empty strings; they have no scam signal and would still hit ORT.
-    if (!plaintext) {
-      // Leave scamWarning false.
-      return
-    }
-    // Run after decrypt/send so the bubble appears before WASM returns.
-    void classifyVerifiedPlaintext(plaintext, heavyPreferenceRef.current).then((result) => {
-      // A missing export or WASM abort leaves the message unwarned.
-      if (result === null || !result.warned) {
-        // No banner to attach.
-        return
-      }
-      // Flip only this row's warning flag; never hide or delete the text.
-      setMessages((existing) =>
-        existing.map((message) =>
-          message.id === messageId ? { ...message, scamWarning: true } : message,
-        ),
-      )
-    })
-  }
-
-  // Decrypt one envelope with the matching directional key, or record a verification failure.
-  function decryptEnvelope(envelope: RelayedEnvelope, current: ActiveChat): ChatMessage {
-    const direction: 'sent' | 'received' =
-      envelope.senderId === current.selfId ? 'sent' : 'received'
-    const key =
-      envelope.senderId === current.selfId
-        ? current.sessionKeys.transmitKey
-        : envelope.senderId === current.peerId
-          ? current.sessionKeys.receiveKey
-          : null
-    if (key === null) {
-      return {
-        id: envelope.id,
-        direction: 'received',
-        plaintext: null,
-        verificationFailed: true,
-        scamWarning: false,
-      }
-    }
-    try {
-      const plaintext = decryptMessage(
-        {
-          ciphertext: envelope.ciphertext,
-          nonce: envelope.nonce,
-          keyEpoch: envelope.keyEpoch,
-        },
-        key,
-        {
-          conversationId: current.conversationId,
-          senderId: envelope.senderId,
-        },
-      )
-      return {
-        id: envelope.id,
-        direction,
-        plaintext,
-        verificationFailed: false,
-        scamWarning: false,
-      }
-    } catch {
-      return {
-        id: envelope.id,
-        direction,
-        plaintext: null,
-        verificationFailed: true,
-        scamWarning: false,
-      }
-    }
-  }
-
-  // Decrypt a live peer envelope, skipping ids already shown from history.
-  function handleIncomingEnvelope(envelope: RelayedEnvelope) {
-    const current = activeChatRef.current
-    if (current === null) {
-      return
-    }
-    if (seenIdsRef.current.has(envelope.id)) {
-      return
-    }
-    seenIdsRef.current.add(envelope.id)
-    if (envelope.senderId === current.selfId) {
-      return
-    }
-    const row = decryptEnvelope(envelope, current)
-    setMessages((existing) => [...existing, row])
-    if (!row.verificationFailed && row.plaintext) {
-      classifyAndFlag(row.id, row.plaintext)
-    }
-  }
-
-  // Update the in-memory encrypt epoch after a WS bump or a GET .../epoch refetch.
-  function applyCurrentEpoch(nextEpoch: number) {
-    // Read the live conversation so socket callbacks never close over a stale render.
-    const current = activeChatRef.current
-    // Ignore a bump that arrives before session keys exist.
-    if (current === null) {
-      // Keep the composer draft untouched.
-      return
-    }
-    // Ignore a stale counter that would encrypt with an older subkey id.
-    if (nextEpoch < current.currentEpoch) {
-      // Leave currentEpoch and the draft as they are.
-      return
-    }
-    // Keep directional session keys; only the KDF subkey id changes.
-    const updated: ActiveChat = { ...current, currentEpoch: nextEpoch }
-    // Encrypt must use the new id on the next send, even before React re-renders.
-    activeChatRef.current = updated
-    // Re-render header/status without calling setDraft.
-    setActiveChat(updated)
-    // Announce the public counter; this is not a key.
-    setStatusMessage(
-      `Encrypted chat with ${updated.peerUsername} is ready (epoch ${nextEpoch}).`,
-    )
-  }
-
-  // Look up the peer, derive session keys, load scoped history, and open the ciphertext relay.
-  async function openConversation(peerUsername: string) {
-    setIsConnecting(true)
-    setErrorMessage(null)
-    setPeerTyping(false)
-    setPeerOnline(false)
-    setStatusMessage(`Looking up ${peerUsername}…`)
-    socketRef.current?.close()
-    socketRef.current = null
-    seenIdsRef.current = new Set()
-    setMessages([])
-    setActiveChat(null)
-
-    try {
-      await initializeSodium()
-      const peerKey = await fetchPublicKey(currentSession.accessToken, peerUsername)
-      const conversation = await startOrFetchConversation(currentSession.accessToken, peerUsername)
-      const epoch = await fetchConversationEpoch(currentSession.accessToken, conversation.id)
-      const sessionKeys = deriveSessionKeys(
-        { keys: currentSession.identityKeyPair, username: currentSession.username },
-        { publicKey: decodeBase64(peerKey.publicKey), username: peerKey.username },
-      )
-      const nextChat: ActiveChat = {
-        conversationId: conversation.id,
-        peerUsername: conversation.peer.username,
-        selfId: conversation.self.id,
-        peerId: conversation.peer.id,
-        currentEpoch: epoch.currentEpoch,
-        sessionKeys,
-      }
-      activeChatRef.current = nextChat
-      setActiveChat(nextChat)
-      const history = await fetchConversationMessages(
-        currentSession.accessToken,
-        conversation.id,
-      )
-      const hydrated: ChatMessage[] = []
-      for (const envelope of history) {
-        seenIdsRef.current.add(envelope.id)
-        hydrated.push(decryptEnvelope(envelope, nextChat))
-      }
-      setMessages(hydrated)
-      for (const row of hydrated) {
-        if (!row.verificationFailed && row.plaintext) {
-          classifyAndFlag(row.id, row.plaintext)
-        }
-      }
-      socketRef.current = connectChatSocket(conversation.id, currentSession.accessToken, {
-        onEnvelope: handleIncomingEnvelope,
-        onProtocolError: (detail) => {
-          setErrorMessage(detail)
-        },
-        onClose: () => {
-          setStatusMessage('Disconnected from the encrypted relay.')
-          setPeerOnline(false)
-          setPeerTyping(false)
-        },
-        onTyping: (userId, isTyping) => {
-          if (activeChatRef.current?.peerId === userId) {
-            setPeerTyping(isTyping)
-          }
-        },
-        onPresence: (userId, online) => {
-          if (activeChatRef.current?.peerId === userId) {
-            setPeerOnline(online)
-          }
-        },
-        onEpoch: (currentEpoch) => {
-          // Re-derive the next encrypt subkey only; do not clear the composer.
-          applyCurrentEpoch(currentEpoch)
-        },
-      })
-      setStatusMessage(
-        `Encrypted chat with ${conversation.peer.username} is ready (epoch ${epoch.currentEpoch}).`,
-      )
-    } catch (error) {
-      const message =
-        error instanceof KeysApiError || error instanceof ConversationsApiError
-          ? error.message
-          : 'Could not start an encrypted chat. Please try again shortly.'
-      setErrorMessage(message)
-      setStatusMessage('Add a contact to start an encrypted chat.')
-      setActiveChat(null)
-    } finally {
-      setIsConnecting(false)
-    }
-  }
 
   // Save a handle on the server-side address book, then open that conversation.
   async function handleAddContact(event: FormEvent<HTMLFormElement>) {
@@ -427,14 +169,9 @@ export function ChatScreen() {
     setErrorMessage(null)
     setStatusMessage(`Adding ${peerUsername}…`)
     try {
-      const saved = await addContact(currentSession.accessToken, peerUsername)
-      setContacts((existing) => {
-        if (existing.some((row) => row.id === saved.id)) {
-          return existing
-        }
-        return [saved, ...existing]
-      })
+      const saved = await addContact(peerUsername)
       setPeerInput('')
+      setPeerBlocked(false)
       await openConversation(saved.username)
     } catch (caught: unknown) {
       const message =
@@ -448,78 +185,25 @@ export function ChatScreen() {
 
   // Open an existing contact without creating a duplicate address-book row.
   function handleSelectContact(username: string) {
+    setPeerBlocked(false)
     void openConversation(username)
   }
 
-  // Encrypt the draft with XChaCha20-Poly1305 + AD, then relay ciphertext only.
-  function handleSend(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const current = activeChatRef.current
-    const socket = socketRef.current
-    const plaintext = draft.trim()
-    if (!current || !socket || !plaintext) {
-      return
-    }
-    socket.sendTyping(false)
-    if (typingTimeoutRef.current !== null) {
-      window.clearTimeout(typingTimeoutRef.current)
-      typingTimeoutRef.current = null
-    }
-    const envelope = encryptMessage(
-      plaintext,
-      current.sessionKeys.transmitKey,
-      current.currentEpoch,
-      {
-        conversationId: current.conversationId,
-        senderId: current.selfId,
-      },
-    )
-    socket.sendEnvelope(envelope, {
-      conversationId: current.conversationId,
-      senderId: current.selfId,
-    })
-    const localId = crypto.randomUUID()
-    setMessages((existing) => [
-      ...existing,
-      {
-        id: localId,
-        direction: 'sent',
-        plaintext,
-        verificationFailed: false,
-        scamWarning: false,
-      },
-    ])
-    classifyAndFlag(localId, plaintext)
-    setDraft('')
-  }
-
-  // Update the draft and send typing metadata without including the draft text.
-  function handleDraftChange(value: string) {
-    setDraft(value)
-    const socket = socketRef.current
-    if (!socket || !activeChatRef.current) {
-      return
-    }
-    if (value.trim()) {
-      socket.sendTyping(true)
-      if (typingTimeoutRef.current !== null) {
-        window.clearTimeout(typingTimeoutRef.current)
+  // Remove a handle from the address book; if that chat is open, tear it down locally.
+  async function handleRemoveContact(username: string) {
+    try {
+      await removeContact(username)
+      if (activeChat?.peerUsername === username) {
+        closeConversation()
+        setStatusMessage('Add a contact to start an encrypted chat.')
       }
-      typingTimeoutRef.current = window.setTimeout(() => {
-        socket.sendTyping(false)
-        typingTimeoutRef.current = null
-      }, 1500)
-    } else {
-      socket.sendTyping(false)
+    } catch (caught: unknown) {
+      const message =
+        caught instanceof ContactsApiError
+          ? caught.message
+          : 'Could not remove that contact. Please try again shortly.'
+      setErrorMessage(message)
     }
-  }
-
-  // Persist the theme for this username only and apply it to the document.
-  function handleToggleTheme() {
-    const next: ThemeName = theme === 'dark' ? 'light' : 'dark'
-    setTheme(next)
-    applyTheme(next)
-    saveTheme(currentSession.username, next)
   }
 
   // Drop the per-user theme attribute, then clear the in-memory session.
@@ -527,6 +211,105 @@ export function ChatScreen() {
     clearTheme()
     void logout()
   }
+
+  // Persist an explicit theme preference from the Settings panel, including "system".
+  function handleThemePreferenceChange(preference: ThemePreference) {
+    setThemePreference(currentSession.username, preference)
+  }
+
+  // Ask the server whether the open peer is blocked so the menu can show Unblock.
+  async function refreshPeerBlocked(username: string) {
+    try {
+      const rows = await authorizedRequest.request((accessToken) => listBlocks(accessToken))
+      setPeerBlocked(rows.some((row) => row.username === username))
+    } catch {
+      // A block-list read failure must not block the rest of the menu.
+      setPeerBlocked(false)
+    }
+  }
+
+  async function handleBlockPeer() {
+    if (!activeChat) {
+      return
+    }
+    const username = activeChat.peerUsername
+    try {
+      await authorizedRequest.request((accessToken) => blockUser(accessToken, username))
+      closeConversation()
+      setPeerBlocked(true)
+      setStatusMessage(`${username} is blocked. They cannot message you from this account.`)
+    } catch (caught: unknown) {
+      const message =
+        caught instanceof BlocksApiError
+          ? caught.message
+          : 'Could not block that account. Please try again shortly.'
+      setErrorMessage(message)
+    }
+  }
+
+  async function handleUnblockPeer() {
+    if (!activeChat) {
+      return
+    }
+    const username = activeChat.peerUsername
+    try {
+      await authorizedRequest.request((accessToken) => unblockUser(accessToken, username))
+      setPeerBlocked(false)
+      setStatusMessage(`${username} is unblocked.`)
+    } catch (caught: unknown) {
+      const message =
+        caught instanceof BlocksApiError
+          ? caught.message
+          : 'Could not unblock that account. Please try again shortly.'
+      setErrorMessage(message)
+    }
+  }
+
+  async function handleReportPeer() {
+    if (!activeChat) {
+      return
+    }
+    const reason = reportReason.trim()
+    if (!reason) {
+      setErrorMessage('Enter a reason for the report.')
+      return
+    }
+    try {
+      await authorizedRequest.request((accessToken) =>
+        reportUser(accessToken, activeChat.peerUsername, reason),
+      )
+      setReportReason('')
+      setOverlay({ kind: 'none' })
+      setStatusMessage('Report filed. Message contents were not attached.')
+    } catch (caught: unknown) {
+      const message =
+        caught instanceof ReportsApiError
+          ? caught.message
+          : 'Could not file that report. Please try again shortly.'
+      setErrorMessage(message)
+    }
+  }
+
+  function handleConfirmExport() {
+    if (!activeChat) {
+      return
+    }
+    const contents = formatTranscriptExport(
+      currentSession.username,
+      activeChat.peerUsername,
+      messages,
+    )
+    downloadTranscriptFile(`secure-chat-${activeChat.peerUsername}.txt`, contents)
+    setOverlay({ kind: 'none' })
+  }
+
+  const visibleMessages = messages.filter((message) =>
+    messageMatchesQuery(message, searchOpen ? inChatQuery : ''),
+  )
+  const selectedMessage =
+    overlay.kind === 'message'
+      ? messages.find((message) => message.id === overlay.id) ?? null
+      : null
 
   return (
     <div className="chat-shell">
@@ -553,6 +336,23 @@ export function ChatScreen() {
               required
             />
           </div>
+          {userSearch.results.length > 0 ? (
+            <ul className="chat-search-results" aria-label="Matching accounts">
+              {userSearch.results.map((hit) => (
+                <li key={hit.username}>
+                  <button
+                    type="button"
+                    className="chat-search-hit"
+                    onClick={() => setPeerInput(hit.username)}
+                  >
+                    {hit.username}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : peerInput.trim().length >= 2 && !userSearch.isSearching ? (
+            <p className="chat-search-empty">No matching accounts.</p>
+          ) : null}
           <button className="primary-button chat-add-button" type="submit" disabled={isConnecting}>
             {isConnecting ? 'Connecting…' : 'Add'}
           </button>
@@ -562,7 +362,7 @@ export function ChatScreen() {
         ) : (
           <ul className="chat-contact-list">
             {contacts.map((contact) => (
-              <li key={contact.id}>
+              <li key={contact.id} className="chat-contact-row">
                 <button
                   type="button"
                   className={
@@ -585,6 +385,14 @@ export function ChatScreen() {
                       aria-hidden="true"
                     />
                   ) : null}
+                </button>
+                <button
+                  type="button"
+                  className="text-button chat-contact-remove"
+                  aria-label={`Remove ${contact.username}`}
+                  onClick={() => void handleRemoveContact(contact.username)}
+                >
+                  Remove
                 </button>
               </li>
             ))}
@@ -621,78 +429,107 @@ export function ChatScreen() {
               <label className="chat-model-toggle">
                 <input
                   type="checkbox"
-                  checked={useDistilbert}
-                  onChange={(event) => {
-                    const enabled = event.target.checked
-                    if (enabled) {
-                      setUseLstm(false)
-                      setUseDistilbert(true)
-                      setClassifierStatus('Loading DistilBERT on this device…')
-                      void enableDistilbertOptIn()
-                        .then(() => {
-                          setClassifierStatus(
-                            'DistilBERT is classifying on this device (not sent to the server).',
-                          )
-                        })
-                        .catch((caught: unknown) => {
-                          setUseDistilbert(false)
-                          setClassifierStatus(
-                            caught instanceof Error
-                              ? `DistilBERT failed to load: ${caught.message}`
-                              : 'DistilBERT failed to load; staying on TF-IDF Best.',
-                          )
-                        })
-                    } else {
-                      setUseDistilbert(false)
-                      void disableDistilbertOptIn()
-                      setClassifierStatus('Using the on-device TF-IDF Best classifier.')
-                    }
-                  }}
+                  checked={classifier.useDistilbert}
+                  onChange={(event) => classifier.toggleDistilbert(event.target.checked)}
                 />
                 Use DistilBERT (large download)
               </label>
               <label className="chat-model-toggle">
                 <input
                   type="checkbox"
-                  checked={useLstm}
-                  onChange={(event) => {
-                    const enabled = event.target.checked
-                    if (enabled) {
-                      setUseDistilbert(false)
-                      setUseLstm(true)
-                      setClassifierStatus('Loading Word BiLSTM Best on this device…')
-                      void enableLstmOptIn()
-                        .then(() => {
-                          setClassifierStatus(
-                            'Word BiLSTM Best is classifying on this device (not sent to the server).',
-                          )
-                        })
-                        .catch((caught: unknown) => {
-                          setUseLstm(false)
-                          setClassifierStatus(
-                            caught instanceof Error
-                              ? `Word BiLSTM Best failed to load: ${caught.message}`
-                              : 'Word BiLSTM Best failed to load; staying on TF-IDF Best.',
-                          )
-                        })
-                    } else {
-                      setUseLstm(false)
-                      void disableLstmOptIn()
-                      setClassifierStatus('Using the on-device TF-IDF Best classifier.')
-                    }
-                  }}
+                  checked={classifier.useLstm}
+                  onChange={(event) => classifier.toggleLstm(event.target.checked)}
                 />
                 Use Word BiLSTM Best
               </label>
             </div>
-            <button type="button" className="text-button" onClick={handleToggleTheme}>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => toggleTheme(currentSession.username)}
+            >
               {theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
             </button>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setOverlay({ kind: 'settings' })}
+            >
+              Settings
+            </button>
+            <div className="chat-more-wrap">
+              <button
+                type="button"
+                className="text-button"
+                aria-haspopup="menu"
+                aria-expanded={overlay.kind === 'more'}
+                onClick={() => {
+                  if (overlay.kind === 'more') {
+                    setOverlay({ kind: 'none' })
+                    return
+                  }
+                  if (activeChat) {
+                    void refreshPeerBlocked(activeChat.peerUsername)
+                  }
+                  setOverlay({ kind: 'more' })
+                }}
+              >
+                More
+              </button>
+              {overlay.kind === 'more' ? (
+                <ChatMoreMenu
+                  hasActiveChat={activeChat !== null}
+                  peerBlocked={peerBlocked}
+                  onSearch={() => {
+                    setSearchOpen(true)
+                    setOverlay({ kind: 'none' })
+                  }}
+                  onExport={() => setOverlay({ kind: 'export' })}
+                  onClearLocal={() => {
+                    handleClearLocalTranscript()
+                    setStatusMessage('Local transcript cleared. The server copy is unchanged.')
+                    setOverlay({ kind: 'none' })
+                  }}
+                  onBlock={() => {
+                    setOverlay({ kind: 'none' })
+                    void handleBlockPeer()
+                  }}
+                  onUnblock={() => {
+                    setOverlay({ kind: 'none' })
+                    void handleUnblockPeer()
+                  }}
+                  onReport={() => setOverlay({ kind: 'report' })}
+                />
+              ) : null}
+            </div>
             <button type="button" className="text-button" onClick={handleLogout}>
               Log out
             </button>
           </div>
         </header>
+
+        {searchOpen ? (
+          <div className="chat-inchat-search">
+            <label htmlFor="in-chat-search">Search in chat</label>
+            <input
+              id="in-chat-search"
+              type="search"
+              value={inChatQuery}
+              onChange={(event) => setInChatQuery(event.target.value)}
+              placeholder="Filter decrypted messages on this device"
+            />
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                setSearchOpen(false)
+                setInChatQuery('')
+              }}
+            >
+              Close search
+            </button>
+          </div>
+        ) : null}
 
         <p className="chat-status" role="status">
           {statusMessage}
@@ -703,9 +540,9 @@ export function ChatScreen() {
           </p>
         ) : null}
 
-        {classifierStatus ? (
+        {classifier.classifierStatus ? (
           <p className="chat-status" role="status">
-            {classifierStatus}
+            {classifier.classifierStatus}
           </p>
         ) : null}
 
@@ -716,14 +553,15 @@ export function ChatScreen() {
         ) : null}
 
         <section className="chat-transcript" aria-label="Encrypted messages">
-          {messages.length === 0 ? (
+          {visibleMessages.length === 0 ? (
             <p className="chat-empty">
-              No messages yet. Ciphertext is relayed through the server; plaintext stays on this
-              device.
+              {searchOpen && inChatQuery.trim()
+                ? 'No messages match that search on this device.'
+                : 'No messages yet. Ciphertext is relayed through the server; plaintext stays on this device.'}
             </p>
           ) : (
             <ul className="chat-message-list">
-              {messages.map((message) => (
+              {visibleMessages.map((message) => (
                 <li
                   key={message.id}
                   className={
@@ -734,18 +572,28 @@ export function ChatScreen() {
                         : 'chat-bubble chat-bubble-received'
                   }
                 >
-                  {message.verificationFailed ? (
-                    <span role="alert">message failed verification</span>
-                  ) : (
-                    <>
-                      {message.scamWarning ? (
-                        <p className="scam-banner" role="status">
-                          This message shows signs of a scam
-                        </p>
-                      ) : null}
-                      {message.plaintext}
-                    </>
-                  )}
+                  <button
+                    type="button"
+                    className="chat-bubble-button"
+                    data-pending={message.pending ? 'true' : 'false'}
+                    onClick={() => setOverlay({ kind: 'message', id: message.id })}
+                  >
+                    {message.verificationFailed ? (
+                      <span role="alert">message failed verification</span>
+                    ) : (
+                      <>
+                        {message.scamWarning ? (
+                          <p className="scam-banner" role="status">
+                            This message shows signs of a scam
+                          </p>
+                        ) : null}
+                        {message.plaintext}
+                        {message.revision > 0 ? (
+                          <span className="chat-edited-flag"> (edited)</span>
+                        ) : null}
+                      </>
+                    )}
+                  </button>
                 </li>
               ))}
             </ul>
@@ -774,17 +622,81 @@ export function ChatScreen() {
             Send
           </button>
         </form>
-
-        <p className="slice-note" role="status">
-          Slice 8: the server increments current_epoch after 50 persisted messages in this
-          conversation or 24h since the last bump, and broadcasts that integer as a WebSocket
-          epoch frame. This tab encrypts the next send with the new id and still decrypts
-          history using each envelope&apos;s key_epoch. Rotation is key separation, not
-          forward secrecy. Contacts live on the server. Typing and presence are metadata;
-          draft text never leaves this device. Classification stays on-device after decrypt
-          (TF-IDF Best eager; DistilBERT / Word BiLSTM Best are lazy XOR opt-ins).
-        </p>
       </main>
+
+      {overlay.kind === 'settings' ? (
+        <SettingsPanel
+          themePreference={themePreference}
+          onThemePreferenceChange={handleThemePreferenceChange}
+          onClose={() => setOverlay({ kind: 'none' })}
+          onLogout={handleLogout}
+        />
+      ) : null}
+
+      {selectedMessage ? (
+        <MessageActionsModal
+          message={selectedMessage}
+          onEdit={handleEditMessage}
+          onDeleteForEveryone={handleDeleteMessage}
+          onHideForMe={handleHideMessage}
+          onClose={() => setOverlay({ kind: 'none' })}
+        />
+      ) : null}
+
+      {overlay.kind === 'export' ? (
+        <Modal title="Export chat" onClose={() => setOverlay({ kind: 'none' })}>
+          <p>
+            This download writes decrypted plaintext to a <code>.txt</code> file on this
+            device. It is not end-to-end encrypted on disk.
+          </p>
+          <div className="chat-modal-actions">
+            <button type="button" className="primary-button" onClick={handleConfirmExport}>
+              Download plaintext
+            </button>
+            <button type="button" className="text-button" onClick={() => setOverlay({ kind: 'none' })}>
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {overlay.kind === 'report' ? (
+        <Modal title="Report account" onClose={() => setOverlay({ kind: 'none' })}>
+          <p>
+            Reports are metadata only. Message contents are not attached and cannot be read
+            by the server.
+          </p>
+          <form
+            className="chat-report-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void handleReportPeer()
+            }}
+          >
+            <label htmlFor="report-reason">Reason</label>
+            <textarea
+              id="report-reason"
+              value={reportReason}
+              onChange={(event) => setReportReason(event.target.value)}
+              maxLength={500}
+              rows={4}
+              required
+            />
+            <div className="chat-modal-actions">
+              <button type="submit" className="primary-button" disabled={!reportReason.trim()}>
+                Submit report
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setOverlay({ kind: 'none' })}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
     </div>
   )
 }

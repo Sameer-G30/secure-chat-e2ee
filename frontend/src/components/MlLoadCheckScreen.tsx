@@ -135,6 +135,9 @@ export function MlLoadCheckScreen() {
             <th>Load</th>
             <th>Init</th>
             <th>Infer / msg</th>
+            <th>p50</th>
+            <th>p95</th>
+            <th>p99</th>
             <th>ONNX</th>
             <th>JS heap</th>
             <th>Fixture banners</th>
@@ -155,6 +158,9 @@ export function MlLoadCheckScreen() {
               </td>
               <td>{formatMs(row.initMs)}</td>
               <td>{formatMs(row.inferenceMsPerMessage)}</td>
+              <td>{formatMs(row.inferenceMsP50)}</td>
+              <td>{formatMs(row.inferenceMsP95)}</td>
+              <td>{formatMs(row.inferenceMsP99)}</td>
               <td>{formatBytes(row.onnxBytes)}</td>
               <td>{formatBytes(row.jsHeapBytes)}</td>
               <td>

@@ -52,6 +52,14 @@ class ConversationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# Wrap the caller's conversation list so the sidebar does not scan messages globally.
+class ConversationListResponse(BaseModel):
+    """Represent every 1:1 conversation the authenticated caller belongs to."""
+
+    # Carry membership-gated conversation payloads, newest conversation first.
+    conversations: list[ConversationResponse]
+
+
 # Describe the non-secret epoch counter returned by the epoch endpoint.
 class EpochResponse(BaseModel):
     """Represent the server-coordinated epoch integer for one conversation.

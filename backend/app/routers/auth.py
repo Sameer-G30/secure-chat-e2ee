@@ -32,7 +32,10 @@ from app.schemas.auth import (
 )
 
 # Import the Argon2id hashing/verification functions; never use anything weaker here.
-from app.security.passwords import hash_password, verify_password
+# `needs_rehash` was previously defined but never called anywhere in the app (dead
+# code found during the pre-deployment review); login now uses it to transparently
+# upgrade any account still hashed under older Argon2id parameters.
+from app.security.passwords import hash_password, needs_rehash, verify_password
 
 # Import the shared limiter that enforces the spec's rate-limiting requirement.
 from app.security.rate_limit import limiter
@@ -47,6 +50,10 @@ from app.security.tokens import (
     hash_refresh_token,
 )
 
+# Import the shared naive-to-UTC normalizer (also used by app/services/epoch.py) instead
+# of keeping a second, byte-for-byte identical copy in this router.
+from app.utils.time import as_utc as _as_utc
+
 # Group every authentication endpoint under one versionable prefix and tag.
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -59,15 +66,6 @@ _LOGIN_RATE_LIMIT = "10/minute"
 # Generic, non-specific message for every failed login cause (wrong username,
 # wrong password, or an unusable account). Never reveal which one it was.
 _INVALID_CREDENTIALS_DETAIL = "invalid username or password"
-
-
-# Normalize a possibly timezone-naive datetime read back from the database.
-def _as_utc(value: datetime) -> datetime:
-    """Attach UTC to a naive datetime; SQLite drops tzinfo that Postgres keeps."""
-
-    # SQLite's DateTime(timezone=True) silently stores naive values; Postgres does not.
-    # Every value this project writes is already UTC, so naive values are safely UTC too.
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 # Register a new account with an Argon2id password hash.
@@ -151,6 +149,13 @@ async def login(
     # Verify in constant time via Argon2's own comparison, never a manual string compare.
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=_INVALID_CREDENTIALS_DETAIL)
+
+    # Transparently upgrade a hash created under older Argon2id parameters. This can only
+    # run right here: it needs the plaintext password, which exists only for the instant
+    # of this request and is never stored. A failed rehash must never fail the login the
+    # user is actively completing, so it is best-effort and does not touch the response.
+    if needs_rehash(user.password_hash):
+        user.password_hash = hash_password(payload.password)
 
     # Issue a short-lived access token bound to this account.
     access_token = create_access_token(user.id, user.username)

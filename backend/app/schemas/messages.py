@@ -40,6 +40,21 @@ class RelayEnvelopeIn(BaseModel):
     conversation_id: UUID | None = None
     # Optional sender claim; if present it must match the authenticated user.
     sender_id: UUID | None = None
+    # Optional client-generated message identity (v2 associated data only).
+    #
+    # Present on every v2 send, new or edit. The client must choose this
+    # *before* encrypting, since it is bound into the AEAD tag — the server
+    # cannot assign an id after the fact the way it does the storage-only
+    # `id` primary key. Omitted entirely, this frame is a v1 send (unchanged
+    # from before message editing existed) and is never treated as an edit.
+    message_id: UUID | None = None
+    # Count edits to one v2 message: 0 for the original send. A resend whose
+    # `message_id` matches an existing row in this conversation is only
+    # accepted as an edit when `revision` is exactly that row's stored
+    # revision + 1 (see app/services/relay.py) — this is what closes the
+    # edit-rollback gap: the server cannot be tricked into "editing" out of
+    # order, and a stale ciphertext can never be replayed as the current one.
+    revision: int = Field(default=0, ge=0, le=2_147_483_647)
 
     # Reject ciphertext that is not valid standard base64 of a plausible AEAD payload.
     @field_validator("ciphertext")
@@ -107,6 +122,33 @@ class RelayEnvelopeOut(BaseModel):
     key_epoch: int
     # Carry the insertion timestamp as an ISO-8601 string for display ordering.
     created_at: str
+    # Carry the AD format version so the recipient reconstructs the right associated
+    # data before calling decrypt (v1 = original 4-field AD; v2 = adds message
+    # identity + revision). Defaults to 1 so a client that predates editing still
+    # gets a well-formed frame if it somehow receives one (it will simply never see
+    # a v2 row, since only an updated client sends message_id).
+    ad_version: int = 1
+    # Carry the client-chosen message identity for v2 rows; null for v1 rows.
+    message_id: UUID | None = None
+    # Carry the current revision for v2 rows; 0 for v1 rows (which have no concept
+    # of a revision at all).
+    revision: int = 0
+    # Carry the most recent edit time as an ISO-8601 string, or null if never edited.
+    edited_at: str | None = None
+
+
+# Describe the broadcast frame sent to a conversation's members after a hard
+# delete-for-everyone. Carries only the deleted row's id — never its ciphertext,
+# which the sender already discarded from local state before calling delete.
+class MessageDeletedOut(BaseModel):
+    """Represent one hard-deleted envelope's id, broadcast to the peer."""
+
+    # Mark this frame as a deletion so clients can distinguish it from an envelope.
+    type: str = "message_deleted"
+    # Identify which conversation this deletion applies to (routing only).
+    conversation_id: UUID
+    # Identify the now-removed row so the recipient can drop it from their transcript.
+    id: UUID
 
 
 # Wrap conversation-scoped history so the client never queries the whole messages table.
@@ -119,3 +161,6 @@ class MessageHistoryResponse(BaseModel):
 
     # Carry envelopes oldest-first so the chat transcript can render top-to-bottom.
     messages: list[RelayEnvelopeOut]
+    # Opaque id of the last envelope in this page when more history remains; null
+    # means this response is complete. Omitted pagination (no limit) always null.
+    next_cursor: UUID | None = None

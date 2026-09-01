@@ -269,6 +269,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="If set, write pipeline.joblib here (gitignored under ml/models/).",
     )
+    # Optional DM-length filter for the train/deploy length-mismatch experiment.
+    parser.add_argument(
+        "--max-chars",
+        type=int,
+        default=None,
+        help=(
+            "If set, drop rows longer than this many characters before the split "
+            "(length-mismatch experiment). Default: no filter. Never points at chat_eval."
+        ),
+    )
     # Enable or disable the validation-only C/threshold search (default on).
     parser.add_argument(
         "--tune-threshold",
@@ -387,6 +397,15 @@ def main() -> None:
 
     # Load every rewritten (or original) corpus into one combined dataset.
     combined = load_processed_corpora(args.processed_dir)
+    # Optionally drop long rows so TF-IDF is fit on DM-length text only.
+    if args.max_chars is not None:
+        from secure_chat_ml.length_audit import filter_by_character_length
+
+        before = len(combined)
+        combined = filter_by_character_length(combined, max_chars=args.max_chars)
+        print(
+            f"Length filter max_chars={args.max_chars}: kept {len(combined)}/{before} rows"
+        )
     # Split with class balance preserved in train, validation, and test.
     train_df, val_df, test_df = stratified_split(
         combined,
@@ -477,6 +496,7 @@ def main() -> None:
                 "live_url_reputation": False,
                 "chat_style_eval_used_for_training": False,
                 "chat_style_eval_used_for_tuning": False,
+                "max_chars": args.max_chars,
             },
             indent=2,
         )

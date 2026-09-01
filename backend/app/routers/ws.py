@@ -26,6 +26,7 @@ from app.security.dependencies import get_user_from_access_token
 from app.services.conversations import other_user_id
 from app.services.relay import (
     EnvelopeRejected,
+    EnvelopeSilentlyDropped,
     authorize_relay_connection,
     connection_hub,
     relay_envelope,
@@ -127,6 +128,12 @@ async def conversation_relay(
                 outbound, rotated_epoch = await relay_envelope(
                     db, conversation=conversation, sender=user, envelope=envelope
                 )
+            except EnvelopeSilentlyDropped as dropped:
+                # The recipient has blocked this sender. Fake-ack so the composer does
+                # not show a stuck-sending state, but never persist and never broadcast
+                # — the block's existence is not disclosed to either party.
+                await websocket.send_json({"type": "accepted", "id": str(dropped.fake_id)})
+                continue
             except (ValidationError, EnvelopeRejected, ValueError) as exc:
                 # Tell the sender the frame was rejected; never echo ciphertext or plaintext.
                 detail = (

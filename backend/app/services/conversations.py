@@ -16,7 +16,12 @@ from app.models.conversation import Conversation
 from app.models.user import User
 
 # Import the response shapes so routers do not rebuild participant payloads.
-from app.schemas.conversations import ConversationParticipant, ConversationResponse, EpochResponse
+from app.schemas.conversations import (
+    ConversationListResponse,
+    ConversationParticipant,
+    ConversationResponse,
+    EpochResponse,
+)
 
 # Shared detail when a caller is not a member or the conversation does not exist.
 _CONVERSATION_NOT_FOUND_DETAIL = "conversation not found"
@@ -205,3 +210,23 @@ async def get_epoch_for_participant(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_CONVERSATION_NOT_FOUND_DETAIL)
     require_both_public_keys(self_user, peer_user)
     return EpochResponse(conversation_id=conversation.id, current_epoch=conversation.current_epoch)
+
+
+# List every 1:1 conversation the caller is a member of, newest conversation first.
+async def list_conversations_for_user(
+    db: AsyncSession, self_user: User
+) -> ConversationListResponse:
+    """Return membership-gated conversation payloads without scanning all messages."""
+
+    rows = await db.scalars(
+        select(Conversation)
+        .where(or_(Conversation.user_a_id == self_user.id, Conversation.user_b_id == self_user.id))
+        .order_by(Conversation.created_at.desc())
+    )
+    conversations: list[ConversationResponse] = []
+    for conversation in rows:
+        peer_user = await db.get(User, other_user_id(conversation, self_user.id))
+        if peer_user is None:
+            continue
+        conversations.append(serialize_conversation(conversation, self_user, peer_user))
+    return ConversationListResponse(conversations=conversations)

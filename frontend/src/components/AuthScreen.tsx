@@ -8,6 +8,8 @@ import { AuthApiError, loginAccount, registerAccount } from '../api/authClient'
 import { ensureIdentityKeys, IdentitySetupError } from '../crypto/identitySetup'
 // Import the session context this screen populates after a successful login.
 import { useAuth } from '../context/AuthContext'
+// Import the client-only password meter shown during registration.
+import { scorePassword } from '../security/passwordStrength'
 
 // Identify the two authentication views without ambiguous booleans.
 type AuthMode = 'login' | 'register'
@@ -29,11 +31,17 @@ export function AuthScreen() {
   const [status, setStatus] = useState<RequestStatus>('idle')
   // Hold the specific message to show for the current error or success state.
   const [message, setMessage] = useState<string | null>(null)
+  // Hold the password field as React state so the registration meter can score it live.
+  const [passwordValue, setPasswordValue] = useState('')
+
+  // Score the live password; unused on the login view.
+  const passwordStrength = scorePassword(passwordValue)
 
   // Switch modes and clear any stale status from a previous attempt.
   function switchMode(nextMode: AuthMode) {
     setStatus('idle')
     setMessage(null)
+    setPasswordValue('')
     setMode(nextMode)
   }
 
@@ -177,7 +185,26 @@ export function AuthScreen() {
               minLength={isRegistering ? 8 : undefined}
               // Require a value before future backend submission.
               required
+              // Keep the field controlled so the meter can score every keystroke.
+              value={passwordValue}
+              // Update both the form value and the live meter score.
+              onChange={(event) => setPasswordValue(event.target.value)}
             />
+            {isRegistering && passwordValue.length > 0 ? (
+              <div
+                className="password-strength"
+                role="status"
+                aria-label={`Password strength: ${passwordStrength.label}`}
+              >
+                <div className="password-strength-track">
+                  <div
+                    className={`password-strength-fill password-strength-fill-${passwordStrength.score}`}
+                    style={{ width: `${(passwordStrength.score / 5) * 100}%` }}
+                  />
+                </div>
+                <p className="password-strength-label">Strength: {passwordStrength.label}</p>
+              </div>
+            ) : null}
           </div>
 
           {/* Confirm the chosen password only during account creation. */}

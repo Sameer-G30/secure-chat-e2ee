@@ -63,6 +63,10 @@ source_mappings:
     legitimate_chat: 0
     # Map hand-authored scam/phishing chat messages to the warning class.
     scam_chat: 1
+  # Development-only second chat-style set (never the final reported number).
+  chat_style_eval_v2:
+    legitimate_chat: 0
+    scam_chat: 1
 
 # Reserve the curated chat corpus exclusively for out-of-domain evaluation.
 evaluation_policy:

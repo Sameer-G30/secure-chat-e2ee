@@ -92,3 +92,24 @@ async def add_contact_for_owner(db: AsyncSession, owner: User, username: str) ->
 
     await db.refresh(contact)
     return serialize_contact(contact, peer)
+
+
+# Remove a named account from the owner's address book, idempotently.
+async def remove_contact_for_owner(db: AsyncSession, owner: User, username: str) -> None:
+    """Delete (owner_id, contact_id) if present; never errors on "not a contact."
+
+    The legacy React prototype never implemented contact delete at all (its
+    address book was add-only); removal here matches the existing add
+    endpoint's idempotent shape rather than 404ing on an already-absent row.
+    """
+
+    peer = await db.scalar(select(User).where(User.username == username))
+    if peer is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_USER_NOT_FOUND_DETAIL)
+
+    existing = await db.scalar(
+        select(Contact).where(Contact.owner_id == owner.id, Contact.contact_id == peer.id)
+    )
+    if existing is not None:
+        await db.delete(existing)
+        await db.commit()

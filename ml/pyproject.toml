@@ -78,6 +78,7 @@ select = ["E", "F", "I", "B", "UP"]
 # realistic scam message text across lines would make it harder to read/review.
 [tool.ruff.lint.per-file-ignores]
 "scripts/build_chat_style_eval_set.py" = ["E501"]
+"scripts/build_chat_style_eval_v2.py" = ["E501"]
 
 # Configure pytest to discover the synthetic-data unit tests.
 [tool.pytest.ini_options]

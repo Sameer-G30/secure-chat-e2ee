@@ -6,8 +6,8 @@ from datetime import datetime
 # Import uuid for typed primary-key annotations and default generation.
 from uuid import UUID, uuid4
 
-# Import server-side default helpers and the portable UUID column type.
-from sqlalchemy import DateTime, Uuid, func
+# Import server-side default helpers, the expression-index helper, and the portable UUID type.
+from sqlalchemy import DateTime, Index, Uuid, func
 
 # Import typed declarative mapping helpers introduced in SQLAlchemy 2.0.
 from sqlalchemy.orm import Mapped, mapped_column
@@ -60,3 +60,9 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    # Speed up GET /users/search's case-insensitive prefix match (`lower(username)
+    # LIKE lower(query) || '%'`) without a per-request full-table scan — the exact
+    # problem found in the legacy Firebase app, which downloaded every user row to
+    # the browser and substring-matched in JavaScript.
+    __table_args__ = (Index("ix_users_username_lower", func.lower(username)),)

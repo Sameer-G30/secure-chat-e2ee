@@ -256,4 +256,12 @@ describe('AuthScreen', () => {
     ).toBeInTheDocument()
     expect(screen.getByTestId('session-probe')).toHaveTextContent('signed-out')
   })
+
+  it('shows a live password strength meter on the registration form', () => {
+    renderAuthScreen()
+    fireEvent.click(screen.getByRole('button', { name: 'Create one' }))
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'Correct1!' } })
+    expect(screen.getByLabelText('Password strength: strong')).toBeInTheDocument()
+    expect(screen.getByText('Strength: strong')).toBeInTheDocument()
+  })
 })

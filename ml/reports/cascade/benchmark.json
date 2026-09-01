@@ -1,0 +1,39 @@
+{
+  "chat_style_eval_v1_used_for_training": false,
+  "chat_style_eval_v1_used_for_tuning": false,
+  "arms": {
+    "tfidf": {
+      "latency_ms": {
+        "p50": 0.9889980000252763,
+        "p95": 2.0696664499837425,
+        "p99": 8.013640150037418,
+        "mean": 1.2256265625035212,
+        "n": 400.0
+      },
+      "ship_cost_note": "TypeScript vectorizer + small ONNX logistic head (~tens of KiB)."
+    },
+    "lstm": {
+      "latency_ms": {
+        "p50": 2.4463240000045516,
+        "p95": 4.240770099966085,
+        "p99": 5.1754105700160835,
+        "mean": 4.199061227500351,
+        "n": 400.0
+      },
+      "skipped": null,
+      "ship_cost_note": "Word BiLSTM ONNX ~13.2 MiB; two-tier cascade remains shippable."
+    },
+    "distilbert": {
+      "latency_ms": {
+        "p50": 5.974120500070512,
+        "p95": 369.05827500004307,
+        "p99": 369.05827500004307,
+        "mean": 15.131096400008914,
+        "n": 40.0
+      },
+      "skipped": null,
+      "ship_cost_note": "~64.3 MiB; a cascade that escalates here is not a browser default."
+    }
+  },
+  "n_texts": 400
+}

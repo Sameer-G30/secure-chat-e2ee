@@ -13,6 +13,7 @@ import {
   resetAllClassifiers,
 } from './scamClassifier'
 import { readJsHeapBytes } from './ortRuntime'
+import { percentile } from './percentiles'
 import type { CheckpointId, LoadCheckRow } from './types'
 import { CHECKPOINT_LOAD_ORDER } from './types'
 
@@ -62,7 +63,7 @@ async function checkOne(id: CheckpointId, loadOrder: number): Promise<LoadCheckR
       // Load Python/PyTorch fixture expectations written at export time.
       const fixtures = await fetchFixtureScores(id, manifest.sidecars.fixtures)
       // Accumulate per-message inference times.
-      let inferenceTotal = 0
+      const inferenceSamples: number[] = []
       // Record whether the browser banner matches the Python banner.
       const bannerMatch: boolean[] = []
       // Score each short DM with the live ORT session.
@@ -77,12 +78,18 @@ async function checkOne(id: CheckpointId, loadOrder: number): Promise<LoadCheckR
               ? await classifyLstm(fixture.text)
               : await classifyTfidf(fixture.text)
         // Add wall-clock inference (includes tokenize in JS).
-        inferenceTotal += performance.now() - messageStarted
+        inferenceSamples.push(performance.now() - messageStarted)
         // Compare banner on/off only; int8 DistilBERT may drift in P(scam).
         bannerMatch.push(result.warned === fixture.warned)
       }
       // Mean milliseconds per fixture DM.
-      const inferenceMsPerMessage = fixtures.length > 0 ? inferenceTotal / fixtures.length : null
+      const inferenceMsPerMessage =
+        inferenceSamples.length > 0
+          ? inferenceSamples.reduce((sum, value) => sum + value, 0) / inferenceSamples.length
+          : null
+      const inferenceMsP50 = percentile(inferenceSamples, 50)
+      const inferenceMsP95 = percentile(inferenceSamples, 95)
+      const inferenceMsP99 = percentile(inferenceSamples, 99)
       // Unload this graph before the next checkpoint (one heavy session at a time).
       await resetAllClassifiers()
       // Return a successful row.
@@ -94,6 +101,9 @@ async function checkOne(id: CheckpointId, loadOrder: number): Promise<LoadCheckR
         error: null,
         initMs,
         inferenceMsPerMessage,
+        inferenceMsP50,
+        inferenceMsP95,
+        inferenceMsP99,
         onnxBytes,
         jsHeapBytes,
         fixtureBannerMatch: bannerMatch,
@@ -113,6 +123,9 @@ async function checkOne(id: CheckpointId, loadOrder: number): Promise<LoadCheckR
         error: `inference: ${inferMessage}`,
         initMs,
         inferenceMsPerMessage: null,
+        inferenceMsP50: null,
+        inferenceMsP95: null,
+        inferenceMsP99: null,
         onnxBytes,
         jsHeapBytes,
         fixtureBannerMatch: null,
@@ -133,6 +146,9 @@ async function checkOne(id: CheckpointId, loadOrder: number): Promise<LoadCheckR
       error: message,
       initMs: null,
       inferenceMsPerMessage: null,
+      inferenceMsP50: null,
+      inferenceMsP95: null,
+      inferenceMsP99: null,
       onnxBytes,
       jsHeapBytes: readJsHeapBytes(),
       fixtureBannerMatch: null,

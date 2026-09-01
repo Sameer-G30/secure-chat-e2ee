@@ -13,17 +13,9 @@ from app.models.conversation import Conversation
 # Import Message so the message-count trigger stays conversation-scoped.
 from app.models.message import Message
 
-
-# Normalize SQLite/Postgres timestamps so aware-minus-naive cannot crash the rule.
-def as_utc(value: datetime) -> datetime:
-    """Return a timezone-aware UTC datetime for comparisons against datetime.now(UTC)."""
-
-    # SQLite often returns naive datetimes even when the column is timezone=True.
-    if value.tzinfo is None:
-        # Treat naive values as UTC rather than guessing a local zone.
-        return value.replace(tzinfo=UTC)
-    # Convert any offset-aware value into UTC before subtracting.
-    return value.astimezone(UTC)
+# Import the shared naive-to-UTC normalizer (also used by app/routers/auth.py) instead
+# of keeping a second, byte-for-byte identical copy in this service.
+from app.utils.time import as_utc
 
 
 # Decide whether this persist should increment current_epoch.
@@ -102,6 +94,7 @@ async def increment_current_epoch(
         .values(
             current_epoch=Conversation.current_epoch + 1,
             last_rotated_at=now,
+            messages_in_current_epoch=0,
         )
         .returning(Conversation.current_epoch)
     )
@@ -114,6 +107,7 @@ async def increment_current_epoch(
     # Keep the in-memory conversation used by this WebSocket in sync.
     conversation.current_epoch = int(new_epoch)
     conversation.last_rotated_at = now
+    conversation.messages_in_current_epoch = 0
     # Return the integer clients will put in the next envelope's key_epoch.
     return int(new_epoch)
 
@@ -126,27 +120,51 @@ async def maybe_rotate_epoch(
     rotate_after_messages: int,
     rotate_after_hours: int,
     now: datetime | None = None,
+    persisted_message: Message | None = None,
 ) -> int | None:
     """Increment current_epoch when N messages OR 24h since last bump.
 
     Callers must already have persisted the qualifying envelope. Returns
     the new current_epoch when a bump happened, otherwise None. The server
     never generates a key — only this integer.
+
+    messages_in_current_epoch is the O(1) replacement for COUNT(*) of rows
+    with created_at > last_rotated_at. A persist whose created_at is not
+    strictly after last_rotated_at does not increment (SQLite stores
+    timestamps at second precision, so same-second follow-up persists must
+    not immediately re-trigger N).
     """
 
     # Use an explicit clock so tests can freeze "now" for the 24h rule.
     clock = now if now is not None else datetime.now(UTC)
-    # Count this conversation's envelopes since the last bump (includes the new row).
-    messages_since_last_bump = await count_messages_since_last_bump(db, conversation)
+    # Match COUNT(*) WHERE created_at > last_rotated_at without scanning messages.
+    counts_toward_n = True
+    # After a bump, only later envelopes count toward the next N.
+    if conversation.last_rotated_at is not None and persisted_message is not None:
+        # A missing created_at cannot be compared; count the persist (fail toward N).
+        created_at = persisted_message.created_at
+        if created_at is not None and as_utc(created_at) <= as_utc(conversation.last_rotated_at):
+            # Same second as the bump stamp: do not increment the O(1) counter.
+            counts_toward_n = False
+    # Increment only when this persist would have been included in the old COUNT.
+    if counts_toward_n:
+        # O(1) increment; never COUNT(*) the messages table here.
+        # Read the stored counter; treat NULL/missing as zero.
+        prior = int(conversation.messages_in_current_epoch or 0)
+        # Persist the O(1) increment; never COUNT(*) the messages table here.
+        conversation.messages_in_current_epoch = prior + 1
+        # Flush so a concurrent persist on another socket sees the new value.
+        await db.flush()
     # Apply the documented OR rule; do not rotate on every persist when N > 1.
     if not rotation_is_due(
         conversation,
-        messages_since_last_bump,
+        conversation.messages_in_current_epoch,
         rotate_after_messages=rotate_after_messages,
         rotate_after_hours=rotate_after_hours,
         now=clock,
     ):
-        # Leave current_epoch unchanged.
+        # Persist the counter increment even when the epoch does not bump.
+        await db.commit()
         return None
-    # Persist the atomic increment and stamp last_rotated_at.
+    # Persist the atomic increment, stamp last_rotated_at, and reset the counter.
     return await increment_current_epoch(db, conversation, now=clock)

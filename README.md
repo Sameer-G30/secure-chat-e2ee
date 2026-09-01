@@ -51,6 +51,7 @@ Everything inside the two device boxes is plaintext-capable. The server box has 
 - Public-key authenticity is initially trusted on first use; key transparency or out-of-band safety-number verification is future work.
 - Multi-device key synchronization and recovery are outside the first implementation scope.
 - Browser WebSocket clients cannot set an `Authorization` header, so Slice 4 sends the short-lived access token as a query parameter (`?access_token=`). Access logs or a copied URL could capture that token until it expires (15 minutes). A one-time WebSocket ticket is future hardening; do not treat the query string as a long-lived secret.
+- **A WebSocket authenticates once, at connect, and cannot be re-authenticated in place.** Unlike an HTTP request, a live socket does not carry a fresh `Authorization` header on every frame, so once the 15-minute access token used to open it expires, the *connection* is what goes stale, not a request. The pre-deployment review found this had no recovery path at all: the server already closes the socket with code `4401` once its token is no longer valid (`app/routers/ws.py`), but nothing on the client reacted to that close code, so a chat tab left open past 15 minutes silently stopped receiving/sending until the user manually reopened the conversation. The chosen fix keeps the existing per-connect auth model (no server change, no new ticket endpoint) and adds client-side recovery: `frontend/src/api/chatSocket.ts` now surfaces the WebSocket close code, and `ChatScreen`'s `handleSocketClose` reacts to `4401` by refreshing the token pair once (sharing the same single-flight refresh latch a concurrent REST 401 would use, via `frontend/src/api/authorizedRequest.ts`) and reopening the socket with the new access token — the conversation recovers automatically instead of requiring a manual reconnect. A non-`4401` close (network drop, server restart) still just shows "disconnected," matching the pre-existing behavior. The underlying query-string exposure window and the one-time-ticket hardening above remain unchanged and are still future work.
 
 
 
@@ -344,6 +345,39 @@ Slice 9 adds:
 - **Frontend:** CI test that product TypeScript never uses `dangerouslySetInnerHTML` or `.innerHTML`. ChatScreen ML default, DistilBERT/LSTM XOR, unpadded DistilBERT, ORT worker, and package-export `wasmPaths` are unchanged. `frontend/.env.example` points at `http://localhost:8000`.
 - **ML:** none. Trainer defaults, ONNX exports, ChatScreen eager TF-IDF Best, and the six-row browser table are unchanged.
 - **Docs:** architecture mermaid (plaintext boundary), local Compose deployment, `docs/01-demo-script.md`. Hosted Render/Railway/Fly.io remains Slice 10. No demo video is checked in.
+
+## Pre-deployment hardening (pre-Slice 10)
+
+Before Slice 10 (hosted deployment), a dedicated review pass audited the whole codebase for correctness defects, ported the remaining legacy-frontend features onto the current (non-Firebase) stack, and optimized the scam-detection module. This section is appended to as each phase lands; nothing in `docker-compose.yml` or deployment configuration changes here.
+
+**Phase 0 — pre-deployment correctness fixes.**
+
+- **Token refresh was dead code.** `refreshTokens()` (`frontend/src/api/authClient.ts`) and `AuthContext.updateTokens` existed since Slice 3 but nothing ever called them, so a tab left open past the 15-minute access-token lifetime silently started failing every request. `frontend/src/api/authorizedRequest.ts` adds `withTokenRefresh()`, a single-flight refresh-and-retry wrapper: any wrapped call that gets a 401 refreshes the token pair exactly once (concurrent 401s share one in-flight refresh via `refreshSessionOnce()`, since the refresh token is single-use and two simultaneous rotations would strand every caller but the first) and retries. `ChatScreen` now routes `listContacts`, `addContact`, `fetchPublicKey`, `startOrFetchConversation`, `fetchConversationEpoch`, and `fetchConversationMessages` through it.
+- **WebSocket auth-expiry recovery.** See the threat-model bullet above on why a socket cannot be re-authenticated in place; `ChatScreen.handleSocketClose` now reacts to a `4401` close by refreshing and reopening the socket automatically.
+- **`ConnectionHub.broadcast()` had no failure isolation** (`backend/app/services/relay.py`): one dead socket raising inside the fan-out loop could abort delivery to every other member of the room. Each `send_json` is now individually guarded; a socket that fails to receive is evicted via the existing `leave()` path and the broadcast continues to everyone else.
+
+Verification: all 81 backend tests, all 50 frontend tests, and a clean `tsc -b --noEmit` pass unchanged after these fixes.
+
+**Phase 3a — safe refactor (cosmetic and dead-code only; no behavior change).**
+
+- `needs_rehash()` (`backend/app/security/passwords.py`) was defined in Slice 2/3 and never called. `POST /auth/login` now calls it after a successful password verify and transparently re-hashes under current Argon2id parameters — this can only happen at login, since it is the only place the plaintext password is available.
+- `_as_utc()` (`app/routers/auth.py`) and `as_utc()` (`app/services/epoch.py`) were byte-for-byte identical naive-datetime normalizers. Both now import one implementation from `app/utils/time.py`.
+- `Conversation.user_a_id` / `user_b_id` (`app/models/conversation.py`) now declare `index=True`, matching the `ix_conversations_user_a_id` / `ix_conversations_user_b_id` indexes the Alembic migration (`c4e8a2b91d07`) already creates. The ORM model and the migration had drifted apart since Slice 4: tests build their schema from the model's metadata, so the index existed in every real Postgres deployment but silently not in the test database.
+- Removed the unused `frontend/src/assets/hero.png`, the dead `.chat-peer-form` / `.chat-start-button` CSS rules (left over from an earlier "start chat" form ChatScreen no longer renders), and the developer-facing "Slice 8" implementation-note paragraph at the bottom of the chat UI (`.slice-note`), which was end-user-visible copy describing internal epoch-rotation mechanics rather than product UI.
+
+Verification: 81 backend tests, `ruff check .` clean, `mypy app tests` clean, 50 frontend tests, `tsc -b --noEmit` clean, `oxlint` clean (one pre-existing, unrelated warning on `AuthContext.tsx`'s Fast Refresh export shape).
+
+**Phase 3a — structural refactor: decomposing `ChatScreen.tsx`.** Before Phase 1 added roughly a dozen more features to it, `ChatScreen.tsx` had grown to ~790 lines mixing five separate concerns in one component: the server-side contact list, per-username theming, the DistilBERT/BiLSTM opt-in toggles, token-refresh plumbing, and the entire Slice 4-8 live-conversation state machine (key derivation, history hydration, the relay WebSocket, encrypt/send, decrypt/verify/classify, epoch rotation). Each concern now lives in its own hook under `frontend/src/hooks/`:
+
+- `useAuthorizedRequest.ts` — the single-flight token-refresh wiring from Phase 0, shared by the two hooks below instead of duplicated.
+- `useContacts.ts` — the server-side address book. One behavior change, not just a move: the reload effect now keys on the signed-in *username* rather than the whole `session` object, so a token refresh (which replaces the session object every time — see `AuthContext.updateTokens`) no longer needlessly re-fetches the contact list.
+- `useChatTheme.ts` — per-username theme load/apply/persist.
+- `useScamClassifierPreference.ts` — the DistilBERT/BiLSTM XOR toggles, load status, and the `classify()` entry point.
+- `useEncryptedConversation.ts` — everything else: `ActiveChat`/`ChatMessage` state, the relay socket lifecycle (including the Phase 0 auth-expiry reconnect), send/receive, decrypt/verify, and epoch application.
+
+`ChatScreen.tsx` itself is now a presentational shell (~300 lines) that composes these hooks and owns only the state genuinely shared across them (the add-contact input, and the one status/error banner both contacts and the conversation state machine can write to). The JSX tree, CSS class names, and every user-visible string are unchanged — this was a pure structural move, verified by running the existing `ChatScreen.test.tsx` (which exercises encrypt/decrypt, verification failure, the scam banner, history hydration, dark-mode persistence, and epoch rotation end-to-end) unmodified against the new structure.
+
+Verification: 50 frontend tests (unchanged pass/fail set), `tsc -b --noEmit` clean, `npm run build` clean, `oxlint` clean (one new, non-blocking `exhaustive-deps` warning on a dependency array that intentionally lists a stable member-function reference rather than its parent object, documented in `useContacts.ts`).
 
 ## E2EE and client-side AI
 

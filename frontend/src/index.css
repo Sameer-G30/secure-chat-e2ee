@@ -396,27 +396,7 @@ body {
   cursor: pointer;
 }
 
-/* Explain this checkpoint's intentionally static API state. */
-.slice-note {
-  /* Separate the note from the mode switch. */
-  margin: 20px 0 0;
-  /* Give the implementation note a quiet surface. */
-  padding: 10px 12px;
-  /* Preserve the medium rounded visual language. */
-  border-radius: 12px;
-  /* Use a subtle blue-violet tint. */
-  background: rgba(102, 126, 234, 0.1);
-  /* Use a dark purple for sufficient contrast. */
-  color: #4b3c78;
-  /* Keep implementation status visually secondary. */
-  font-size: 12px;
-  /* Improve readability of wrapped status text. */
-  line-height: 1.45;
-  /* Center the checkpoint note. */
-  text-align: center;
-}
-
-/* Announce registration outcomes distinctly from the static slice note. */
+/* Announce registration outcomes. */
 .auth-feedback {
   /* Separate feedback from the form above it. */
   margin: 20px 0 0;
@@ -507,6 +487,49 @@ body {
 .chat-add-contact {
   display: grid;
   gap: 8px;
+}
+
+.chat-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.chat-search-hit {
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(102, 126, 234, 0.08);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-search-hit:hover {
+  background: rgba(102, 126, 234, 0.16);
+}
+
+.chat-search-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.chat-contact-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px;
+  align-items: center;
+}
+
+.chat-contact-remove {
+  font-size: 12px;
 }
 
 .chat-contact-list {
@@ -652,19 +675,6 @@ html[data-theme='dark'] .chat-bubble-received .scam-banner {
   background: rgba(0, 0, 0, 0.35);
 }
 
-/* Collect the peer username and the start-chat action on one row when space allows. */
-.chat-peer-form {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 12px;
-  align-items: end;
-}
-
-.chat-start-button {
-  width: auto;
-  min-width: 200px;
-}
-
 /* Announce connection state without looking like an error. */
 .chat-status {
   margin: 0;
@@ -733,6 +743,198 @@ html[data-theme='dark'] .chat-bubble-received .scam-banner {
   border: 1px solid rgba(220, 38, 38, 0.25);
 }
 
+.chat-bubble-button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.chat-edited-flag {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.chat-more-wrap {
+  position: relative;
+}
+
+.chat-more-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  min-width: 200px;
+  display: grid;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+}
+
+.chat-more-item {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-more-item:hover:not(:disabled) {
+  background: rgba(102, 126, 234, 0.12);
+}
+
+.chat-more-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-inchat-search {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.chat-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.chat-modal {
+  width: min(480px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 20px 22px;
+  border-radius: 18px;
+  background: var(--card);
+  color: var(--text-primary);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.28);
+}
+
+.chat-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.chat-modal-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.chat-modal-body p {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.chat-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.chat-modal-actions-stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.chat-edit-form,
+.chat-report-form,
+.chat-settings-section {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-edit-form textarea,
+.chat-report-form textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  resize: vertical;
+}
+
+.chat-settings-section h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.chat-settings-hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chat-settings-theme {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.chat-settings-choice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.password-strength {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.password-strength-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.password-strength-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #b45309;
+}
+
+.password-strength-fill-3,
+.password-strength-fill-4 {
+  background: #ca8a04;
+}
+
+.password-strength-fill-5 {
+  background: #15803d;
+}
+
+.password-strength-label {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 /* Keep the composer on one row beneath the transcript. */
 .chat-composer {
   display: grid;
@@ -781,13 +983,6 @@ html[data-theme='dark'] .chat-bubble-received .scam-banner {
 }
 
 /* Keep Slice 7 status notes readable on the dark canvas. */
-html[data-theme='dark'] .slice-note {
-  /* Lighten the note copy so it is not dark-purple-on-dark. */
-  color: #ddd6fe;
-  /* Keep a violet tint without washing out the canvas. */
-  background: rgba(102, 126, 234, 0.18);
-}
-
 /* Keep error copy readable when the chat shell is in dark mode. */
 html[data-theme='dark'] .auth-feedback-error {
   /* Lighten the error text against the dark canvas. */
@@ -867,12 +1062,10 @@ html[data-theme='dark'] .chat-bubble-failed {
     border-radius: 26px;
   }
 
-  .chat-peer-form,
   .chat-composer {
     grid-template-columns: 1fr;
   }
 
-  .chat-start-button,
   .chat-send-button {
     width: 100%;
   }

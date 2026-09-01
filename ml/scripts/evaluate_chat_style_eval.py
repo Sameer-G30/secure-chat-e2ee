@@ -67,6 +67,13 @@ def parse_args() -> argparse.Namespace:
         default=_DEFAULT_REPORTS_DIR,
         help="Directory with baseline_metrics.json and for the OOD report (default: reports).",
     )
+    # Allow writing v1 and v2 reports side by side without overwriting.
+    parser.add_argument(
+        "--metrics-filename",
+        type=str,
+        default="chat_style_eval_metrics.json",
+        help="JSON filename under --reports-dir (default: chat_style_eval_metrics.json).",
+    )
     # Return the populated namespace for main().
     return parser.parse_args()
 
@@ -134,6 +141,12 @@ def main() -> None:
 
     # Load chat-register (or original) training text; this glob never sees chat_eval/.
     combined = load_processed_corpora(processed_dir)
+    # Honor a length-mismatch experiment recorded in baseline_metrics.json.
+    max_chars = frozen.get("max_chars")
+    if max_chars is not None:
+        from secure_chat_ml.length_audit import filter_by_character_length
+
+        combined = filter_by_character_length(combined, max_chars=int(max_chars))
     # Reconstruct TRAIN/VAL/TEST with the same seed used by train_baseline.py.
     train_df, val_df, test_df = stratified_split(
         combined,
@@ -161,7 +174,7 @@ def main() -> None:
     # Ensure the reports directory exists before writing the OOD artifact.
     args.reports_dir.mkdir(parents=True, exist_ok=True)
     # Persist the out-of-domain metrics next to the in-domain TEST report.
-    metrics_path = args.reports_dir / "chat_style_eval_metrics.json"
+    metrics_path = args.reports_dir / args.metrics_filename
     # Record that the 200-row file was never used for fitting or threshold search.
     metrics_path.write_text(
         json.dumps(
@@ -179,6 +192,7 @@ def main() -> None:
                 "threshold_source": "reports/baseline_metrics.json (validation-frozen)",
                 "retuned_on_chat_eval": False,
                 "chat_style_eval_training_allowed": False,
+                "chat_eval_path": str(args.chat_eval_path),
                 "classification_report": result.classification_report,
                 "confusion_matrix": result.confusion_matrix,
                 "confusion_matrix_labels": ["legitimate", "scam"],

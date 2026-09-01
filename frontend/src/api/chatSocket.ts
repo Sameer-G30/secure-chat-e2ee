@@ -18,6 +18,25 @@ export interface RelayedEnvelope {
   nonce: Uint8Array
   // Identify which locally derived epoch key protects this envelope.
   keyEpoch: number
+  // Identify the AD format this envelope was encrypted under. 1 = original
+  // (message-identity-free) AD; 2 = adds message identity + revision, enabling
+  // safe editing. Defaults to 1 so a pre-editing server response still parses.
+  adVersion: number
+  // Carry the client-chosen message identity for v2 rows; null for v1 rows.
+  // Required (bound into the AD) to decrypt or edit a v2 message.
+  messageId: string | null
+  // Carry the current revision for v2 rows; 0 for v1 rows.
+  revision: number
+  // Carry the most recent edit time, or null if this message was never edited.
+  editedAt: string | null
+}
+
+// Describe the frame the server broadcasts to the peer after a hard delete-for-everyone.
+export interface RelayedMessageDeleted {
+  // Identify the conversation this deletion applies to (routing only).
+  conversationId: string
+  // Identify the now-removed row so the UI can drop it from the transcript.
+  id: string
 }
 
 // Describe the callbacks a ChatScreen connection registers.
@@ -27,21 +46,43 @@ export interface ChatSocketHandlers {
   // Surface a protocol-layer rejection without rendering ciphertext as text.
   onProtocolError: (detail: string) => void
   // Notify the UI when the socket closes so it can show a disconnected state.
-  onClose: () => void
+  // Carry the close code so the caller can distinguish an expired access token
+  // (4401, matching the server's WS auth-failure code) from an ordinary
+  // disconnect and reconnect with a freshly refreshed token instead of just
+  // showing "disconnected" until the user re-opens the conversation by hand.
+  onClose: (code: number) => void
   // Receive a typing metadata event; the server never sees draft text.
   onTyping?: (userId: string, isTyping: boolean) => void
   // Receive a presence metadata event; this is not a secret.
   onPresence?: (userId: string, online: boolean) => void
   // Receive a non-secret epoch counter bump; clients re-derive the next encrypt subkey locally.
   onEpoch?: (currentEpoch: number) => void
+  // Receive notice that a peer (or this same account, from another tab) hard-deleted
+  // a message for everyone; the UI should drop that row from the transcript.
+  onMessageDeleted?: (deletion: RelayedMessageDeleted) => void
+  // Receive the server-assigned row id for a message this tab just sent or edited.
+  // Used to reconcile a send's temporary local id with the real id later edit/delete
+  // calls need to target (see useEncryptedConversation.ts's pendingSendQueueRef).
+  onAccepted?: (id: string) => void
+}
+
+// Describe optional v2 fields a send or edit may carry on the wire.
+export interface OutboundEnvelopeIdentity {
+  // Bind a client-chosen message identity into the AD; omit entirely for a v1 send.
+  messageId?: string
+  // Count edits to one v2 message; omit (defaults server-side to 0) for a new send.
+  revision?: number
 }
 
 // Describe the handle ChatScreen uses to send envelopes and tear the socket down.
 export interface ChatSocket {
   // Send one locally encrypted envelope; the server must never see plaintext.
+  // `identity` is present for every v2 send (new message or edit); its absence
+  // reproduces the original v1 wire frame exactly.
   sendEnvelope: (
     envelope: EncryptedEnvelope,
     routing: { conversationId: string; senderId: string },
+    identity?: OutboundEnvelopeIdentity,
   ) => void
   // Send a typing metadata frame without including the draft text.
   sendTyping: (isTyping: boolean) => void
@@ -62,6 +103,10 @@ export function parseRelayedEnvelope(value: unknown): RelayedEnvelope | null {
     ciphertext?: unknown
     nonce?: unknown
     key_epoch?: unknown
+    ad_version?: unknown
+    message_id?: unknown
+    revision?: unknown
+    edited_at?: unknown
   }
   if (frame.type !== 'envelope') {
     return null
@@ -84,11 +129,32 @@ export function parseRelayedEnvelope(value: unknown): RelayedEnvelope | null {
       ciphertext: decodeBase64(frame.ciphertext),
       nonce: decodeBase64(frame.nonce),
       keyEpoch: frame.key_epoch,
+      // Default to 1/null/0/null so a response from before message editing existed
+      // (or a malformed field) still parses as a well-formed v1 envelope.
+      adVersion: typeof frame.ad_version === 'number' ? frame.ad_version : 1,
+      messageId: typeof frame.message_id === 'string' ? frame.message_id : null,
+      revision: typeof frame.revision === 'number' ? frame.revision : 0,
+      editedAt: typeof frame.edited_at === 'string' ? frame.edited_at : null,
     }
   } catch {
     // Malformed base64 is treated as a dropped frame rather than corrupted plaintext.
     return null
   }
+}
+
+// Narrow an unknown JSON value into a message-deleted frame, or return null.
+export function parseRelayedMessageDeleted(value: unknown): RelayedMessageDeleted | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const frame = value as { type?: unknown; conversation_id?: unknown; id?: unknown }
+  if (frame.type !== 'message_deleted') {
+    return null
+  }
+  if (typeof frame.conversation_id !== 'string' || typeof frame.id !== 'string') {
+    return null
+  }
+  return { conversationId: frame.conversation_id, id: frame.id }
 }
 
 // Narrow an unknown JSON value into the non-secret epoch counter, or return null.
@@ -132,9 +198,14 @@ export function handleRelayJson(parsed: unknown, handlers: ChatSocketHandlers): 
       // Stop; this is not an envelope.
       return
     }
-    // Persist acks are optional metadata for the sender tab.
+    // Persist acks are optional metadata for the sender tab. The sender already
+    // rendered plaintext locally; the id here only matters for reconciling a
+    // temporary local id with the real row id (see ChatSocketHandlers.onAccepted).
     if (type === 'accepted') {
-      // The sender already rendered plaintext locally.
+      const acceptedFrame = parsed as { id?: unknown }
+      if (typeof acceptedFrame.id === 'string') {
+        handlers.onAccepted?.(acceptedFrame.id)
+      }
       return
     }
     // Typing frames must never carry draft text.
@@ -173,6 +244,15 @@ export function handleRelayJson(parsed: unknown, handlers: ChatSocketHandlers): 
       // Always consume epoch frames so they are not reported as unreadable envelopes.
       return
     }
+    // A hard delete-for-everyone; never carries ciphertext or plaintext.
+    if (type === 'message_deleted') {
+      const deletion = parseRelayedMessageDeleted(parsed)
+      if (deletion !== null) {
+        handlers.onMessageDeleted?.(deletion)
+      }
+      // Never fall through to envelope parsing.
+      return
+    }
   }
   // Remaining frames must be ciphertext envelopes, or they are protocol noise.
   const envelope = parseRelayedEnvelope(parsed)
@@ -206,12 +286,15 @@ export function connectChatSocket(
     handleRelayJson(parsed, handlers)
   })
 
-  socket.addEventListener('close', () => {
-    handlers.onClose()
+  socket.addEventListener('close', (event: CloseEvent) => {
+    // Hand the close code up; 4401 means the access token used to open this
+    // socket has since expired (WS auth cannot be refreshed in place, unlike
+    // an HTTP request, because the token only travels once, at connect time).
+    handlers.onClose(event.code)
   })
 
   return {
-    sendEnvelope(envelope, routing) {
+    sendEnvelope(envelope, routing, identity) {
       if (socket.readyState !== WebSocket.OPEN) {
         handlers.onProtocolError('The encrypted connection is not open yet.')
         return
@@ -223,6 +306,11 @@ export function connectChatSocket(
           key_epoch: envelope.keyEpoch,
           conversation_id: routing.conversationId,
           sender_id: routing.senderId,
+          // Omit entirely for a v1 send; present (message_id, revision) for every
+          // v2 send or edit, matching RelayEnvelopeIn on the backend.
+          ...(identity?.messageId !== undefined
+            ? { message_id: identity.messageId, revision: identity.revision ?? 0 }
+            : {}),
         }),
       )
     },

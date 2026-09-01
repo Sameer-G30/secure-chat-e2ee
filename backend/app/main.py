@@ -18,8 +18,9 @@ from app.config import Settings, get_settings
 
 # Import the authentication router added in Slice 2 and extended in Slice 3,
 # the key upload/lookup router added in Slice 3 (plus the §6.4 epoch alias),
-# and the Slice 4 conversation REST + WebSocket ciphertext-relay routers.
-from app.routers import auth, contacts, conversations, keys, ws
+# the Slice 4 conversation REST + WebSocket ciphertext-relay routers, and the
+# pre-deployment-review routers for blocking, reporting, and username search.
+from app.routers import auth, blocks, contacts, conversations, keys, reports, users, ws
 
 # Import the shared limiter instance so the app enforces the same rate limits.
 from app.security.rate_limit import limiter
@@ -48,8 +49,11 @@ app.add_middleware(
     allow_origins=[get_settings().frontend_origin],
     # Permit the Authorization header carrying Slice 3's bearer access tokens.
     allow_credentials=True,
-    # Allow the HTTP verbs this API's routers currently use.
-    allow_methods=["GET", "POST"],
+    # Allow the HTTP verbs this API's routers currently use. DELETE was added during
+    # the pre-deployment review for contact removal, unblocking, and message
+    # delete-for-everyone; nothing in this API uses PUT/PATCH (message *editing*
+    # travels over the existing WebSocket relay, not a REST verb).
+    allow_methods=["GET", "POST", "DELETE"],
     # Allow the headers the frontend needs to send, including future auth headers.
     allow_headers=["Authorization", "Content-Type"],
 )
@@ -62,6 +66,12 @@ app.include_router(keys.router)
 app.include_router(conversations.router)
 # Mount the authenticated server-side contact address book.
 app.include_router(contacts.router)
+# Mount authenticated username search (replaces the legacy full-table-scan approach).
+app.include_router(users.router)
+# Mount authenticated server-enforced blocking.
+app.include_router(blocks.router)
+# Mount authenticated metadata-only abuse reporting.
+app.include_router(reports.router)
 # Mount the authenticated ciphertext-only WebSocket relay.
 app.include_router(ws.router)
 

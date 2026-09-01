@@ -456,3 +456,124 @@ async def test_message_history_is_chronological(
     )
     ids = [row["id"] for row in history.json()["messages"]]
     assert ids == [str(first.id), str(second.id)]
+    assert history.json()["next_cursor"] is None
+
+
+# Confirm GET /conversations lists only the caller's memberships.
+async def test_list_conversations_returns_only_callers_memberships(
+    client: AsyncClient,
+) -> None:
+    """Require Alice's sidebar to contain Bob and never Carol's unrelated pair."""
+
+    # Register three keyed accounts so two disjoint conversations can exist.
+    alice_token = await _register_login(client, _ALICE, key_fill=0x01)
+    # Bob is Alice's peer; his token checks the other side of the same row.
+    bob_token = await _register_login(client, _BOB, key_fill=0x02)
+    # Carol must not appear in Alice's list after only Alice-Bob is created.
+    await _register_login(client, _CAROL, key_fill=0x03)
+    # Create the Alice-Bob conversation that both of their lists should contain.
+    created = await client.post(
+        "/conversations",
+        json={"peer_username": "bob"},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # Creation must succeed so the list endpoint has a row to return.
+    assert created.status_code == 200
+    # Alice asks for every conversation she belongs to (no global message scan).
+    listed = await client.get("/conversations", headers={"Authorization": f"Bearer {alice_token}"})
+    # The list is a 200 with a conversations array, not a single conversation object.
+    assert listed.status_code == 200
+    # Parse the JSON body once for the membership assertions below.
+    payload = listed.json()
+    # The response wrapper is ConversationListResponse, not a bare array.
+    assert "conversations" in payload
+    # Alice has exactly one 1:1 conversation after this setup.
+    assert len(payload["conversations"]) == 1
+    # The peer username is Bob, never Carol.
+    assert payload["conversations"][0]["peer"]["username"] == "bob"
+    # Bob's own list must also see the same membership, not an empty sidebar.
+    # Reuse Bob's bearer header for the membership-symmetry GET below.
+    bob_headers = {"Authorization": f"Bearer {bob_token}"}
+    # Bob's own list must also see the same membership, not an empty sidebar.
+    bob_listed = await client.get("/conversations", headers=bob_headers)
+    # Bob likewise belongs to exactly one conversation.
+    assert len(bob_listed.json()["conversations"]) == 1
+
+
+# Confirm optional cursor pagination returns next_cursor and the remaining page.
+async def test_message_history_cursor_pagination(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Require limit=1 to return the oldest envelope and a cursor to the next."""
+
+    # Alice sends; Bob only needs a public key so the conversation can be created.
+    alice_token = await _register_login(client, _ALICE, key_fill=0x01)
+    # Register Bob with a distinct public-key fill byte.
+    await _register_login(client, _BOB, key_fill=0x02)
+    # Start the canonical Alice-Bob conversation used as the history scope.
+    created = await client.post(
+        "/conversations",
+        json={"peer_username": "bob"},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # History is conversation-scoped; never a flat /messages collection.
+    conversation_id = UUID(created.json()["id"])
+    # Resolve Alice's user id for persist_envelope's sender_id argument.
+    alice = await db_session.scalar(select(User).where(User.username == "alice"))
+    # Registration must have produced a users row.
+    assert alice is not None
+    # Persist the older envelope first (created_at is adjusted below).
+    first = await persist_envelope(
+        db_session,
+        conversation_id=conversation_id,
+        sender_id=alice.id,
+        ciphertext=b"page-one-ciphertext-blob",
+        nonce=b"n" * 24,
+        key_epoch=0,
+    )
+    # Persist the newer envelope that the second page must return.
+    second = await persist_envelope(
+        db_session,
+        conversation_id=conversation_id,
+        sender_id=alice.id,
+        ciphertext=b"page-two-ciphertext-blob",
+        nonce=b"n" * 24,
+        key_epoch=0,
+    )
+    # SQLite timestamps are second-precision; force a two-second gap.
+    earlier = datetime.now(UTC) - timedelta(seconds=2)
+    # The second row must sort after the first in oldest-first history.
+    later = datetime.now(UTC)
+    # Stamp the first persist as the older row.
+    first.created_at = earlier
+    # Stamp the second persist as the newer row.
+    second.created_at = later
+    # Commit the stamped timestamps so GET history sees the order.
+    await db_session.commit()
+    # Ask for a single oldest envelope and a cursor to the remainder.
+    page = await client.get(
+        f"/conversations/{conversation_id}/messages?limit=1",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # Parse the first page once.
+    body = page.json()
+    # The page size must be honored.
+    assert len(body["messages"]) == 1
+    # Oldest-first: the earlier envelope is page one.
+    assert body["messages"][0]["id"] == str(first.id)
+    # next_cursor is the last id of this page so the client can request after=.
+    assert body["next_cursor"] == str(first.id)
+    # Fetch the remaining page using the cursor from page one.
+    rest = await client.get(
+        f"/conversations/{conversation_id}/messages?limit=1&after={body['next_cursor']}",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # Parse the second page once.
+    rest_body = rest.json()
+    # One remaining envelope fills the second page.
+    assert len(rest_body["messages"]) == 1
+    # That envelope is the later persist.
+    assert rest_body["messages"][0]["id"] == str(second.id)
+    # No third page exists, so next_cursor is null.
+    assert rest_body["next_cursor"] is None

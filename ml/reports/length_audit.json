@@ -1,0 +1,180 @@
+{
+  "tokenizer_config": {
+    "model_name": "distilbert-base-uncased",
+    "truncation": true,
+    "max_length": 256,
+    "padding": false,
+    "source": "secure_chat_ml.distilbert.tokenize_texts"
+  },
+  "character_lengths": {
+    "train": {
+      "n": 49958,
+      "mean": 212.29470755434565,
+      "percentiles": {
+        "50": 183.0,
+        "90": 320.0,
+        "95": 385.0,
+        "99": 577.4300000000003,
+        "100": 40359.0
+      },
+      "overflow_by_cap": {
+        "128": 38737,
+        "256": 10742,
+        "384": 2507,
+        "512": 781,
+        "600": 256
+      }
+    },
+    "val": {
+      "n": 14275,
+      "mean": 209.14066549912434,
+      "percentiles": {
+        "50": 183.0,
+        "90": 320.0,
+        "95": 379.0,
+        "99": 565.5200000000004,
+        "100": 19760.0
+      },
+      "overflow_by_cap": {
+        "128": 11076,
+        "256": 3091,
+        "384": 681,
+        "512": 217,
+        "600": 61
+      }
+    },
+    "test": {
+      "n": 7137,
+      "mean": 223.72593526691887,
+      "percentiles": {
+        "50": 184.0,
+        "90": 322.0,
+        "95": 395.0,
+        "99": 591.6400000000003,
+        "100": 48187.0
+      },
+      "overflow_by_cap": {
+        "128": 5625,
+        "256": 1556,
+        "384": 387,
+        "512": 122,
+        "600": 44
+      }
+    },
+    "chat_eval_v1": {
+      "n": 200,
+      "mean": 59.37,
+      "percentiles": {
+        "50": 57.5,
+        "90": 91.0,
+        "95": 96.0,
+        "99": 100.03999999999996,
+        "100": 104.0
+      },
+      "overflow_by_cap": {
+        "128": 0,
+        "256": 0,
+        "384": 0,
+        "512": 0,
+        "600": 0
+      }
+    }
+  },
+  "wordpiece_lengths": {
+    "train": {
+      "n": 49958,
+      "mean": 62.92715881340326,
+      "percentiles": {
+        "50": 48.0,
+        "90": 92.0,
+        "95": 115.0,
+        "99": 192.0,
+        "100": 24817.0
+      },
+      "overflow_by_cap": {
+        "128": 1787,
+        "256": 297,
+        "384": 225,
+        "512": 196
+      }
+    },
+    "val": {
+      "n": 14275,
+      "mean": 60.57008756567426,
+      "percentiles": {
+        "50": 48.0,
+        "90": 92.0,
+        "95": 115.0,
+        "99": 174.26000000000022,
+        "100": 10811.0
+      },
+      "overflow_by_cap": {
+        "128": 490,
+        "256": 66,
+        "384": 48,
+        "512": 43
+      }
+    },
+    "test": {
+      "n": 7137,
+      "mean": 67.98444724674233,
+      "percentiles": {
+        "50": 49.0,
+        "90": 93.0,
+        "95": 117.0,
+        "99": 199.28000000000065,
+        "100": 20659.0
+      },
+      "overflow_by_cap": {
+        "128": 264,
+        "256": 46,
+        "384": 43,
+        "512": 31
+      }
+    },
+    "chat_eval_v1": {
+      "n": 200,
+      "mean": 16.34,
+      "percentiles": {
+        "50": 15.0,
+        "90": 25.0,
+        "95": 26.0,
+        "99": 29.0,
+        "100": 29.0
+      },
+      "overflow_by_cap": {
+        "128": 0,
+        "256": 0,
+        "384": 0,
+        "512": 0
+      }
+    }
+  },
+  "wordpiece_source": "distilbert-base-uncased local_files_only",
+  "distilbert_train_overflow_from_reports": {
+    "128": {
+      "truncated_train_rows": 1787,
+      "max_length": 128,
+      "source": "reports/distilbert_param_sweep/07_max_length_128/test_metrics.json"
+    },
+    "256": {
+      "truncated_train_rows": 297,
+      "max_length": 256,
+      "source": "reports/distilbert/test_metrics.json"
+    },
+    "384": {
+      "truncated_train_rows": 225,
+      "max_length": 384,
+      "source": "reports/distilbert_param_sweep/08_max_length_384/test_metrics.json"
+    },
+    "512": {
+      "truncated_train_rows": 196,
+      "max_length": 512,
+      "source": "reports/distilbert_param_sweep/09_max_length_512/test_metrics.json"
+    }
+  },
+  "chunking_rejected": true,
+  "chunking_rejection_reason": "Chunked (sliding-window) DistilBERT inference is rejected for this product. Only 297/49958 TRAIN rows overflow 256 WordPiece tokens (0.59%), and the locked chat-style eval set's p100 token length is 29.0 \u2014 well under the serving cap. Splitting a DM into windows would invent a second, untrained aggregation rule (max/mean/any-window-warn) on a domain that does not need it, and would multiply the 345 ms DistilBERT cost in the browser. The false-alarm problem is not truncation; it is the 0.85 in-domain legitimate-recall floor.",
+  "chat_style_eval_v1_used_for_training": false,
+  "chat_style_eval_v1_used_for_tuning": false
+}

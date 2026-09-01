@@ -1,0 +1,56 @@
+{
+  "trained_on_rows": 37460,
+  "trained_on": "train_plus_val_processed_chat_llm",
+  "processed_dir": "data/processed_chat_llm",
+  "rewrite_method": "llm_intent_v1",
+  "held_out_in_domain_test_rows": 4163,
+  "chat_eval_rows": 200,
+  "chosen_C": 1.0,
+  "chosen_threshold": 0.3,
+  "threshold_source": "reports/baseline_metrics.json (validation-frozen)",
+  "retuned_on_chat_eval": false,
+  "chat_style_eval_training_allowed": false,
+  "chat_eval_path": "data/chat_eval/chat_style_eval_v2.csv",
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.9655172413793104,
+      "recall": 0.56,
+      "f1-score": 0.7088607594936709,
+      "support": 100.0
+    },
+    "scam": {
+      "precision": 0.6901408450704225,
+      "recall": 0.98,
+      "f1-score": 0.8099173553719008,
+      "support": 100.0
+    },
+    "accuracy": 0.77,
+    "macro avg": {
+      "precision": 0.8278290432248665,
+      "recall": 0.77,
+      "f1-score": 0.7593890574327858,
+      "support": 200.0
+    },
+    "weighted avg": {
+      "precision": 0.8278290432248664,
+      "recall": 0.77,
+      "f1-score": 0.7593890574327858,
+      "support": 200.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      56,
+      44
+    ],
+    [
+      2,
+      98
+    ]
+  ],
+  "confusion_matrix_labels": [
+    "legitimate",
+    "scam"
+  ],
+  "live_url_reputation": false
+}

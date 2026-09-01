@@ -32,12 +32,20 @@ class Conversation(Base):
     # Identify each conversation with a non-guessable random UUID.
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     # Identify the lexicographically-smaller participant UUID (enforced below).
+    #
+    # `index=True` names this `ix_conversations_user_a_id`, matching the index the
+    # Alembic migration (`c4e8a2b91d07`) already creates. Before this fix the ORM
+    # model and the migration had drifted apart: tests build their schema from this
+    # model's metadata (`create_all`), so the test database silently lacked an index
+    # a real Postgres deployment already has, and any "does the schema match the
+    # migrations" assumption in this codebase was quietly false for this column.
     user_a_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     # Identify the lexicographically-larger participant UUID (enforced below).
+    # `index=True` names this `ix_conversations_user_b_id`, matching the migration.
     user_b_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     # Store the non-secret epoch counter the clients use for KDF subkey ids.
     #
@@ -54,6 +62,12 @@ class Conversation(Base):
     # the last bump. This is a timestamp, not a key.
     last_rotated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
+    )
+    # Count new envelopes persisted in the current epoch. Incremented on each
+    # new send (not edits), reset to 0 when current_epoch bumps. Replaces a
+    # per-persist COUNT(*) over messages so rotation stays O(1).
+    messages_in_current_epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
     # Record conversation creation time using the database server's clock.
     created_at: Mapped[datetime] = mapped_column(

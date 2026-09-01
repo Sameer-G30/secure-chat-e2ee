@@ -52,6 +52,8 @@ vi.mock('../api/conversationsClient', async () => {
     startOrFetchConversation: vi.fn(),
     fetchConversationEpoch: vi.fn(),
     fetchConversationMessages: vi.fn(),
+    deleteConversationMessage: vi.fn(async () => {}),
+    hideConversationMessage: vi.fn(async () => {}),
   }
 })
 
@@ -63,6 +65,36 @@ vi.mock('../api/contactsClient', async () => {
     ...actual,
     listContacts: vi.fn(async () => []),
     addContact: vi.fn(),
+    deleteContact: vi.fn(async () => {}),
+  }
+})
+
+// Mock prefix user search so typing two characters in Add contact never hits the network.
+vi.mock('../api/usersClient', async () => {
+  const actual = await vi.importActual<typeof import('../api/usersClient')>('../api/usersClient')
+  return {
+    ...actual,
+    searchUsers: vi.fn(async () => []),
+  }
+})
+
+// Mock server-side blocks so the more-options menu never hits GET/POST /blocks.
+vi.mock('../api/blocksClient', async () => {
+  const actual = await vi.importActual<typeof import('../api/blocksClient')>('../api/blocksClient')
+  return {
+    ...actual,
+    listBlocks: vi.fn(async () => []),
+    blockUser: vi.fn(),
+    unblockUser: vi.fn(async () => {}),
+  }
+})
+
+// Mock metadata-only reports so the report form never hits POST /reports.
+vi.mock('../api/reportsClient', async () => {
+  const actual = await vi.importActual<typeof import('../api/reportsClient')>('../api/reportsClient')
+  return {
+    ...actual,
+    reportUser: vi.fn(async () => {}),
   }
 })
 
@@ -97,12 +129,17 @@ vi.mock('../crypto/keyExchange', async () => {
 
 import { fetchPublicKey } from '../api/keysClient'
 import {
+  deleteConversationMessage,
   fetchConversationEpoch,
   fetchConversationMessages,
+  hideConversationMessage,
   startOrFetchConversation,
 } from '../api/conversationsClient'
 import { connectChatSocket } from '../api/chatSocket'
-import { addContact, listContacts } from '../api/contactsClient'
+import { addContact, deleteContact, listContacts } from '../api/contactsClient'
+import { searchUsers } from '../api/usersClient'
+import { blockUser, listBlocks } from '../api/blocksClient'
+import { reportUser } from '../api/reportsClient'
 import { classifyVerifiedPlaintext } from '../ml/scamClassifier'
 import { decryptMessage } from '../crypto/keyExchange'
 
@@ -113,6 +150,13 @@ const mockedFetchConversationMessages = vi.mocked(fetchConversationMessages)
 const mockedConnectChatSocket = vi.mocked(connectChatSocket)
 const mockedListContacts = vi.mocked(listContacts)
 const mockedAddContact = vi.mocked(addContact)
+const mockedDeleteContact = vi.mocked(deleteContact)
+const mockedSearchUsers = vi.mocked(searchUsers)
+const mockedListBlocks = vi.mocked(listBlocks)
+const mockedBlockUser = vi.mocked(blockUser)
+const mockedReportUser = vi.mocked(reportUser)
+const mockedDeleteConversationMessage = vi.mocked(deleteConversationMessage)
+const mockedHideConversationMessage = vi.mocked(hideConversationMessage)
 
 const conversationId = '00000000-0000-4000-8000-000000000001'
 const aliceId = '00000000-0000-4000-8000-000000000002'
@@ -227,6 +271,11 @@ describe('ChatScreen', () => {
     expect(envelope.keyEpoch).toBe(0)
     expect(new TextDecoder().decode(envelope.ciphertext)).not.toContain('secret handshake')
     expect(screen.getByText('secret handshake')).toBeInTheDocument()
+    const identity = sendEnvelope.mock.calls[0][2] as { messageId: string; revision: number }
+    expect(identity.revision).toBe(0)
+    expect(identity.messageId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    )
   })
 
   it('renders a received envelope after decrypt+verify succeeds', async () => {
@@ -241,6 +290,10 @@ describe('ChatScreen', () => {
       ciphertext: new Uint8Array(32).fill(1),
       nonce: new Uint8Array(24).fill(2),
       keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
     }
     capturedHandlers?.onEnvelope(relayed)
     expect(await screen.findByText('hello from bob')).toBeInTheDocument()
@@ -259,6 +312,10 @@ describe('ChatScreen', () => {
       ciphertext: new Uint8Array(32).fill(0xff),
       nonce: new Uint8Array(24).fill(2),
       keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
     })
 
     expect(await screen.findByText('message failed verification')).toBeInTheDocument()
@@ -293,6 +350,10 @@ describe('ChatScreen', () => {
       ciphertext: new Uint8Array(32).fill(1),
       nonce: new Uint8Array(24).fill(2),
       keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
     })
 
     expect(await screen.findByText('hello from bob')).toBeInTheDocument()
@@ -310,6 +371,10 @@ describe('ChatScreen', () => {
         ciphertext: new Uint8Array(32).fill(1),
         nonce: new Uint8Array(24).fill(2),
         keyEpoch: 0,
+        adVersion: 1,
+        messageId: null,
+        revision: 0,
+        editedAt: null,
       },
     ])
     expect(await screen.findByText('hello from bob')).toBeInTheDocument()
@@ -327,6 +392,10 @@ describe('ChatScreen', () => {
         ciphertext: new Uint8Array(32).fill(0xff),
         nonce: new Uint8Array(24).fill(2),
         keyEpoch: 0,
+        adVersion: 1,
+        messageId: null,
+        revision: 0,
+        editedAt: null,
       },
     ])
     expect(await screen.findByText('message failed verification')).toBeInTheDocument()
@@ -387,6 +456,10 @@ describe('ChatScreen', () => {
           ciphertext: new Uint8Array(32).fill(1),
           nonce: new Uint8Array(24).fill(2),
           keyEpoch: 0,
+          adVersion: 1,
+          messageId: null,
+          revision: 0,
+          editedAt: null,
         },
       ],
       { currentEpoch: 1 },
@@ -398,5 +471,160 @@ describe('ChatScreen', () => {
       expect.any(Uint8Array),
       expect.objectContaining({ conversationId, senderId: bobId }),
     )
+  })
+
+  it('opens settings and persists the system theme preference', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'System' }))
+    expect(window.localStorage.getItem('secure-chat-theme:alice')).toBe('system')
+  })
+
+  it('fills the add-contact field from a prefix search hit', async () => {
+    mockedSearchUsers.mockResolvedValue([{ username: 'bobby' }])
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    fireEvent.change(screen.getByLabelText('Add contact'), { target: { value: 'bo' } })
+    expect(await screen.findByRole('button', { name: 'bobby' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'bobby' }))
+    expect(screen.getByLabelText('Add contact')).toHaveValue('bobby')
+  })
+
+  it('offers hide-for-me on a received message and calls the hide endpoint', async () => {
+    mockedHideConversationMessage.mockResolvedValue(undefined)
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    capturedHandlers?.onEnvelope({
+      id: 'msg-1',
+      conversationId,
+      senderId: bobId,
+      ciphertext: new Uint8Array(32).fill(1),
+      nonce: new Uint8Array(24).fill(2),
+      keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
+    })
+    fireEvent.click(await screen.findByText('hello from bob'))
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide for me' }))
+    await waitFor(() => {
+      expect(mockedHideConversationMessage).toHaveBeenCalledWith(
+        'access-token',
+        conversationId,
+        'msg-1',
+      )
+    })
+  })
+
+  it('deletes an accepted own message for everyone', async () => {
+    mockedDeleteConversationMessage.mockResolvedValue(undefined)
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'secret handshake' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    capturedHandlers?.onAccepted?.('server-msg-1')
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'secret handshake' })).toHaveAttribute(
+        'data-pending',
+        'false',
+      )
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'secret handshake' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete for everyone' }))
+    await waitFor(() => {
+      expect(mockedDeleteConversationMessage).toHaveBeenCalledWith(
+        'access-token',
+        conversationId,
+        'server-msg-1',
+      )
+    })
+  })
+
+  it('warns that export writes plaintext to disk', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    fireEvent.click(screen.getByRole('button', { name: 'More' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Export chat' }))
+    expect(
+      screen.getByText(/writes decrypted plaintext to a/, { exact: false }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download plaintext' })).toBeInTheDocument()
+  })
+
+  it('blocks the open peer and tears down the local conversation', async () => {
+    mockedListBlocks.mockResolvedValue([])
+    mockedBlockUser.mockResolvedValue({
+      id: bobId,
+      username: 'bob',
+      createdAt: '2026-08-14T00:00:00Z',
+    })
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    fireEvent.click(screen.getByRole('button', { name: 'More' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Block' }))
+    await waitFor(() => {
+      expect(mockedBlockUser).toHaveBeenCalledWith('access-token', 'bob')
+    })
+    expect(screen.getByText(/bob is blocked/)).toBeInTheDocument()
+    expect(closeSocket).toHaveBeenCalled()
+  })
+
+  it('files a metadata-only report without attaching message contents', async () => {
+    mockedReportUser.mockResolvedValue(undefined)
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    fireEvent.click(screen.getByRole('button', { name: 'More' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Report' }))
+    expect(screen.getByText(/Message contents are not attached/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'unsolicited spam' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Submit report' }))
+    await waitFor(() => {
+      expect(mockedReportUser).toHaveBeenCalledWith('access-token', 'bob', 'unsolicited spam')
+    })
+  })
+
+  it('filters the in-memory transcript from Search in chat', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    capturedHandlers?.onEnvelope({
+      id: 'msg-1',
+      conversationId,
+      senderId: bobId,
+      ciphertext: new Uint8Array(32).fill(1),
+      nonce: new Uint8Array(24).fill(2),
+      keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
+    })
+    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'More' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Search in chat' }))
+    fireEvent.change(screen.getByLabelText('Search in chat'), { target: { value: 'nope' } })
+    expect(screen.getByText('No messages match that search on this device.')).toBeInTheDocument()
+  })
+
+  it('removes a contact from the server-side address book', async () => {
+    mockedListContacts.mockResolvedValue([
+      { id: bobId, username: 'bob', createdAt: '2026-08-14T00:00:00Z' },
+    ])
+    mockedDeleteContact.mockResolvedValue(undefined)
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    expect(await screen.findByRole('button', { name: 'Remove bob' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove bob' }))
+    await waitFor(() => {
+      expect(mockedDeleteContact).toHaveBeenCalledWith('access-token', 'bob')
+    })
   })
 })

@@ -126,6 +126,28 @@ describe('keyExchange', () => {
     expect(() => decryptMessage(envelope, bobSession.receiveKey, replayedMetadata)).toThrow()
   })
 
+  it('round-trips a v2 envelope and rejects a stale revision replay', () => {
+    const alice = generateIdentityKeyPair()
+    const bob = generateIdentityKeyPair()
+    const aliceSession = deriveClientSessionKeys(alice, bob.publicKey)
+    const bobSession = deriveServerSessionKeys(bob, alice.publicKey)
+    const original = {
+      conversationId: '00000000-0000-4000-8000-000000000010',
+      senderId: '00000000-0000-4000-8000-000000000011',
+      messageId: '00000000-0000-4000-8000-000000000012',
+      revision: 0,
+    }
+    const envelope = encryptMessage('first draft', aliceSession.transmitKey, 0, original)
+    expect(decryptMessage(envelope, bobSession.receiveKey, original)).toBe('first draft')
+    const edited = { ...original, revision: 1 }
+    expect(() => decryptMessage(envelope, bobSession.receiveKey, edited)).toThrow()
+    const v1Only = {
+      conversationId: original.conversationId,
+      senderId: original.senderId,
+    }
+    expect(() => decryptMessage(envelope, bobSession.receiveKey, v1Only)).toThrow()
+  })
+
   // Prove old envelopes still open after a later epoch subkey is derived (Slice 8).
   it('decrypts an epoch-0 envelope after deriving an epoch-1 subkey', () => {
     // Generate Alice's identity for the two-epoch round trip.

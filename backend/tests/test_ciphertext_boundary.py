@@ -48,7 +48,15 @@ _FORBIDDEN_COLUMNS = frozenset(
 
 # Confirm the messages table only stores envelope fields, never a body or key.
 def test_messages_table_stores_only_ciphertext_nonce_and_epoch() -> None:
-    """Require the messages table's columns to match spec §5 exactly."""
+    """Require the messages table's columns to match spec §5, plus pre-deployment additions.
+
+    ad_version/client_message_id/revision/edited_at were added to support safe
+    message editing (a client-generated message identity plus a revision
+    counter bound into the v2 associated data). None of the four is plaintext
+    or key material: ad_version and revision are small integers,
+    client_message_id is a UUID the client already chose before encrypting,
+    and edited_at is only a timestamp.
+    """
 
     columns = set(Base.metadata.tables["messages"].c.keys())
     assert columns == {
@@ -59,12 +67,65 @@ def test_messages_table_stores_only_ciphertext_nonce_and_epoch() -> None:
         "nonce",
         "key_epoch",
         "created_at",
+        "ad_version",
+        "client_message_id",
+        "revision",
+        "edited_at",
+    }
+
+
+# Confirm blocks store only who-blocked-whom metadata, never a message body or key.
+def test_blocks_table_stores_blocker_and_blocked_ids_only() -> None:
+    """Require (blocker_id, blocked_id) metadata, matching the pre-deployment review."""
+
+    columns = set(Base.metadata.tables["blocks"].c.keys())
+    assert columns == {
+        "id",
+        "blocker_id",
+        "blocked_id",
+        "created_at",
+    }
+
+
+# Confirm reports store only metadata and a bounded free-text reason, never message content.
+def test_reports_table_stores_metadata_only() -> None:
+    """Require (reporter_id, reported_id, reason, created_at) only.
+
+    There is deliberately no message-content or message-id column: the
+    server cannot read message ciphertext, so it cannot attach reported
+    message text without breaking the E2EE trust boundary.
+    """
+
+    columns = set(Base.metadata.tables["reports"].c.keys())
+    assert columns == {
+        "id",
+        "reporter_id",
+        "reported_id",
+        "reason",
+        "created_at",
+    }
+
+
+# Confirm message_hides stores only a per-owner hide marker, never a message body.
+def test_message_hides_table_stores_owner_and_message_ids_only() -> None:
+    """Require (owner_id, message_id, created_at) only, matching the pre-deployment review."""
+
+    columns = set(Base.metadata.tables["message_hides"].c.keys())
+    assert columns == {
+        "id",
+        "owner_id",
+        "message_id",
+        "created_at",
     }
 
 
 # Confirm conversations gained last_rotated_at without growing a key column.
 def test_conversations_table_stores_epoch_counter_not_keys() -> None:
-    """Require membership + current_epoch + last_rotated_at, never a session key."""
+    """Require membership + current_epoch + last_rotated_at, never a session key.
+
+    messages_in_current_epoch is an integer counter used so epoch rotation does
+    not COUNT(*) the messages table on every persist. It is not key material.
+    """
 
     # Read the mapped conversations columns after Slice 8's rotation timestamp.
     columns = set(Base.metadata.tables["conversations"].c.keys())
@@ -75,6 +136,7 @@ def test_conversations_table_stores_epoch_counter_not_keys() -> None:
         "user_b_id",
         "current_epoch",
         "last_rotated_at",
+        "messages_in_current_epoch",
         "created_at",
     }
 

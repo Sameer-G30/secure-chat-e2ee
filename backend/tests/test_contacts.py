@@ -158,3 +158,50 @@ async def test_contacts_require_authentication(client: AsyncClient) -> None:
     added = await client.post("/contacts", json={"username": "bob"})
     assert listed.status_code in (401, 403)
     assert added.status_code in (401, 403)
+
+
+# Confirm a saved contact can be removed, unlike the legacy app's add-only address book.
+async def test_delete_contact_removes_it_from_the_list(client: AsyncClient) -> None:
+    """Add Bob, delete him, and require GET /contacts to be empty afterward."""
+
+    alice_token = await _register_login(client, _ALICE, key_fill=0x01)
+    await _register_login(client, _BOB, key_fill=0x02)
+    headers = {"Authorization": f"Bearer {alice_token}"}
+
+    await client.post("/contacts", json={"username": "bob"}, headers=headers)
+    removed = await client.delete("/contacts/bob", headers=headers)
+    assert removed.status_code == 204
+
+    listed = await client.get("/contacts", headers=headers)
+    assert listed.json()["contacts"] == []
+
+
+# Confirm deleting a contact that was never saved is a no-op, not an error.
+async def test_delete_nonexistent_contact_is_a_noop(client: AsyncClient) -> None:
+    """Delete Bob without ever adding him and require 204."""
+
+    alice_token = await _register_login(client, _ALICE, key_fill=0x01)
+    await _register_login(client, _BOB, key_fill=0x02)
+    response = await client.delete(
+        "/contacts/bob", headers={"Authorization": f"Bearer {alice_token}"}
+    )
+    assert response.status_code == 204
+
+
+# Confirm deleting an unknown username 404s rather than silently no-oping.
+async def test_delete_unknown_username_returns_404(client: AsyncClient) -> None:
+    """Delete a handle that was never registered."""
+
+    alice_token = await _register_login(client, _ALICE, key_fill=0x01)
+    response = await client.delete(
+        "/contacts/nobody", headers={"Authorization": f"Bearer {alice_token}"}
+    )
+    assert response.status_code == 404
+
+
+# Confirm deleting a contact requires a bearer access token.
+async def test_delete_contact_requires_authentication(client: AsyncClient) -> None:
+    """DELETE /contacts/{username} with no Authorization header and require 401 or 403."""
+
+    response = await client.delete("/contacts/bob")
+    assert response.status_code in (401, 403)

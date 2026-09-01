@@ -145,6 +145,36 @@ export async function fetchConversationEpoch(
   return { conversationId: record.conversation_id, currentEpoch: record.current_epoch }
 }
 
+// List 1:1 conversations the signed-in account belongs to (sidebar).
+export async function listConversations(accessToken: string): Promise<ConversationRecord[]> {
+  const response = await fetch(`${API_BASE_URL}/conversations`, {
+    method: 'GET',
+    headers: authHeaders(accessToken),
+  })
+  const body: unknown = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new ConversationsApiError(
+      extractErrorDetail(body, 'Could not load conversations. Please try again shortly.'),
+      response.status,
+    )
+  }
+  const payload = body as { conversations?: unknown }
+  if (!Array.isArray(payload.conversations)) {
+    return []
+  }
+  return payload.conversations.map((row) =>
+    parseConversation(
+      row as {
+        id: string
+        current_epoch: number
+        created_at: string
+        self: { id: string; username: string; public_key: string | null }
+        peer: { id: string; username: string; public_key: string | null }
+      },
+    ),
+  )
+}
+
 // Fetch ciphertext-only envelopes for one conversation the caller belongs to.
 export async function fetchConversationMessages(
   accessToken: string,
@@ -191,6 +221,10 @@ function parseHistoryEnvelope(value: unknown): RelayedEnvelope | null {
     ciphertext?: unknown
     nonce?: unknown
     key_epoch?: unknown
+    ad_version?: unknown
+    message_id?: unknown
+    revision?: unknown
+    edited_at?: unknown
   }
   if (frame.type !== 'envelope') {
     return null
@@ -213,9 +247,54 @@ function parseHistoryEnvelope(value: unknown): RelayedEnvelope | null {
       ciphertext: decodeBase64(frame.ciphertext),
       nonce: decodeBase64(frame.nonce),
       keyEpoch: frame.key_epoch,
+      adVersion: typeof frame.ad_version === 'number' ? frame.ad_version : 1,
+      messageId: typeof frame.message_id === 'string' ? frame.message_id : null,
+      revision: typeof frame.revision === 'number' ? frame.revision : 0,
+      editedAt: typeof frame.edited_at === 'string' ? frame.edited_at : null,
     }
   } catch {
     return null
+  }
+}
+
+// Hard-delete one message for every participant ("delete for everyone"). Sender-only;
+// the peer is notified over the existing conversation WebSocket (`message_deleted`),
+// not by this call's response.
+export async function deleteConversationMessage(
+  accessToken: string,
+  conversationId: string,
+  messageId: string,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+    { method: 'DELETE', headers: authHeaders(accessToken) },
+  )
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null)
+    throw new ConversationsApiError(
+      extractErrorDetail(body, 'Could not delete that message. Please try again shortly.'),
+      response.status,
+    )
+  }
+}
+
+// Hide one message from the caller's own future history only ("delete for me"). The
+// peer's copy of the same envelope, and the peer's own history, are never affected.
+export async function hideConversationMessage(
+  accessToken: string,
+  conversationId: string,
+  messageId: string,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/hide`,
+    { method: 'POST', headers: authHeaders(accessToken) },
+  )
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null)
+    throw new ConversationsApiError(
+      extractErrorDetail(body, 'Could not hide that message. Please try again shortly.'),
+      response.status,
+    )
   }
 }
 
