@@ -4,6 +4,8 @@ Secure Chat is a portfolio-grade real-time messaging system designed so the serv
 
 > Status: Slice 9. Registration and login are real (Argon2id + Postgres + rate limiting), JWT access/refresh tokens rotate on use with reuse detection, X25519 public keys can be uploaded/looked up over the authenticated API, and the browser generates its own identity keypair and seals the private half in IndexedDB with Argon2id. Two browser tabs can hold a real end-to-end encrypted 1:1 conversation: the server stores and relays `{ciphertext, nonce, key_epoch}` only, and clients encrypt with XChaCha20-Poly1305 plus associated data before send. Contacts live in a server-side `contacts` table (not localStorage). Opening a chat loads conversation-scoped ciphertext history; this tab decrypts and classifies locally. Typing and presence travel as WebSocket metadata the server can see; draft text never leaves the device. Dark mode is persisted per signed-in username. The server increments `conversations.current_epoch` after **50 persisted messages since the last bump** in that conversation **or 24 hours** since `last_rotated_at` (or `created_at` if never bumped), then broadcasts `{type: "epoch", current_epoch: <int>}` on the existing conversation WebSocket. Clients encrypt the next send with that integer and still decrypt history using each envelope's `key_epoch`. `docker compose up` applies Alembic (including `last_rotated_at`) before uvicorn — no extra migrate command. Architecture diagram, local Compose deployment, and `docs/01-demo-script.md` are in this README; hosted deploy is Slice 10. DistilBERT remains the Slice 5 offline default (`max_length` 256, threshold 0.30) in `ml/reports/distilbert/`; the later one-at-a-time sweep winner (`max_length` 512, threshold 0.20) stays under `ml/reports/distilbert_param_sweep/` and is **not** the ChatScreen DistilBERT opt-in. ChatScreen eagerly classifies verified plaintext with **TF-IDF Best** (10k terms, C=1.0, threshold 0.20) via the TypeScript vectorizer + logistic-head ONNX. The published TF-IDF default (50k terms, C=0.25, threshold 0.30) remains the trainer default and a measured switch-back. DistilBERT-default (256-token int8) is a lazy opt-in checkbox; Word BiLSTM Best (8 epochs, threshold 0.20) is a second lazy opt-in (one heavy graph at a time). DistilBERT encodes the real token length (no pad-to-256/512) and runs in an ONNX Runtime Web Worker. All six checkpoints were exported to ONNX Runtime Web and loaded **one at a time** in Chromium (all six succeeded; banners matched Python fixtures 4/4). Full six-row table: `ml/reports/onnx_web_load_check.md`. Trainer defaults were not changed.
 
+
+
 ## Architecture
 
 The browser generates its X25519 identity keypair locally (`crypto/keyExchange.ts`), seals the private half in IndexedDB with a password-derived Argon2id key (`crypto/keyVault.ts`), derives directional session/epoch keys, encrypts with XChaCha20-Poly1305, and decrypts authenticated envelopes. FastAPI authenticates users, issues/rotates JWTs, stores/serves public keys, coordinates the non-secret per-conversation epoch counter (and increments it on the Slice 8 schedule), and relays conversation-scoped ciphertext over WebSocket. PostgreSQL stores account metadata (`users`), refresh-token hashes (`refresh_tokens`), 1:1 membership plus `current_epoch` and `last_rotated_at` (`conversations`), encrypted envelopes only (`messages`: ciphertext, nonce, key_epoch), and per-owner address-book edges (`contacts`: `owner_id`, `contact_id` only). The server has no code path that decrypts a message or handles a private/symmetric key.
@@ -24,6 +26,8 @@ flowchart LR
   end
   plainOut --> encrypt --> relay --> decrypt --> onnx --> render
 ```
+
+
 
 Everything inside the two device boxes is plaintext-capable. The server box has no decryption key, which is why scam classification runs on the endpoint after decrypt rather than as a server API. Typing, presence, and epoch-counter frames are metadata the server can see; they are not secrets. Epoch rotation still only increments a public integer — it is not forward secrecy.
 
@@ -64,13 +68,13 @@ Everything inside the two device boxes is plaintext-capable. The server box has 
 - **JWT library:** use maintained PyJWT instead of `python-jose`.
 - **Baseline ONNX:** perform TF-IDF in TypeScript and export only the numerical classifier head to avoid unsupported ONNX Runtime Web tokenizer operators.
 - **DistilBERT:** lazy-load the optional quantized model while eagerly loading the smaller baseline classifier.
-- **`users.public_key` stays nullable — a documented transitional rule, not an oversight.** `POST /keys/me` requires a bearer access token, but `POST /auth/register` intentionally returns no tokens. Key upload therefore happens on the client's first successful `POST /auth/login`. Adding a database `NOT NULL` constraint would force bundling key upload into registration or inventing a placeholder key. Slice 4 conversation and message endpoints are the enforcement point: they reject either party whose `public_key is None` before a conversation can start or an envelope can be relayed.
+- `users.public_key` **stays nullable — a documented transitional rule, not an oversight.** `POST /keys/me` requires a bearer access token, but `POST /auth/register` intentionally returns no tokens. Key upload therefore happens on the client's first successful `POST /auth/login`. Adding a database `NOT NULL` constraint would force bundling key upload into registration or inventing a placeholder key. Slice 4 conversation and message endpoints are the enforcement point: they reject either party whose `public_key is None` before a conversation can start or an envelope can be relayed.
 - **JWT design (A4, PyJWT).** Access tokens are short-lived (15 min) and carry `sub`/`username`/`type`/`exp`; they are never persisted server-side. Refresh tokens are also JWTs (self-verifying signature/expiry) but the server additionally stores only a SHA-256 hash of each issued refresh token in `refresh_tokens`, matching Part B's schema refinement (`created_at`, `revoked_at`, `UNIQUE(token_hash)`) — a database read can never be turned into a usable token, the same principle as never storing recoverable passwords.
 - **Refresh rotation with reuse detection.** Every `POST /auth/refresh` call revokes the presented token, win or lose. If a request presents a token that was *already* revoked (i.e., already rotated once, or logged out), that is treated as evidence of theft/replay: every other active refresh token for that account is revoked immediately, forcing the legitimate user to log in again everywhere. This goes beyond the spec's literal "rotated on use" requirement because rotation alone does not detect a stolen-and-replayed old token; verified by `backend/tests/test_auth_refresh.py`.
 - **Login never distinguishes "no such user" from "wrong password."** Both return the identical `401 invalid username or password`, so the endpoint cannot be used to enumerate registered usernames — an explicit anti-pattern the spec singles out for hash/secret comparisons, and the same principle applies to any account-existence oracle.
-- **`GET /keys/{username}` requires authentication even though public keys are "not secret data" (§6.2).** Gating it behind a valid access token prevents unauthenticated account-username enumeration via the key-lookup endpoint, at essentially no cost to legitimate use (a client already has to log in before it needs any peer's key).
-- **Client-side key vault uses `libsodium-wrappers-sumo`, loaded on demand.** `crypto/keyExchange.ts` deliberately stays on the smaller `libsodium-wrappers` build (crypto_kx/crypto_kdf/AEAD only) so it can load eagerly on first paint. `crypto/keyVault.ts` needs `crypto_pwhash` (Argon2id) for password-derived vault sealing, which only the larger "sumo" build provides; it is dynamically `import()`ed so its extra ~190 kB (gzipped) WASM payload is fetched only when a login/registration actually seals or unseals a local identity key — the same lazy-loading principle as A6's DistilBERT opt-in.
-- **`crypto_pwhash` uses `OPSLIMIT_INTERACTIVE`/`MEMLIMIT_INTERACTIVE`, not `MODERATE` or `SENSITIVE`.** These are libsodium's parameters tuned for immediate, in-browser, foreground use; `MODERATE`/`SENSITIVE` are meant for background/server contexts and would make every login noticeably slow in a tab. This is a documented security/UX trade-off: INTERACTIVE limits are weaker against offline brute-forcing of a stolen IndexedDB export than SENSITIVE limits would be, but the private key they protect is also independently useless without the account password, and IndexedDB exfiltration already requires a compromised endpoint (see the threat model above).
+- `GET /keys/{username}` **requires authentication even though public keys are "not secret data" (§6.2).** Gating it behind a valid access token prevents unauthenticated account-username enumeration via the key-lookup endpoint, at essentially no cost to legitimate use (a client already has to log in before it needs any peer's key).
+- **Client-side key vault uses** `libsodium-wrappers-sumo`**, loaded on demand.** `crypto/keyExchange.ts` deliberately stays on the smaller `libsodium-wrappers` build (crypto_kx/crypto_kdf/AEAD only) so it can load eagerly on first paint. `crypto/keyVault.ts` needs `crypto_pwhash` (Argon2id) for password-derived vault sealing, which only the larger "sumo" build provides; it is dynamically `import()`ed so its extra ~190 kB (gzipped) WASM payload is fetched only when a login/registration actually seals or unseals a local identity key — the same lazy-loading principle as A6's DistilBERT opt-in.
+- `crypto_pwhash` **uses** `OPSLIMIT_INTERACTIVE`**/**`MEMLIMIT_INTERACTIVE`**, not** `MODERATE` **or** `SENSITIVE`**.** These are libsodium's parameters tuned for immediate, in-browser, foreground use; `MODERATE`/`SENSITIVE` are meant for background/server contexts and would make every login noticeably slow in a tab. This is a documented security/UX trade-off: INTERACTIVE limits are weaker against offline brute-forcing of a stolen IndexedDB export than SENSITIVE limits would be, but the private key they protect is also independently useless without the account password, and IndexedDB exfiltration already requires a compromised endpoint (see the threat model above).
 - **In-memory-only tokens and session state.** `AuthContext` holds the access token, refresh token, and unsealed private key only in React state — never in `localStorage`/`sessionStorage`/cookies. Reloading the page always requires logging in again. httpOnly-cookie-based refresh-token persistence is noted as future hardening.
 - **WebSocket ciphertext relay (Slice 4).** `POST /conversations` starts or fetches the unique 1:1 row for a pair (`UNIQUE (user_a_id, user_b_id)` plus `CHECK (user_a_id < user_b_id)`). `GET /conversations/{id}/epoch` and the spec alias `GET /keys/conversations/{id}/epoch` return the non-secret `current_epoch` integer. `WS /ws/conversations/{id}` accepts `{ciphertext, nonce, key_epoch}`, persists BYTEA columns only, and fans the envelope to the peer. Optional `conversation_id` / `sender_id` on the frame are compared to the authenticated path/user and rejected on mismatch; cryptographic verify of associated data (`conversation_id`, `sender_id`, `key_epoch`) stays client-side (A1). Every messages-table query is scoped by `conversation_id`.
 - **Epoch is key separation, not forward secrecy.** Clients pass `current_epoch` into `crypto_kdf_derive_from_key` with context `msgkey01`. Slice 8 increments that integer after 50 persisted messages since the last bump **or** 24h since `last_rotated_at` / `created_at`, then broadcasts `{type: "epoch", current_epoch}` on the existing conversation WebSocket. The server still never generates or stores a key — only the counter. Encrypt uses the in-memory current epoch; decrypt uses the envelope's `key_epoch` so epoch-0 history still opens after a bump to 1. Relay still rejects `key_epoch` ahead of `current_epoch` and accepts `key_epoch <= current_epoch`. Compromising the static master session key still derives every epoch; this is compromise containment, not a Double Ratchet. The default does **not** rotate every message.
@@ -110,6 +114,8 @@ cp .env.example .env
 
 Replace placeholder passwords and signing keys in `.env`. Never commit that file.
 
+
+
 ### Backend without Docker
 
 ```bash
@@ -132,6 +138,8 @@ cd backend
 uv run alembic upgrade head   # apply migrations against DATABASE_URL
 uv run alembic downgrade base # roll back everything (local development only)
 ```
+
+
 
 ### Full local stack
 
@@ -176,6 +184,8 @@ curl http://localhost:8000/keys/conversations/<conversation_id>/epoch \
 curl -X POST http://localhost:8000/auth/refresh \
   -H 'Content-Type: application/json' -d '{"refresh_token":"<refresh_token>"}'
 ```
+
+
 
 ### Frontend
 
@@ -316,14 +326,16 @@ Slice 6 adds:
 
 Chromium sequential load (Playwright, `/?mlLoadCheck=1`). Fixture banners vs Python 4/4 on every row. These are **not** TEST accuracy.
 
-| # | Checkpoint | Load | Init | Infer / msg | Serving ONNX |
-| --- | --- | --- | --- | --- | --- |
-| 1 | DistilBERT best (512, 0.20) | yes, int8 | 642 ms | 759 ms | 64.3 MiB |
-| 2 | DistilBERT default (256, 0.30) | yes, int8 | 254 ms | 345 ms | 64.3 MiB |
-| 3 | BiLSTM best (8 ep, 0.20) | yes | 76 ms | 1.3 ms | 13.2 MiB |
-| 4 | BiLSTM default (4 ep, 0.30) | yes | 72 ms | 0.8 ms | 13.2 MiB |
-| 5 | TF-IDF best (10k, C=1.0, 0.20) | yes | 17 ms | 0.7 ms | 39 KiB |
-| 6 | TF-IDF default (50k, C=0.25, 0.30) | yes | 37 ms | 1.0 ms | 196 KiB |
+
+| #   | Checkpoint                         | Load      | Init   | Infer / msg | Serving ONNX |
+| --- | ---------------------------------- | --------- | ------ | ----------- | ------------ |
+| 1   | DistilBERT best (512, 0.20)        | yes, int8 | 642 ms | 759 ms      | 64.3 MiB     |
+| 2   | DistilBERT default (256, 0.30)     | yes, int8 | 254 ms | 345 ms      | 64.3 MiB     |
+| 3   | BiLSTM best (8 ep, 0.20)           | yes       | 76 ms  | 1.3 ms      | 13.2 MiB     |
+| 4   | BiLSTM default (4 ep, 0.30)        | yes       | 72 ms  | 0.8 ms      | 13.2 MiB     |
+| 5   | TF-IDF best (10k, C=1.0, 0.20)     | yes       | 17 ms  | 0.7 ms      | 39 KiB       |
+| 6   | TF-IDF default (50k, C=0.25, 0.30) | yes       | 37 ms  | 1.0 ms      | 196 KiB      |
+
 
 ChatScreen eager default is row 5 (TF-IDF Best). DistilBERT row 2 and Word BiLSTM Best row 3 are lazy opt-ins. Row 6 remains the published TF-IDF switch-back; row 4 remains the published LSTM switch-back.
 
@@ -339,12 +351,16 @@ Slice 8 adds:
 - **Frontend:** `onEpoch` updates the in-memory current epoch used for the **next encrypt only**. Decrypt/verify still uses the envelope's `key_epoch`. A bump does not clear the composer draft. DistilBERT/LSTM XOR, unpadded DistilBERT, ORT worker, and package-export `wasmPaths` are unchanged.
 - **ML:** none. Trainer defaults, ONNX exports, ChatScreen eager TF-IDF Best, and the six-row browser table are unchanged.
 
+
+
 Slice 9 adds:
 
-- **Backend:** migrate-on-start (`backend/docker-entrypoint.py`: `alembic upgrade head`, then uvicorn). Validation sweep on inbound REST/WS: shared URL-safe usernames, email/refresh length caps, Path bounds on `GET /keys/{username}`, empty-ciphertext WS reject. `.env.example` stays in lockstep with every `Settings` field (including `EPOCH_ROTATE_*` and `FRONTEND_ORIGIN`). Ciphertext-boundary tests now also pin `conversations.last_rotated_at`, `contacts` columns, conversation-scoped Message SELECTs, and the absence of a flat `/messages` route. CORS remains a single `FRONTEND_ORIGIN` with `GET`/`POST` only. Slice 8 rotation (50 messages OR 24h, WS `{type: "epoch", current_epoch}`) is unchanged. API version **0.9.0**.
+- **Backend:** migrate-on-start (`backend/docker-entrypoint.py`: `alembic upgrade head`, then uvicorn). Validation sweep on inbound REST/WS: shared URL-safe usernames, email/refresh length caps, Path bounds on `GET /keys/{username}`, empty-ciphertext WS reject. `.env.example` stays in lockstep with every `Settings` field (including `EPOCH_ROTATE_`* and `FRONTEND_ORIGIN`). Ciphertext-boundary tests now also pin `conversations.last_rotated_at`, `contacts` columns, conversation-scoped Message SELECTs, and the absence of a flat `/messages` route. CORS remains a single `FRONTEND_ORIGIN` with `GET`/`POST` only. Slice 8 rotation (50 messages OR 24h, WS `{type: "epoch", current_epoch}`) is unchanged. API version **0.9.0**.
 - **Frontend:** CI test that product TypeScript never uses `dangerouslySetInnerHTML` or `.innerHTML`. ChatScreen ML default, DistilBERT/LSTM XOR, unpadded DistilBERT, ORT worker, and package-export `wasmPaths` are unchanged. `frontend/.env.example` points at `http://localhost:8000`.
 - **ML:** none. Trainer defaults, ONNX exports, ChatScreen eager TF-IDF Best, and the six-row browser table are unchanged.
 - **Docs:** architecture mermaid (plaintext boundary), local Compose deployment, `docs/01-demo-script.md`. Hosted Render/Railway/Fly.io remains Slice 10. No demo video is checked in.
+
+
 
 ## Pre-deployment hardening (pre-Slice 10)
 
@@ -354,7 +370,7 @@ Before Slice 10 (hosted deployment), a dedicated review pass audited the whole c
 
 - **Token refresh was dead code.** `refreshTokens()` (`frontend/src/api/authClient.ts`) and `AuthContext.updateTokens` existed since Slice 3 but nothing ever called them, so a tab left open past the 15-minute access-token lifetime silently started failing every request. `frontend/src/api/authorizedRequest.ts` adds `withTokenRefresh()`, a single-flight refresh-and-retry wrapper: any wrapped call that gets a 401 refreshes the token pair exactly once (concurrent 401s share one in-flight refresh via `refreshSessionOnce()`, since the refresh token is single-use and two simultaneous rotations would strand every caller but the first) and retries. `ChatScreen` now routes `listContacts`, `addContact`, `fetchPublicKey`, `startOrFetchConversation`, `fetchConversationEpoch`, and `fetchConversationMessages` through it.
 - **WebSocket auth-expiry recovery.** See the threat-model bullet above on why a socket cannot be re-authenticated in place; `ChatScreen.handleSocketClose` now reacts to a `4401` close by refreshing and reopening the socket automatically.
-- **`ConnectionHub.broadcast()` had no failure isolation** (`backend/app/services/relay.py`): one dead socket raising inside the fan-out loop could abort delivery to every other member of the room. Each `send_json` is now individually guarded; a socket that fails to receive is evicted via the existing `leave()` path and the broadcast continues to everyone else.
+- `ConnectionHub.broadcast()` **had no failure isolation** (`backend/app/services/relay.py`): one dead socket raising inside the fan-out loop could abort delivery to every other member of the room. Each `send_json` is now individually guarded; a socket that fails to receive is evicted via the existing `leave()` path and the broadcast continues to everyone else.
 
 Verification: all 81 backend tests, all 50 frontend tests, and a clean `tsc -b --noEmit` pass unchanged after these fixes.
 
@@ -367,7 +383,7 @@ Verification: all 81 backend tests, all 50 frontend tests, and a clean `tsc -b -
 
 Verification: 81 backend tests, `ruff check .` clean, `mypy app tests` clean, 50 frontend tests, `tsc -b --noEmit` clean, `oxlint` clean (one pre-existing, unrelated warning on `AuthContext.tsx`'s Fast Refresh export shape).
 
-**Phase 3a — structural refactor: decomposing `ChatScreen.tsx`.** Before Phase 1 added roughly a dozen more features to it, `ChatScreen.tsx` had grown to ~790 lines mixing five separate concerns in one component: the server-side contact list, per-username theming, the DistilBERT/BiLSTM opt-in toggles, token-refresh plumbing, and the entire Slice 4-8 live-conversation state machine (key derivation, history hydration, the relay WebSocket, encrypt/send, decrypt/verify/classify, epoch rotation). Each concern now lives in its own hook under `frontend/src/hooks/`:
+**Phase 3a — structural refactor: decomposing** `ChatScreen.tsx`**.** Before Phase 1 added roughly a dozen more features to it, `ChatScreen.tsx` had grown to ~790 lines mixing five separate concerns in one component: the server-side contact list, per-username theming, the DistilBERT/BiLSTM opt-in toggles, token-refresh plumbing, and the entire Slice 4-8 live-conversation state machine (key derivation, history hydration, the relay WebSocket, encrypt/send, decrypt/verify/classify, epoch rotation). Each concern now lives in its own hook under `frontend/src/hooks/`:
 
 - `useAuthorizedRequest.ts` — the single-flight token-refresh wiring from Phase 0, shared by the two hooks below instead of duplicated.
 - `useContacts.ts` — the server-side address book. One behavior change, not just a move: the reload effect now keys on the signed-in *username* rather than the whole `session` object, so a token refresh (which replaces the session object every time — see `AuthContext.updateTokens`) no longer needlessly re-fetches the contact list.
@@ -399,10 +415,12 @@ The classifier is unchanged: `FeatureUnion(TfidfVectorizer(unigrams+bigrams, sub
 
 Stratified 70/20/10 split (`random_state=42`): 49,958 train / 14,275 validation / 7,137 test. Fit on TRAIN only. On VALIDATION, search `C ∈ {0.25, 1.0, 4.0}` and decision thresholds `0.30 … 0.70` (step 0.05). **Selection rule:** maximize scam recall subject to legitimate recall ≥ 0.85 (warn on at most ~15% of real ham; a few false alarms are acceptable, flooding ham is not). If that floor is infeasible, pick the point with best scam F1 and say so. Chosen operating point (`ml/reports/val_metrics.json`): **C = 0.25**, **threshold = 0.30**, reason `max_scam_recall_subject_to_legit_recall_floor` (floor feasible; validation legitimate recall 0.869, scam recall 0.988). On the earlier 10k sample the same rule had picked C=4.0; with the full corpus C=0.25 still meets the ham-recall floor and wins on scam recall. Those choices are frozen, then TEST is scored once (`ml/reports/baseline_metrics.json`):
 
-| Class | Precision | Recall | F1 |
-| --- | --- | --- | --- |
-| legitimate | 0.992 | 0.867 | 0.925 |
-| scam | 0.876 | 0.992 | 0.930 |
+
+| Class      | Precision | Recall | F1    |
+| ---------- | --------- | ------ | ----- |
+| legitimate | 0.992     | 0.867  | 0.925 |
+| scam       | 0.876     | 0.992  | 0.930 |
+
 
 ![Baseline confusion matrix](ml/reports/confusion_matrix.png)
 
@@ -416,16 +434,18 @@ TEST confusion matrix (rows = true, columns = predicted, order `[legitimate, sca
 
 **Comparison vs previous LLM-DM precision-floor point** (8,337 rows, C=0.25, threshold=0.30, legit-*precision* floor): TEST scam recall 0.992 vs 0.994; scam precision 0.876 vs 0.647; legitimate recall 0.867 vs 0.658.
 
-**Comparison vs `rule_based_v1` TEST** (C=4.0, threshold=0.30, 58,377 rows): scam recall 0.992 vs 0.996; scam precision 0.876 vs 0.968; legitimate recall 0.867 vs 0.976. The ham-recall floor still holds; chat-eval is the remaining false-alarm problem.
+**Comparison vs** `rule_based_v1` **TEST** (C=4.0, threshold=0.30, 58,377 rows): scam recall 0.992 vs 0.996; scam precision 0.876 vs 0.968; legitimate recall 0.867 vs 0.976. The ham-recall floor still holds; chat-eval is the remaining false-alarm problem.
 
 ### Out-of-domain check: locked 200-row chat-style eval set
 
 `data/label-schema.yaml`'s `evaluation_policy` reserves `ml/data/chat_eval/chat_style_eval_v1.csv` (200 hand-authored rows: 100 legitimate, 100 scam) exclusively for evaluation. `scripts/evaluate_chat_style_eval.py` fits the same pipeline on TRAIN+VAL of `processed_chat_llm` (64,233 rows; in-domain TEST stays held out) and only ever calls `.predict` / `predict_proba` on the 200 rows, using the frozen C=0.25 and threshold=0.30. It does not retune on this file (`ml/reports/chat_style_eval_metrics.json`):
 
-| Class | Precision | Recall | F1 |
-| --- | --- | --- | --- |
-| legitimate | 1.000 | 0.300 | 0.462 |
-| scam | 0.588 | 1.000 | 0.741 |
+
+| Class      | Precision | Recall | F1    |
+| ---------- | --------- | ------ | ----- |
+| legitimate | 1.000     | 0.300  | 0.462 |
+| scam       | 0.588     | 1.000  | 0.741 |
+
 
 Confusion matrix (rows = true, columns = predicted, order `[legitimate, scam]`): `[[30, 70], [0, 100]]` — 70 false positives out of 100 ordinary chat messages, and 0 missed scams out of 100 hand-authored scam-style chat messages.
 
@@ -445,31 +465,35 @@ This is a **separate** experiment from the published TF-IDF point above. It does
 
 **What we did.** Same 71,370-row `llm_intent_v1` corpus, same 70/20/10 split (`random_state=42`), same VAL rule (maximize scam recall subject to legitimate recall ≥ 0.85). Twenty-one full TRAIN-only retrains. Every run searched a **widened C grid** `{0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0}` (the published set was only `{0.25, 1.0, 4.0}`) and an **expanded VAL threshold grid** `0.20, 0.25, …, 0.70` (the published grid started at 0.30). Run `00` is that published TF-IDF recipe with only those VAL grids changed. Each other run changes **exactly one** training knob from that recipe (one-factor-at-a-time, not a full factorial — 10k features was not combined with trigrams, no-IDF, etc.):
 
-| Group | Documented default | Values tried (one at a time) |
-| --- | --- | --- |
-| max_features | 50,000 | 10,000, 25,000, 100,000, 200,000 |
-| ngram_range | (1, 2) | (1, 1), (1, 3), (2, 2) |
-| min_df | 2 | 1, 3, 5 |
-| max_df | 1.0 | 0.90, 0.95, 0.99 |
-| sublinear_tf | True | False |
-| use_idf | True | False |
-| stop_words | none | english |
-| class_weight | balanced | none |
-| solver | lbfgs | liblinear, saga |
-| url_features | True | False |
+
+| Group        | Documented default | Values tried (one at a time)     |
+| ------------ | ------------------ | -------------------------------- |
+| max_features | 50,000             | 10,000, 25,000, 100,000, 200,000 |
+| ngram_range  | (1, 2)             | (1, 1), (1, 3), (2, 2)           |
+| min_df       | 2                  | 1, 3, 5                          |
+| max_df       | 1.0                | 0.90, 0.95, 0.99                 |
+| sublinear_tf | True               | False                            |
+| use_idf      | True               | False                            |
+| stop_words   | none               | english                          |
+| class_weight | balanced           | none                             |
+| solver       | lbfgs              | liblinear, saga                  |
+| url_features | True               | False                            |
+
 
 Driver: `ml/scripts/sweep_baseline_params.py`. Per-run reports: `ml/reports/baseline_param_sweep/<run_id>/` (`report.md`, TEST/VAL/chat-eval JSON, confusion matrix). Joblib dumps (gitignored, not loaded together in RAM — one process per run): `ml/models/baseline_param_sweep/<run_id>/`. Ranking JSON: `ml/reports/baseline_param_sweep/ranking.json`.
 
-**What we found.** Once 0.20 and 0.25 were on the VAL grid, **20 of 21** retrains froze **threshold = 0.20**; `solver=saga` froze **0.40**. Most also moved from published **C = 0.25** to **C = 1.0**. The expanded-grid retrain of the published 50k recipe (`00_baseline_expanded_grids`) already beat the published 0.30-grid point on TEST scam misses (16 vs 27) with almost the same ham-warning count (487 vs 489). Among **training** knobs, **`max_features=10000`** was the change that clearly cut ham warnings without giving up scam recall (440 vs 487 ham warned vs that expanded-grid 50k recipe; 17 vs 16 TEST misses). Bigger vocabularies (100k / 200k) warned on *more* in-domain ham. Dropping IDF (`15_use_idf_false`) raised TEST accuracy and cut ham warnings further but tied the published point on TEST scam misses (27) and missed 2 locked chat scams. `solver=saga` was the only run that clearly got worse (63 TEST misses).
+**What we found.** Once 0.20 and 0.25 were on the VAL grid, **20 of 21** retrains froze **threshold = 0.20**; `solver=saga` froze **0.40**. Most also moved from published **C = 0.25** to **C = 1.0**. The expanded-grid retrain of the published 50k recipe (`00_baseline_expanded_grids`) already beat the published 0.30-grid point on TEST scam misses (16 vs 27) with almost the same ham-warning count (487 vs 489). Among **training** knobs, `max_features=10000` was the change that clearly cut ham warnings without giving up scam recall (440 vs 487 ham warned vs that expanded-grid 50k recipe; 17 vs 16 TEST misses). Bigger vocabularies (100k / 200k) warned on *more* in-domain ham. Dropping IDF (`15_use_idf_false`) raised TEST accuracy and cut ham warnings further but tied the published point on TEST scam misses (27) and missed 2 locked chat scams. `solver=saga` was the only run that clearly got worse (63 TEST misses).
 
 **Top 3 by combined TEST score.** Rank by the equal-weight mean of **scam recall**, **ham (legitimate) precision**, and **overall accuracy** together on the 7,137-row TEST set (VAL-frozen C and threshold; the locked 200-row chat eval was scored after freeze and was **not** used to pick the ranking):
 
-| Rank | Run | What changed | C | Thr | TEST scam recall | TEST ham precision | TEST accuracy | Combined mean | TEST missed / ham warned | Chat missed / ham warned |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `01_max_features_10000` | max_features **10000** | 1.0 | 0.20 | 0.9951 | 0.9948 | 0.9360 | **0.9753** | 17 / 440 | 0 / 61 |
-| 2 | `15_use_idf_false` | **no IDF** (still 50k terms) | 2.0 | 0.20 | 0.9922 | 0.9918 | 0.9414 | **0.9752** | 27 / 391 | 2 / 58 |
-| 3 | `02_max_features_25000` | max_features **25000** | 1.0 | 0.20 | 0.9954 | 0.9950 | 0.9327 | **0.9744** | 16 / 464 | 0 / 67 |
-| Published (kept) | `reports/baseline_metrics.json` | 50k terms, C grid {0.25, 1, 4}, thr 0.30–0.70 | 0.25 | 0.30 | 0.9922 | 0.9916 | 0.9277 | 0.9705 | 27 / 489 | 0 / 70 |
+
+| Rank             | Run                             | What changed                                  | C    | Thr  | TEST scam recall | TEST ham precision | TEST accuracy | Combined mean | TEST missed / ham warned | Chat missed / ham warned |
+| ---------------- | ------------------------------- | --------------------------------------------- | ---- | ---- | ---------------- | ------------------ | ------------- | ------------- | ------------------------ | ------------------------ |
+| 1                | `01_max_features_10000`         | max_features **10000**                        | 1.0  | 0.20 | 0.9951           | 0.9948             | 0.9360        | **0.9753**    | 17 / 440                 | 0 / 61                   |
+| 2                | `15_use_idf_false`              | **no IDF** (still 50k terms)                  | 2.0  | 0.20 | 0.9922           | 0.9918             | 0.9414        | **0.9752**    | 27 / 391                 | 2 / 58                   |
+| 3                | `02_max_features_25000`         | max_features **25000**                        | 1.0  | 0.20 | 0.9954           | 0.9950             | 0.9327        | **0.9744**    | 16 / 464                 | 0 / 67                   |
+| Published (kept) | `reports/baseline_metrics.json` | 50k terms, C grid {0.25, 1, 4}, thr 0.30–0.70 | 0.25 | 0.30 | 0.9922           | 0.9916             | 0.9277        | 0.9705        | 27 / 489                 | 0 / 70                   |
+
 
 **Offline quality candidate:** rank 1, `max_features=10000`, other knobs at documented defaults, C=1.0, threshold=0.20. Reports: `ml/reports/baseline_param_sweep/01_max_features_10000/`. Pipeline: `ml/models/baseline_param_sweep/01_max_features_10000/pipeline.joblib`. Chat-eval still catches 100/100 locked scams and warns on **61/100** ordinary DMs (vs 70/100 published). DistilBERT remains far quieter on chat ham (9/100 in Slice 5). Do not retune C or the threshold on the locked 200-row file.
 
@@ -495,6 +519,8 @@ uv run python scripts/evaluate_chat_style_eval.py \
   --reports-dir reports/baseline_param_sweep/01_max_features_10000
 ```
 
+
+
 ### How to retrain the published TF-IDF baseline
 
 The 71k `llm_intent_v1` rewrite is already complete — do not run `rewrite_chat_register_llm.py` again. From `ml/`:
@@ -518,10 +544,12 @@ Same full `llm_intent_v1` corpus (71,370 rows), same stratified 70/20/10 split (
 
 Threshold search is VAL-only on `0.30 … 0.70` step 0.05. Chosen operating point (`ml/reports/distilbert/val_metrics.json`): **threshold = 0.30**, reason `max_scam_recall_subject_to_legit_recall_floor` (floor feasible; VAL legitimate recall 0.979, scam recall 0.985). TEST once (`ml/reports/distilbert/test_metrics.json`):
 
-| Class | Precision | Recall | F1 |
-| --- | --- | --- | --- |
-| legitimate | 0.984 | 0.982 | 0.983 |
-| scam | 0.981 | 0.983 | 0.982 |
+
+| Class      | Precision | Recall | F1    |
+| ---------- | --------- | ------ | ----- |
+| legitimate | 0.984     | 0.982  | 0.983 |
+| scam       | 0.981     | 0.983  | 0.982 |
+
 
 ![DistilBERT confusion matrix](ml/reports/distilbert/confusion_matrix.png)
 
@@ -529,21 +557,25 @@ TEST confusion matrix (rows = true, columns = predicted, order `[legitimate, sca
 
 Locked chat eval is predict-only with that TRAIN-fitted checkpoint and the VAL-frozen threshold (`ml/reports/distilbert/chat_style_eval_metrics.json`). It is **not** refit on TRAIN+VAL (TF-IDF chat eval was, because logistic regression is cheap). DistilBERT therefore scores the 200 rows after seeing 49,958 TRAIN rows, not 64,233 TRAIN+VAL:
 
-| Class | Precision | Recall | F1 |
-| --- | --- | --- | --- |
-| legitimate | 0.883 | 0.910 | 0.897 |
-| scam | 0.907 | 0.880 | 0.893 |
+
+| Class      | Precision | Recall | F1    |
+| ---------- | --------- | ------ | ----- |
+| legitimate | 0.883     | 0.910  | 0.897 |
+| scam       | 0.907     | 0.880  | 0.893 |
+
 
 Chat-eval confusion matrix: `[[91, 9], [12, 88]]` — 9 false positives out of 100 ordinary chat messages, and 12 missed scams out of 100 hand-authored scam-style chat messages.
 
 **DistilBERT vs current full-corpus TF-IDF (C=0.25, t=0.30)** — not vs the old 10k C=4.0 point:
 
-| Set | Model | Scam recall | Ham warned | Scams missed |
-| --- | --- | --- | --- | --- |
-| TEST (7,137) | TF-IDF | 0.992 | 489 / 3,663 | 27 / 3,474 |
-| TEST (7,137) | DistilBERT | 0.983 | 66 / 3,663 | 60 / 3,474 |
-| Chat eval (200) | TF-IDF | 1.000 | 70 / 100 | 0 / 100 |
-| Chat eval (200) | DistilBERT | 0.880 | 9 / 100 | 12 / 100 |
+
+| Set             | Model      | Scam recall | Ham warned  | Scams missed |
+| --------------- | ---------- | ----------- | ----------- | ------------ |
+| TEST (7,137)    | TF-IDF     | 0.992       | 489 / 3,663 | 27 / 3,474   |
+| TEST (7,137)    | DistilBERT | 0.983       | 66 / 3,663  | 60 / 3,474   |
+| Chat eval (200) | TF-IDF     | 1.000       | 70 / 100    | 0 / 100      |
+| Chat eval (200) | DistilBERT | 0.880       | 9 / 100     | 12 / 100     |
+
 
 The Slice 5 goal was to cut chat ham false alarms **below 70/100** without giving up ~0.99 in-domain / 1.00 chat-eval scam recall. DistilBERT **met the false-alarm goal** (9/100 chat ham warned; 66 vs 489 in-domain). In-domain scam recall stayed near 0.99 (0.983 vs 0.992: 33 extra TEST misses). Chat-eval scam recall **did drop** (0.880 vs 1.000: 12 misses). That is the honest VAL-frozen trade-off, not a reason to hunt 0.15 / 0.11 on the 200-row file. Side-by-side JSON: `ml/reports/distilbert/comparison_vs_tfidf.json`.
 
@@ -555,27 +587,31 @@ This is a **separate** experiment from the Slice 5 DistilBERT point above. It do
 
 **Protocol.** Same 71,370-row `llm_intent_v1` corpus, same 70/20/10 split (`random_state=42`), same VAL rule (maximize scam recall subject to legitimate recall ≥ 0.85). Eighteen full TRAIN-only retrains on the RTX 4060 (~3.1 h). One run is the documented recipe with an **expanded VAL threshold grid** `0.20, 0.25, …, 0.70`. Each other run changes **exactly one** training knob from that recipe:
 
-| Group | Documented default | Values tried (one at a time) |
-| --- | --- | --- |
-| learning rate | `2e-5` | `1e-5`, `3e-5`, `5e-5` |
-| epochs | 3 | 2, 4, 5 |
-| max_length | 256 | 128, 384, **512** |
-| train batch size | 16 | 8, 32 |
-| warmup ratio | 0.1 | 0.0, 0.06, 0.2 |
-| weight decay | 0.01 | 0.0, 0.05, 0.1 |
+
+| Group            | Documented default | Values tried (one at a time) |
+| ---------------- | ------------------ | ---------------------------- |
+| learning rate    | `2e-5`             | `1e-5`, `3e-5`, `5e-5`       |
+| epochs           | 3                  | 2, 4, 5                      |
+| max_length       | 256                | 128, 384, **512**            |
+| train batch size | 16                 | 8, 32                        |
+| warmup ratio     | 0.1                | 0.0, 0.06, 0.2               |
+| weight decay     | 0.01               | 0.0, 0.05, 0.1               |
+
 
 Driver: `ml/scripts/sweep_distilbert_params.py`. Per-run reports: `ml/reports/distilbert_param_sweep/<run_id>/`. Checkpoints (gitignored): `ml/models/distilbert_param_sweep/<run_id>/`. Ranking JSON: `ml/reports/distilbert_param_sweep/ranking.json`.
 
-**What we found.** Once 0.20 and 0.25 were on the VAL grid, **17 of 18** retrains froze **threshold = 0.20**; `learning_rate=5e-5` froze **0.25**. None froze 0.30 or higher. The expanded-grid retrain of the Slice 5 recipe already beat the published 0.30-grid point on TEST scam recall (54 vs 60 misses) and chat-eval (10 vs 12 misses). Among **training** knobs, **`max_length=512`** was the only change that clearly beat that expanded-grid baseline on TEST scam recall (49 vs 54 misses). Five epochs and `learning_rate=3e-5` did not help. This was one-factor-at-a-time, not a full factorial: 512 was not combined with batch 32, four epochs, etc.
+**What we found.** Once 0.20 and 0.25 were on the VAL grid, **17 of 18** retrains froze **threshold = 0.20**; `learning_rate=5e-5` froze **0.25**. None froze 0.30 or higher. The expanded-grid retrain of the Slice 5 recipe already beat the published 0.30-grid point on TEST scam recall (54 vs 60 misses) and chat-eval (10 vs 12 misses). Among **training** knobs, `max_length=512` was the only change that clearly beat that expanded-grid baseline on TEST scam recall (49 vs 54 misses). Five epochs and `learning_rate=3e-5` did not help. This was one-factor-at-a-time, not a full factorial: 512 was not combined with batch 32, four epochs, etc.
 
 **Top 3 by combined TEST score.** Rank by the equal-weight mean of **scam recall**, **ham (legitimate) precision**, and **overall accuracy** on the 7,137-row TEST set (VAL-frozen threshold; chat eval not used to pick the ranking):
 
-| Rank | Run | What changed | Thr | TEST scam recall | TEST ham precision | TEST accuracy | Combined mean | TEST missed / ham warned | Chat missed / ham warned |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `09_max_length_512` | max_length **512** | 0.20 | 0.9859 | 0.9866 | 0.9837 | **0.9854** | 49 / 67 | 8 / 6 |
-| 2 | `11_batch_size_32` | batch **32** (still 256 tokens) | 0.20 | 0.9856 | 0.9863 | 0.9837 | **0.9852** | 50 / 66 | 10 / 6 |
-| 3 | `05_epochs_4` | **4** epochs (still 256 tokens) | 0.20 | 0.9847 | 0.9855 | 0.9846 | **0.9849** | 53 / 57 | 10 / 6 |
-| Slice 5 default (kept) | `reports/distilbert/` | max_length 256, grid 0.30–0.70 | 0.30 | 0.9827 | 0.9836 | 0.9823 | 0.9829 | 60 / 66 | 12 / 9 |
+
+| Rank                   | Run                   | What changed                    | Thr  | TEST scam recall | TEST ham precision | TEST accuracy | Combined mean | TEST missed / ham warned | Chat missed / ham warned |
+| ---------------------- | --------------------- | ------------------------------- | ---- | ---------------- | ------------------ | ------------- | ------------- | ------------------------ | ------------------------ |
+| 1                      | `09_max_length_512`   | max_length **512**              | 0.20 | 0.9859           | 0.9866             | 0.9837        | **0.9854**    | 49 / 67                  | 8 / 6                    |
+| 2                      | `11_batch_size_32`    | batch **32** (still 256 tokens) | 0.20 | 0.9856           | 0.9863             | 0.9837        | **0.9852**    | 50 / 66                  | 10 / 6                   |
+| 3                      | `05_epochs_4`         | **4** epochs (still 256 tokens) | 0.20 | 0.9847           | 0.9855             | 0.9846        | **0.9849**    | 53 / 57                  | 10 / 6                   |
+| Slice 5 default (kept) | `reports/distilbert/` | max_length 256, grid 0.30–0.70  | 0.30 | 0.9827           | 0.9836             | 0.9823        | 0.9829        | 60 / 66                  | 12 / 9                   |
+
 
 **Offline quality candidate:** rank 1, `max_length=512`, other knobs at documented defaults, threshold 0.20. Reports: `ml/reports/distilbert_param_sweep/09_max_length_512/`. Weights: `ml/models/distilbert_param_sweep/09_max_length_512/`.
 
@@ -618,10 +654,12 @@ Same full `llm_intent_v1` corpus (71,370 rows), same stratified 70/20/10 split (
 
 Chosen operating point (`ml/reports/lstm/val_metrics.json`): **threshold = 0.30**, reason `max_scam_recall_subject_to_legit_recall_floor` (floor feasible; VAL legitimate recall 0.947, scam recall 0.982). TEST once (`ml/reports/lstm/test_metrics.json`):
 
-| Class | Precision | Recall | F1 |
-| --- | --- | --- | --- |
-| legitimate | 0.986 | 0.945 | 0.965 |
-| scam | 0.945 | 0.986 | 0.965 |
+
+| Class      | Precision | Recall | F1    |
+| ---------- | --------- | ------ | ----- |
+| legitimate | 0.986     | 0.945  | 0.965 |
+| scam       | 0.945     | 0.986  | 0.965 |
+
 
 ![Word BiLSTM confusion matrix](ml/reports/lstm/confusion_matrix.png)
 
@@ -629,29 +667,33 @@ TEST confusion matrix (rows = true, columns = predicted, order `[legitimate, sca
 
 Locked chat eval is predict-only with that TRAIN-fitted checkpoint and the VAL-frozen threshold (`ml/reports/lstm/chat_style_eval_metrics.json`). It is **not** refit on TRAIN+VAL (same as DistilBERT):
 
-| Class | Precision | Recall | F1 |
-| --- | --- | --- | --- |
-| legitimate | 0.844 | 0.760 | 0.800 |
-| scam | 0.782 | 0.860 | 0.819 |
+
+| Class      | Precision | Recall | F1    |
+| ---------- | --------- | ------ | ----- |
+| legitimate | 0.844     | 0.760  | 0.800 |
+| scam       | 0.782     | 0.860  | 0.819 |
+
 
 Chat-eval confusion matrix: `[[76, 24], [14, 86]]` — 24 false positives out of 100 ordinary chat messages, and 14 missed scams out of 100 hand-authored scam-style chat messages.
 
 **Word BiLSTM vs published TF-IDF (C=0.25, t=0.30) and Slice 5 DistilBERT (t=0.30):**
 
-| Set | Model | Scam recall | Ham warned | Scams missed |
-| --- | --- | --- | --- | --- |
-| TEST (7,137) | TF-IDF | 0.992 | 489 / 3,663 | 27 / 3,474 |
-| TEST (7,137) | DistilBERT | 0.983 | 66 / 3,663 | 60 / 3,474 |
-| TEST (7,137) | Word BiLSTM + URL | 0.986 | 200 / 3,663 | 49 / 3,474 |
-| Chat eval (200) | TF-IDF | 1.000 | 70 / 100 | 0 / 100 |
-| Chat eval (200) | DistilBERT | 0.880 | 9 / 100 | 12 / 100 |
-| Chat eval (200) | Word BiLSTM + URL | 0.860 | 24 / 100 | 14 / 100 |
+
+| Set             | Model             | Scam recall | Ham warned  | Scams missed |
+| --------------- | ----------------- | ----------- | ----------- | ------------ |
+| TEST (7,137)    | TF-IDF            | 0.992       | 489 / 3,663 | 27 / 3,474   |
+| TEST (7,137)    | DistilBERT        | 0.983       | 66 / 3,663  | 60 / 3,474   |
+| TEST (7,137)    | Word BiLSTM + URL | 0.986       | 200 / 3,663 | 49 / 3,474   |
+| Chat eval (200) | TF-IDF            | 1.000       | 70 / 100    | 0 / 100      |
+| Chat eval (200) | DistilBERT        | 0.880       | 9 / 100     | 12 / 100     |
+| Chat eval (200) | Word BiLSTM + URL | 0.860       | 24 / 100    | 14 / 100     |
+
 
 In-domain the LSTM sits between TF-IDF and DistilBERT on the VAL-frozen operating point: fewer ham warnings than TF-IDF (200 vs 489), more than DistilBERT (66), and slightly **fewer** TEST misses than DistilBERT (49 vs 60). Chat-eval is quieter than TF-IDF (24 vs 70 ham warned) without collapsing scam recall into something unusable (0.860). Side-by-side JSON: `ml/reports/lstm/comparison_vs_tfidf_and_distilbert.json`. Link slices: TEST URL-bearing scam recall **0.995** (4/786 FN); chat-eval URL-bearing scam recall **1.000** (0/6 FN). The 14 chat-eval misses are all no-URL social-engineering DMs.
 
 **Char LSTM: do not explore.** Criterion A is only weakly true on chat-eval (14 extra misses vs TF-IDF’s 0; TEST is *better* than DistilBERT). B is false (0/14 extra FNs are URL-bearing). C is false (URL concat already matches TF-IDF on URL scams). Misses are mostly no-URL social-engineering; DistilBERT is the semantic model for that gap. Decision file: `ml/reports/lstm/char_lstm_decision.md`.
 
-Slice 6 exported this checkpoint as `lstm_default` and measured it in ONNX Runtime Web. ChatScreen's LSTM toggle lazy-loads **`lstm_best`** (8 epochs, threshold 0.20), not this published 4-epoch point. Keep `lstm_default` as the switch-back if the 0.20 cut over-warns in the tab.
+Slice 6 exported this checkpoint as `lstm_default` and measured it in ONNX Runtime Web. ChatScreen's LSTM toggle lazy-loads `lstm_best` (8 epochs, threshold 0.20), not this published 4-epoch point. Keep `lstm_default` as the switch-back if the 0.20 cut over-warns in the tab.
 
 ### Word BiLSTM one-at-a-time parameter sweep (offline quality candidate; not the ONNX default yet)
 
@@ -663,39 +705,45 @@ Per-run reports: `ml/reports/lstm_param_sweep/<run_id>/` (`report.md`, TEST/VAL/
 
 Knobs tried, one group at a time:
 
-| Group | Documented default | Values tried (one at a time) |
-| --- | --- | --- |
-| learning rate | `1e-3` | `5e-4`, `2e-3`, `5e-3` |
-| epochs | 4 | 3, 5, 6, **8** |
-| max_tokens | 128 | 64, 192, 256 |
-| embed_dim | 128 | 64, **256** |
-| hidden_size | 128 | 64, 256 |
-| num_layers | 1 | 2, 3 |
-| dropout | 0.3 | 0.0, 0.2, 0.5 |
-| max_vocab_size | 25,000 | 10,000, 15,000, 50,000 |
-| batch_size | 128 | 64, 256 |
-| weight_decay | 0.0 | `1e-4`, `1e-3` |
-| grad_clip | 1.0 | 0.5, 2.0 |
-| class_weight | balanced | none |
-| url_features | True | False |
 
-**What we found.** Once 0.20 and 0.25 were on the VAL grid, **all 33 retrains** froze **threshold = 0.20**. None froze 0.25 or the published 0.30. The expanded-grid retrain of the published 4-epoch recipe (`00_baseline_expanded_grid`) already beat the published 0.30-grid point on combined TEST mean (0.9803 vs 0.9790) with fewer ham warnings (144 vs 200) but **more** TEST misses (55 vs 49) — the lower cut catches VAL scams at the ham-recall floor, then TEST pays a few extra FNs. Among **training** knobs, **`epochs=8`** was the change that clearly cut TEST misses without exploding ham warnings (30 vs 49 published; 179 vs 200 ham warned). `learning_rate=5e-3` was almost as good (31 misses). Combining those two winners (and adding `embed_dim=256`) **did not** beat 8 epochs alone: the combos were quieter on ham (90 and 87 TEST warnings) but missed more scams (61 and 67). Adam weight decay hurt. `epochs=5` had the fewest TEST misses (16) but warned on 385 ham rows, so it loses the combined-mean ranking.
+| Group          | Documented default | Values tried (one at a time) |
+| -------------- | ------------------ | ---------------------------- |
+| learning rate  | `1e-3`             | `5e-4`, `2e-3`, `5e-3`       |
+| epochs         | 4                  | 3, 5, 6, **8**               |
+| max_tokens     | 128                | 64, 192, 256                 |
+| embed_dim      | 128                | 64, **256**                  |
+| hidden_size    | 128                | 64, 256                      |
+| num_layers     | 1                  | 2, 3                         |
+| dropout        | 0.3                | 0.0, 0.2, 0.5                |
+| max_vocab_size | 25,000             | 10,000, 15,000, 50,000       |
+| batch_size     | 128                | 64, 256                      |
+| weight_decay   | 0.0                | `1e-4`, `1e-3`               |
+| grad_clip      | 1.0                | 0.5, 2.0                     |
+| class_weight   | balanced           | none                         |
+| url_features   | True               | False                        |
+
+
+**What we found.** Once 0.20 and 0.25 were on the VAL grid, **all 33 retrains** froze **threshold = 0.20**. None froze 0.25 or the published 0.30. The expanded-grid retrain of the published 4-epoch recipe (`00_baseline_expanded_grid`) already beat the published 0.30-grid point on combined TEST mean (0.9803 vs 0.9790) with fewer ham warnings (144 vs 200) but **more** TEST misses (55 vs 49) — the lower cut catches VAL scams at the ham-recall floor, then TEST pays a few extra FNs. Among **training** knobs, `epochs=8` was the change that clearly cut TEST misses without exploding ham warnings (30 vs 49 published; 179 vs 200 ham warned). `learning_rate=5e-3` was almost as good (31 misses). Combining those two winners (and adding `embed_dim=256`) **did not** beat 8 epochs alone: the combos were quieter on ham (90 and 87 TEST warnings) but missed more scams (61 and 67). Adam weight decay hurt. `epochs=5` had the fewest TEST misses (16) but warned on 385 ham rows, so it loses the combined-mean ranking.
 
 **Top 3 by combined TEST score.** Rank by the **equal-weight mean of scam recall, ham (legitimate) precision, and overall accuracy together** on the 7,137-row TEST set (VAL-frozen threshold; the locked 200-row chat eval was scored after freeze and was **not** used to pick the ranking):
 
-| Rank | Run | What changed | Thr | TEST scam recall | TEST ham precision | TEST accuracy | Combined mean | TEST missed / ham warned | Chat missed / ham warned |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `07_epochs_8` | **8** epochs | 0.20 | 0.9914 | 0.9915 | 0.9707 | **0.9845** | 30 / 179 | 11 / 29 |
-| 2 | `03_learning_rate_5e-3` | lr **5e-3** | 0.20 | 0.9911 | 0.9912 | 0.9710 | **0.9844** | 31 / 176 | 12 / 28 |
-| 3 | `12_embed_dim_256` | embed **256** | 0.20 | 0.9908 | 0.9908 | 0.9651 | **0.9822** | 32 / 217 | 6 / 33 |
-| Published (kept) | `reports/lstm/` | 4 epochs, grid 0.30–0.70 | 0.30 | 0.9859 | 0.9860 | 0.9651 | 0.9790 | 49 / 200 | 14 / 24 |
+
+| Rank             | Run                     | What changed             | Thr  | TEST scam recall | TEST ham precision | TEST accuracy | Combined mean | TEST missed / ham warned | Chat missed / ham warned |
+| ---------------- | ----------------------- | ------------------------ | ---- | ---------------- | ------------------ | ------------- | ------------- | ------------------------ | ------------------------ |
+| 1                | `07_epochs_8`           | **8** epochs             | 0.20 | 0.9914           | 0.9915             | 0.9707        | **0.9845**    | 30 / 179                 | 11 / 29                  |
+| 2                | `03_learning_rate_5e-3` | lr **5e-3**              | 0.20 | 0.9911           | 0.9912             | 0.9710        | **0.9844**    | 31 / 176                 | 12 / 28                  |
+| 3                | `12_embed_dim_256`      | embed **256**            | 0.20 | 0.9908           | 0.9908             | 0.9651        | **0.9822**    | 32 / 217                 | 6 / 33                   |
+| Published (kept) | `reports/lstm/`         | 4 epochs, grid 0.30–0.70 | 0.30 | 0.9859           | 0.9860             | 0.9651        | 0.9790        | 49 / 200                 | 14 / 24                  |
+
 
 **Offline quality candidate (first LSTM we would try to export):** rank 1, `epochs=8`, other knobs at documented defaults, threshold 0.20. Same embed/hidden/vocab/`max_tokens` as the published LSTM, so **inference size matches the 4-epoch checkpoint** (~14 MB); only TRAIN length and the probability cut differ. Reports: `ml/reports/lstm_param_sweep/07_epochs_8/`. Weights: `ml/models/lstm_param_sweep/07_epochs_8/`. TEST (`[[3484, 179], [30, 3444]]`):
 
-| Class | Precision | Recall | F1 |
-| --- | --- | --- | --- |
-| legitimate | 0.991 | 0.951 | 0.971 |
-| scam | 0.951 | 0.991 | 0.971 |
+
+| Class      | Precision | Recall | F1    |
+| ---------- | --------- | ------ | ----- |
+| legitimate | 0.991     | 0.951  | 0.971 |
+| scam       | 0.951     | 0.991  | 0.971 |
+
 
 Locked chat eval at that VAL-frozen 0.20 cut (`[[71, 29], [11, 89]]`): 11 missed scams and 29 ham warnings out of 100 (vs 14 / 24 published). `09_max_tokens_192` is quieter on locked-chat misses (4/100) but is rank 13 on TEST combined mean — do not retune the threshold on the 200-row file to chase that.
 
@@ -704,6 +752,8 @@ Locked chat eval at that VAL-frozen 0.20 cut (`[[71, 29], [11, 89]]`): 11 missed
 1. **First fallback (published default — safest first browser export):** 4 epochs, threshold 0.30, `ml/reports/lstm/` and `ml/models/lstm/`. This is what `scripts/train_lstm.py` still trains with no extra flags. Same architecture as the quality candidate; only epoch count and the 0.30-grid operating point differ. Use this if a 0.20 cut over-warns in the tab or the 8-epoch checkpoint is a poor ONNX fit.
 2. **Second fallback (still 4 epochs, only VAL grid changed):** run `00_baseline_expanded_grid`, threshold 0.20, `ml/reports/lstm_param_sweep/00_baseline_expanded_grid/`. Same 4-epoch weights recipe; only the probability cut differs from the published point.
 3. **Keep as offline quality candidate until measured:** rank 1, `epochs=8`, threshold 0.20, `ml/reports/lstm_param_sweep/07_epochs_8/`. Do not make this `train_lstm.py`'s default until ONNX Runtime Web latency and warning rate are measured. Rank 3 (`embed_dim=256`) is a **larger** inference graph — do not promote it as a first browser export.
+
+
 
 ### How to retrain the word BiLSTM
 
@@ -739,6 +789,8 @@ Local Docker Compose is the Slice 9 deploy path. Hosted Render/Railway/Fly.io (T
 4. `cd frontend && npm run dev` on the host. There is no production Nginx/Vite image in this slice.
 5. Set `FRONTEND_ORIGIN` to the exact Vite origin in the address bar (`http://localhost:5173` by default). CORS allows that **one** origin and **GET/POST** only.
 6. Optional two-tab epoch demo: `EPOCH_ROTATE_AFTER_MESSAGES=2` in `.env`, then recreate the API container. There is no unauthenticated rotate endpoint.
+
+
 
 ## Demo
 
