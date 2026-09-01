@@ -39,3 +39,4 @@ frontend/public/ort/
 
 # Exclude the insecure prototype and its exposed Firebase configuration.
 Legacy files/
+agent-prompt-pre-deployment-optimization.md
