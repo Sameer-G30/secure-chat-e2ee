@@ -11,7 +11,6 @@ import {
 } from './encryption';
 import { getPublicKey } from './contacts';
 
-// ============ CONVERSATION STATE ============
 const conversationEpochs = new Map();
 const MESSAGES_PER_EPOCH = 50;
 
@@ -26,11 +25,47 @@ const incrementEpoch = (conversationId) => {
     const current = getCurrentEpoch(conversationId);
     const next = current + 1;
     conversationEpochs.set(conversationId, next);
-    console.log(`📅 Epoch advanced: ${current} → ${next} for ${conversationId}`);
     return next;
 };
 
-// ============ SEND MESSAGE ============
+export const markAsDelivered = async (conversationId, messageId) => {
+    try {
+        const messageRef = ref(db, `messages/${conversationId}/${messageId}/status`);
+        await update(messageRef, {
+            delivered: true,
+            deliveredAt: Date.now()
+        });
+        return true;
+    } catch (error) {
+        console.error('Mark delivered error:', error);
+        return false;
+    }
+};
+
+export const markAsRead = async (conversationId, messageId, userUid) => {
+    try {
+        const readRef = ref(db, `messages/${conversationId}/${messageId}/readBy`);
+        const snapshot = await get(readRef);
+        const readBy = snapshot.val() || [];
+        
+        if (!readBy.includes(userUid)) {
+            readBy.push(userUid);
+            await set(readRef, readBy);
+        }
+        
+        const statusRef = ref(db, `messages/${conversationId}/${messageId}/status`);
+        await update(statusRef, {
+            read: true,
+            readAt: Date.now()
+        });
+        
+        return true;
+    } catch (error) {
+        console.error('Mark read error:', error);
+        return false;
+    }
+};
+
 export const sendMessage = async (senderUid, receiverUid, messageText) => {
     try {
         const myKeys = getKeys();
@@ -74,161 +109,53 @@ export const sendMessage = async (senderUid, receiverUid, messageText) => {
             throw new Error('Encryption failed');
         }
         
-        const messagesRef2 = ref(db, `messages/${conversationId}`);
-        await push(messagesRef2, {
+        const newMessageRef = await push(messagesRef, {
             sender: senderUid,
+            receiver: receiverUid,
             ciphertext: encrypted.ciphertext,
             nonce: encrypted.nonce,
             epoch: encrypted.epoch,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            status: {
+                sent: true,
+                delivered: false,
+                read: false
+            },
+            readBy: [],
+            deleted: false,
+            deletedForEveryone: false
         });
         
         cleanupEpochKeys(conversationId, currentEpoch);
         
-        console.log(`✅ Message sent with epoch ${currentEpoch} for ${conversationId}`);
-        return true;
+        return {
+            success: true,
+            messageId: newMessageRef.key
+        };
     } catch (error) {
         console.error('Send message error:', error);
-        return false;
+        return { success: false, error: error.message };
     }
 };
 
-// ============ LISTEN FOR MESSAGES ============
-export const listenForMessages = (userUid, contactUid, callback) => {
-    const conversationId = [userUid, contactUid].sort().join('_');
-    const messagesRef = ref(db, `messages/${conversationId}`);
-    const messagesQuery = query(messagesRef, limitToLast(50));
-    
-    const unsubscribe = onChildAdded(messagesQuery, async (snapshot) => {
-        const messageData = snapshot.val();
-        const messageId = snapshot.key;
-        
-        if (!messageData) return;
-        
-        try {
-            const myKeys = getKeys();
-            if (!myKeys) {
-                console.error('No keys found');
-                return;
-            }
-            
-            const otherUid = messageData.sender === userUid ? contactUid : messageData.sender;
-            const otherPublicKey = await getPublicKey(otherUid);
-            
-            if (!otherPublicKey) {
-                console.error('Other user has no public key');
-                return;
-            }
-            
-            const masterSecret = await deriveSharedSecret(
-                myKeys.privateKey,
-                otherPublicKey
-            );
-            
-            if (!masterSecret) {
-                console.error('Failed to derive master secret');
-                return;
-            }
-            
-            const decrypted = await decryptMessage(
-                messageData.ciphertext,
-                messageData.nonce,
-                masterSecret,
-                conversationId,
-                messageData.epoch || 1
-            );
-            
-            if (decrypted) {
-                const isSent = messageData.sender === userUid;
-                callback({
-                    ...messageData,
-                    decryptedText: decrypted
-                }, messageId, isSent);
-            }
-        } catch (error) {
-            console.error('Decryption error:', error);
-        }
-    });
-    
-    return unsubscribe;
-};
-
-// ============ LOAD MESSAGES ============
-export const loadMessages = async (userUid, contactUid) => {
-    try {
-        const conversationId = [userUid, contactUid].sort().join('_');
-        const messagesRef = ref(db, `messages/${conversationId}`);
-        const snapshot = await get(messagesRef);
-        const data = snapshot.val();
-        
-        if (!data) return [];
-        
-        const myKeys = getKeys();
-        if (!myKeys) {
-            console.error('No keys found');
-            return [];
-        }
-        
-        // ✅ SIMPLIFIED: Just use contactUid directly
-        const otherPublicKey = await getPublicKey(contactUid);
-        if (!otherPublicKey) {
-            console.error('Other user has no public key');
-            return [];
-        }
-        
-        const masterSecret = await deriveSharedSecret(
-            myKeys.privateKey,
-            otherPublicKey
-        );
-        
-        const messages = [];
-        for (const [id, msg] of Object.entries(data)) {
-            if (!msg) continue;
-            
-            try {
-                const decrypted = await decryptMessage(
-                    msg.ciphertext,
-                    msg.nonce,
-                    masterSecret,
-                    conversationId,
-                    msg.epoch || 1
-                );
-                
-                messages.push({
-                    id: id,
-                    ...msg,
-                    isSent: msg.sender === userUid,
-                    text: decrypted || 'Decryption failed'
-                });
-            } catch (error) {
-                console.error('Error loading message:', error);
-                messages.push({
-                    id: id,
-                    ...msg,
-                    isSent: msg.sender === userUid,
-                    text: 'Error loading'
-                });
-            }
-        }
-        
-        return messages.sort((a, b) => a.timestamp - b.timestamp);
-    } catch (error) {
-        console.error('Load messages error:', error);
-        return [];
-    }
-};
-
-// ============ DELETE MESSAGE ============
 export const deleteMessage = async (userUid, conversationId, messageId, deleteForEveryone = false) => {
     try {
         const messageRef = ref(db, `messages/${conversationId}/${messageId}`);
         
         if (deleteForEveryone) {
-            await remove(messageRef);
+            await update(messageRef, {
+                deletedForEveryone: true,
+                deletedAt: Date.now(),
+                deletedBy: userUid,
+                text: null,
+                ciphertext: null,
+                nonce: null
+            });
         } else {
             await update(messageRef, {
                 deleted: true,
-                deletedBy: userUid
+                deletedBy: userUid,
+                deletedAt: Date.now()
             });
         }
         
@@ -239,7 +166,6 @@ export const deleteMessage = async (userUid, conversationId, messageId, deleteFo
     }
 };
 
-// ============ EDIT MESSAGE ============
 export const editMessage = async (userUid, conversationId, messageId, newText) => {
     try {
         const myKeys = getKeys();
@@ -292,19 +218,219 @@ export const editMessage = async (userUid, conversationId, messageId, newText) =
     }
 };
 
-// ============ CLEAR CHAT ============
 export const clearChat = async (conversationId) => {
     try {
         const messagesRef = ref(db, `messages/${conversationId}`);
         await remove(messagesRef);
         conversationEpochs.set(conversationId, 1);
-        
-        // ✅ Flush the cache immediately instead of using cleanup
         clearEpochKeys(conversationId);
-        
         return true;
     } catch (error) {
         console.error('Clear chat error:', error);
+        return false;
+    }
+};
+
+export const listenForMessages = (userUid, contactUid, callback) => {
+    const conversationId = [userUid, contactUid].sort().join('_');
+    const messagesRef = ref(db, `messages/${conversationId}`);
+    const messagesQuery = query(messagesRef, limitToLast(50));
+    
+    const unsubscribe = onChildAdded(messagesQuery, async (snapshot) => {
+        const messageData = snapshot.val();
+        const messageId = snapshot.key;
+        
+        if (!messageData) return;
+        
+        if (messageData.deletedForEveryone) {
+            callback({
+                id: messageId,
+                ...messageData,
+                isDeleted: true,
+                deletedForEveryone: true,
+                text: 'This message was deleted',
+                decryptedText: 'This message was deleted'
+            }, messageId, messageData.sender === userUid);
+            return;
+        }
+        
+        if (messageData.deleted && messageData.deletedBy === userUid) {
+            callback({
+                id: messageId,
+                ...messageData,
+                isDeleted: true,
+                text: 'You deleted this message',
+                decryptedText: 'You deleted this message'
+            }, messageId, true);
+            return;
+        }
+        
+        const isSent = messageData.sender === userUid;
+        
+        if (!isSent && messageData.status && !messageData.status.delivered) {
+            await markAsDelivered(conversationId, messageId);
+        }
+        
+        try {
+            const myKeys = getKeys();
+            if (!myKeys) {
+                console.error('No keys found');
+                return;
+            }
+            
+            const otherUid = messageData.sender === userUid ? contactUid : messageData.sender;
+            const otherPublicKey = await getPublicKey(otherUid);
+            
+            if (!otherPublicKey) {
+                console.error('Other user has no public key');
+                return;
+            }
+            
+            const masterSecret = await deriveSharedSecret(
+                myKeys.privateKey,
+                otherPublicKey
+            );
+            
+            if (!masterSecret) {
+                console.error('Failed to derive master secret');
+                return;
+            }
+            
+            const decrypted = await decryptMessage(
+                messageData.ciphertext,
+                messageData.nonce,
+                masterSecret,
+                conversationId,
+                messageData.epoch || 1
+            );
+            
+            if (decrypted) {
+                callback({
+                    id: messageId,
+                    ...messageData,
+                    decryptedText: decrypted,
+                    isSent: isSent,
+                    text: decrypted,
+                    isDeleted: false,
+                    deletedForEveryone: false
+                }, messageId, isSent);
+            }
+        } catch (error) {
+            console.error('Decryption error:', error);
+        }
+    });
+    
+    return unsubscribe;
+};
+
+export const loadMessages = async (userUid, contactUid) => {
+    try {
+        const conversationId = [userUid, contactUid].sort().join('_');
+        const messagesRef = ref(db, `messages/${conversationId}`);
+        const snapshot = await get(messagesRef);
+        const data = snapshot.val();
+        
+        if (!data) return [];
+        
+        const myKeys = getKeys();
+        if (!myKeys) {
+            console.error('No keys found');
+            return [];
+        }
+        
+        const otherPublicKey = await getPublicKey(contactUid);
+        if (!otherPublicKey) {
+            console.error('Other user has no public key');
+            return [];
+        }
+        
+        const masterSecret = await deriveSharedSecret(
+            myKeys.privateKey,
+            otherPublicKey
+        );
+        
+        const messages = [];
+        for (const [id, msg] of Object.entries(data)) {
+            if (!msg) continue;
+            
+            if (msg.deletedForEveryone) {
+                messages.push({
+                    id: id,
+                    ...msg,
+                    isSent: msg.sender === userUid,
+                    text: 'This message was deleted',
+                    isDeleted: true,
+                    deletedForEveryone: true
+                });
+                continue;
+            }
+            
+            if (msg.deleted && msg.deletedBy === userUid) {
+                messages.push({
+                    id: id,
+                    ...msg,
+                    isSent: true,
+                    text: 'You deleted this message',
+                    isDeleted: true
+                });
+                continue;
+            }
+            
+            try {
+                const decrypted = await decryptMessage(
+                    msg.ciphertext,
+                    msg.nonce,
+                    masterSecret,
+                    conversationId,
+                    msg.epoch || 1
+                );
+                
+                messages.push({
+                    id: id,
+                    ...msg,
+                    isSent: msg.sender === userUid,
+                    text: decrypted || 'Decryption failed',
+                    isDeleted: false,
+                    deletedForEveryone: false
+                });
+            } catch (error) {
+                console.error('Error loading message:', error);
+                messages.push({
+                    id: id,
+                    ...msg,
+                    isSent: msg.sender === userUid,
+                    text: 'Error loading',
+                    isDeleted: false,
+                    deletedForEveryone: false
+                });
+            }
+        }
+        
+        return messages.sort((a, b) => a.timestamp - b.timestamp);
+    } catch (error) {
+        console.error('Load messages error:', error);
+        return [];
+    }
+};
+
+export const markAllMessagesAsRead = async (userUid, contactUid) => {
+    try {
+        const conversationId = [userUid, contactUid].sort().join('_');
+        const messagesRef = ref(db, `messages/${conversationId}`);
+        const snapshot = await get(messagesRef);
+        const data = snapshot.val();
+        
+        if (!data) return true;
+        
+        for (const [id, msg] of Object.entries(data)) {
+            if (msg.sender !== userUid && msg.status && !msg.status.read && !msg.deleted && !msg.deletedForEveryone) {
+                await markAsRead(conversationId, id, userUid);
+            }
+        }
+        
+        return true;
+    } catch (error) {
+        console.error('Mark all read error:', error);
         return false;
     }
 };

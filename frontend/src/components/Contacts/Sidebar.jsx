@@ -15,15 +15,30 @@ export default function Sidebar({
     handleAddContact,
     contactList,
     selectedContact,
-    setSelectedContact
+    setSelectedContact,
+    profilePicture
 }) {
     return (
         <div className="sidebar">
             {/* Sidebar Header */}
             <div className="sidebar-header">
                 <div className="user-avatar">
-                    {currentUser?.displayName?.charAt(0).toUpperCase() || 
-                     currentUser?.email?.charAt(0).toUpperCase() || 'U'}
+                    {profilePicture ? (
+                        <img 
+                            src={profilePicture} 
+                            alt="Profile" 
+                            style={{ 
+                                width: '100%', 
+                                height: '100%', 
+                                borderRadius: '50%', 
+                                objectFit: 'cover' 
+                            }} 
+                        />
+                    ) : (
+                        currentUser?.displayName?.charAt(0).toUpperCase() || 
+                        currentUser?.email?.charAt(0).toUpperCase() || 
+                        'U'
+                    )}
                 </div>
                 <div className="user-info">
                     <div className="user-name">
