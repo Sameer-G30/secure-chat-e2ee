@@ -36,6 +36,8 @@ import { ChatMoreMenu } from './ChatMoreMenu'
 import { MessageActionsModal } from './MessageActionsModal'
 import { Modal } from './Modal'
 import { SettingsPanel } from './SettingsPanel'
+// Import the vrati icon set used on the sidebar, header, and circular send button.
+import { IconGear, IconMore, IconSearch, IconSend } from '../icons'
 
 // Name the mutually exclusive overlays so only one dialog is open at a time.
 type ChatOverlay =
@@ -313,84 +315,132 @@ export function ChatScreen() {
       ? messages.find((message) => message.id === overlay.id) ?? null
       : null
 
+  // Count in-chat search hits so the header chip can show how many rows remain.
+  const searchMatchCount = visibleMessages.length
+  // Label sent bubbles with Sending until the server ack, then Sent.
+  function pendingLabel(message: ChatMessage): string {
+    // A pending own message has no server id yet.
+    if (message.pending) {
+      return 'Sending'
+    }
+    // Received bubbles do not show a delivery tick.
+    if (message.direction !== 'sent') {
+      return ''
+    }
+    // Accepted own messages show the gold-adjacent sent mark in CSS.
+    return 'Sent'
+  }
+
   return (
-    <div className="chat-shell">
-      <aside className="chat-sidebar" aria-label="Contacts">
-        <div className="chat-sidebar-self">
-          <span className="chat-avatar" aria-hidden="true">
+    <div className="chat-app">
+      <aside className="sidebar" aria-label="Contacts">
+        <div className="sidebar-header">
+          <div className="user-avatar" aria-hidden="true">
             {initialsFromUsername(currentSession.username)}
-          </span>
-          <div>
-            <p className="chat-sidebar-name">{currentSession.username}</p>
-            <p className="chat-sidebar-hint">Signed in</p>
+          </div>
+          <div className="user-info">
+            <div className="user-name">{currentSession.username}</div>
+            <div className="user-status">Online</div>
+          </div>
+          <div className="sidebar-actions">
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              onClick={() => toggleTheme(currentSession.username)}
+            >
+              {theme === 'dark' ? '☀' : '☾'}
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Settings"
+              onClick={() => setOverlay({ kind: 'settings' })}
+            >
+              <IconGear />
+            </button>
           </div>
         </div>
-        <form className="chat-add-contact" onSubmit={(event) => void handleAddContact(event)}>
-          <div className="input-group">
-            <label htmlFor="add-contact">Add contact</label>
+
+        <form className="search-bar" onSubmit={(event) => void handleAddContact(event)}>
+          <div className="search-input-wrapper">
+            <IconSearch size={18} />
+            <label className="visually-hidden" htmlFor="add-contact">
+              Add contact
+            </label>
             <input
               id="add-contact"
               name="addContact"
               type="text"
               autoComplete="username"
+              placeholder="Search users..."
               value={peerInput}
               onChange={(event) => setPeerInput(event.target.value)}
               required
             />
           </div>
-          {userSearch.results.length > 0 ? (
-            <ul className="chat-search-results" aria-label="Matching accounts">
+          <button className="search-btn" type="submit" disabled={isConnecting}>
+            {isConnecting ? '…' : 'Add'}
+          </button>
+        </form>
+
+        {userSearch.results.length > 0 ? (
+          <div className="search-results">
+            <div className="search-results-header">Matching accounts</div>
+            <ul className="search-results-list" aria-label="Matching accounts">
               {userSearch.results.map((hit) => (
                 <li key={hit.username}>
                   <button
                     type="button"
-                    className="chat-search-hit"
+                    className="search-result-item"
+                    aria-label={hit.username}
                     onClick={() => setPeerInput(hit.username)}
                   >
-                    {hit.username}
+                    <span className="search-result-info">
+                      <span className="search-result-avatar" aria-hidden="true">
+                        {initialsFromUsername(hit.username)}
+                      </span>
+                      <span className="search-result-name">{hit.username}</span>
+                    </span>
                   </button>
                 </li>
               ))}
             </ul>
-          ) : peerInput.trim().length >= 2 && !userSearch.isSearching ? (
-            <p className="chat-search-empty">No matching accounts.</p>
-          ) : null}
-          <button className="primary-button chat-add-button" type="submit" disabled={isConnecting}>
-            {isConnecting ? 'Connecting…' : 'Add'}
-          </button>
-        </form>
+          </div>
+        ) : peerInput.trim().length >= 2 && !userSearch.isSearching ? (
+          <p className="chat-search-empty">No matching accounts.</p>
+        ) : null}
+
         {contacts.length === 0 ? (
-          <p className="chat-empty">No contacts yet. Add a username to start chatting.</p>
+          <div className="empty-state">No contacts yet. Add a username to start chatting.</div>
         ) : (
-          <ul className="chat-contact-list">
+          <ul className="contacts-list">
             {contacts.map((contact) => (
-              <li key={contact.id} className="chat-contact-row">
+              <li key={contact.id} className="contact-row">
                 <button
                   type="button"
-                  className={
-                    activeChat?.peerId === contact.id
-                      ? 'chat-contact-button chat-contact-button-active'
-                      : 'chat-contact-button'
-                  }
+                  className={activeChat?.peerId === contact.id ? 'contact-item active' : 'contact-item'}
+                  aria-label={contact.username}
                   onClick={() => handleSelectContact(contact.username)}
                   disabled={isConnecting}
                 >
-                  <span className="chat-avatar chat-avatar-sm" aria-hidden="true">
+                  <span className="contact-avatar" aria-hidden="true">
                     {initialsFromUsername(contact.username)}
                   </span>
-                  <span className="chat-contact-name">{contact.username}</span>
-                  {activeChat?.peerId === contact.id ? (
-                    <span
-                      className={
-                        peerOnline ? 'chat-online-dot chat-online-dot-on' : 'chat-online-dot'
-                      }
-                      aria-hidden="true"
-                    />
-                  ) : null}
+                  <span className="contact-info">
+                    <span className="contact-name">{contact.username}</span>
+                    <span className="contact-preview">
+                      {activeChat?.peerId === contact.id
+                        ? peerOnline
+                          ? 'Online'
+                          : 'Offline'
+                        : 'Tap to chat'}
+                    </span>
+                  </span>
                 </button>
                 <button
                   type="button"
-                  className="text-button chat-contact-remove"
+                  className="contact-remove"
                   aria-label={`Remove ${contact.username}`}
                   onClick={() => void handleRemoveContact(contact.username)}
                 >
@@ -400,136 +450,156 @@ export function ChatScreen() {
             ))}
           </ul>
         )}
+
+        <div className="sidebar-footer">
+          <div className="chat-model-toggles">
+            <label className="chat-model-toggle">
+              <input
+                type="checkbox"
+                checked={classifier.useDistilbert}
+                onChange={(event) => classifier.toggleDistilbert(event.target.checked)}
+              />
+              Use DistilBERT (large download)
+            </label>
+            <label className="chat-model-toggle">
+              <input
+                type="checkbox"
+                checked={classifier.useLstm}
+                onChange={(event) => classifier.toggleLstm(event.target.checked)}
+              />
+              Use Word BiLSTM Best
+            </label>
+          </div>
+        </div>
       </aside>
 
-      <main className="chat-main">
+      <main className="chat-area">
+        <h1 className="chat-product-heading">Secure Chat</h1>
         <header className="chat-header">
-          <div className="chat-header-identity">
+          <div className="chat-header-left">
             {activeChat ? (
-              <span className="chat-avatar" aria-hidden="true">
-                {initialsFromUsername(activeChat.peerUsername)}
-              </span>
-            ) : null}
-            <div>
-              <h1>Secure Chat</h1>
-              <p>
-                Signed in as <strong>{currentSession.username}</strong>
-                {activeChat ? (
-                  <>
-                    {' '}
-                    · chatting with <strong>{activeChat.peerUsername}</strong>{' '}
-                    <span className={peerOnline ? 'chat-presence chat-presence-on' : 'chat-presence'}>
-                      {peerOnline ? 'Online' : 'Offline'}
-                    </span>
-                  </>
-                ) : null}
-              </p>
-            </div>
+              <>
+                <div className="chat-contact-avatar" aria-hidden="true">
+                  {initialsFromUsername(activeChat.peerUsername)}
+                </div>
+                <div>
+                  <div className="chat-contact-name">{activeChat.peerUsername}</div>
+                  <div className="chat-contact-status">
+                    {peerBlocked ? 'Blocked' : peerOnline ? 'Online · end-to-end encrypted' : 'End-to-end encrypted'}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div>
+                <div className="chat-contact-name">Select a contact</div>
+                <div className="chat-contact-status">End-to-end encrypted</div>
+              </div>
+            )}
           </div>
           <div className="chat-header-actions">
-            <div className="chat-model-toggles">
-              <label className="chat-model-toggle">
-                <input
-                  type="checkbox"
-                  checked={classifier.useDistilbert}
-                  onChange={(event) => classifier.toggleDistilbert(event.target.checked)}
-                />
-                Use DistilBERT (large download)
-              </label>
-              <label className="chat-model-toggle">
-                <input
-                  type="checkbox"
-                  checked={classifier.useLstm}
-                  onChange={(event) => classifier.toggleLstm(event.target.checked)}
-                />
-                Use Word BiLSTM Best
-              </label>
-            </div>
             <button
               type="button"
-              className="text-button"
-              onClick={() => toggleTheme(currentSession.username)}
+              className="icon-btn"
+              aria-label="Search messages"
+              onClick={() => setSearchOpen(true)}
+              disabled={!activeChat}
             >
-              {theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              <IconSearch />
             </button>
             <button
               type="button"
-              className="text-button"
-              onClick={() => setOverlay({ kind: 'settings' })}
+              className="icon-btn"
+              aria-label="More"
+              aria-haspopup="menu"
+              aria-expanded={overlay.kind === 'more'}
+              onClick={() => {
+                if (overlay.kind === 'more') {
+                  setOverlay({ kind: 'none' })
+                  return
+                }
+                if (activeChat) {
+                  void refreshPeerBlocked(activeChat.peerUsername)
+                }
+                setOverlay({ kind: 'more' })
+              }}
             >
-              Settings
-            </button>
-            <div className="chat-more-wrap">
-              <button
-                type="button"
-                className="text-button"
-                aria-haspopup="menu"
-                aria-expanded={overlay.kind === 'more'}
-                onClick={() => {
-                  if (overlay.kind === 'more') {
-                    setOverlay({ kind: 'none' })
-                    return
-                  }
-                  if (activeChat) {
-                    void refreshPeerBlocked(activeChat.peerUsername)
-                  }
-                  setOverlay({ kind: 'more' })
-                }}
-              >
-                More
-              </button>
-              {overlay.kind === 'more' ? (
-                <ChatMoreMenu
-                  hasActiveChat={activeChat !== null}
-                  peerBlocked={peerBlocked}
-                  onSearch={() => {
-                    setSearchOpen(true)
-                    setOverlay({ kind: 'none' })
-                  }}
-                  onExport={() => setOverlay({ kind: 'export' })}
-                  onClearLocal={() => {
-                    handleClearLocalTranscript()
-                    setStatusMessage('Local transcript cleared. The server copy is unchanged.')
-                    setOverlay({ kind: 'none' })
-                  }}
-                  onBlock={() => {
-                    setOverlay({ kind: 'none' })
-                    void handleBlockPeer()
-                  }}
-                  onUnblock={() => {
-                    setOverlay({ kind: 'none' })
-                    void handleUnblockPeer()
-                  }}
-                  onReport={() => setOverlay({ kind: 'report' })}
-                />
-              ) : null}
-            </div>
-            <button type="button" className="text-button" onClick={handleLogout}>
-              Log out
+              <IconMore />
             </button>
           </div>
         </header>
 
+        {overlay.kind === 'more' ? (
+          <ChatMoreMenu
+            hasActiveChat={activeChat !== null}
+            peerBlocked={peerBlocked}
+            onDismiss={() => setOverlay({ kind: 'none' })}
+            onSearch={() => {
+              setSearchOpen(true)
+              setOverlay({ kind: 'none' })
+            }}
+            onExport={() => setOverlay({ kind: 'export' })}
+            onClearLocal={() => {
+              handleClearLocalTranscript()
+              setStatusMessage('Local transcript cleared. The server copy is unchanged.')
+              setOverlay({ kind: 'none' })
+            }}
+            onBlock={() => {
+              setOverlay({ kind: 'none' })
+              void handleBlockPeer()
+            }}
+            onUnblock={() => {
+              setOverlay({ kind: 'none' })
+              void handleUnblockPeer()
+            }}
+            onReport={() => setOverlay({ kind: 'report' })}
+          />
+        ) : null}
+
         {searchOpen ? (
-          <div className="chat-inchat-search">
-            <label htmlFor="in-chat-search">Search in chat</label>
-            <input
-              id="in-chat-search"
-              type="search"
-              value={inChatQuery}
-              onChange={(event) => setInChatQuery(event.target.value)}
-              placeholder="Filter decrypted messages on this device"
-            />
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => {
-                setSearchOpen(false)
-                setInChatQuery('')
-              }}
-            >
-              Close search
-            </button>
+          <div className="search-bar-chat">
+            <div className="search-bar-chat-input">
+              <IconSearch size={16} />
+              <label className="visually-hidden" htmlFor="in-chat-search">
+                Search in chat
+              </label>
+              <input
+                id="in-chat-search"
+                type="search"
+                value={inChatQuery}
+                onChange={(event) => setInChatQuery(event.target.value)}
+                placeholder="Filter decrypted messages on this device"
+              />
+            </div>
+            <div className="search-bar-chat-actions">
+              <span className="search-results-count">
+                {inChatQuery.trim() ? `${searchMatchCount}` : ''}
+              </span>
+              <button
+                type="button"
+                className="search-close-btn"
+                onClick={() => {
+                  setSearchOpen(false)
+                  setInChatQuery('')
+                }}
+              >
+                Close search
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {peerBlocked && activeChat ? (
+          <div className="blocked-banner">
+            <div className="blocked-banner-content">
+              <span className="blocked-icon">🔒</span>
+              <div>
+                <div className="blocked-title">You have blocked {activeChat.peerUsername}</div>
+                <div className="blocked-subtitle">They cannot message you from this account.</div>
+              </div>
+              <button type="button" className="unblock-btn" onClick={() => void handleUnblockPeer()}>
+                Unblock
+              </button>
+            </div>
           </div>
         ) : null}
 
@@ -554,76 +624,108 @@ export function ChatScreen() {
           </p>
         ) : null}
 
-        <section className="chat-transcript" aria-label="Encrypted messages">
-          {visibleMessages.length === 0 ? (
-            <p className="chat-empty">
+        {!activeChat ? (
+          <div className="empty-chat-state">
+            <div className="empty-chat-icon" aria-hidden="true">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+              </svg>
+            </div>
+            <h3>Select a contact</h3>
+            <p>Choose someone from your contacts to start chatting</p>
+          </div>
+        ) : visibleMessages.length === 0 ? (
+          <div className="messages">
+            <p className="empty-chat">
               {searchOpen && inChatQuery.trim()
                 ? 'No messages match that search on this device.'
                 : 'No messages yet. Ciphertext is relayed through the server; plaintext stays on this device.'}
             </p>
-          ) : (
-            <ul className="chat-message-list">
-              {visibleMessages.map((message) => (
-                <li
-                  key={message.id}
-                  className={
-                    message.verificationFailed
-                      ? 'chat-bubble chat-bubble-failed'
-                      : message.direction === 'sent'
-                        ? 'chat-bubble chat-bubble-sent'
-                        : 'chat-bubble chat-bubble-received'
-                  }
-                >
-                  <button
-                    type="button"
-                    className="chat-bubble-button"
-                    data-pending={message.pending ? 'true' : 'false'}
-                    onClick={() => setOverlay({ kind: 'message', id: message.id })}
-                  >
-                    {message.verificationFailed ? (
-                      <span role="alert">message failed verification</span>
-                    ) : (
-                      <>
-                        {message.scamWarning ? (
-                          <p className="scam-banner" role="status">
-                            This message shows signs of a scam
-                          </p>
-                        ) : null}
-                        {message.plaintext}
-                        {message.revision > 0 ? (
-                          <span className="chat-edited-flag"> (edited)</span>
-                        ) : null}
-                      </>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+          </div>
+        ) : (
+          <ul className="messages" aria-label="Encrypted messages">
+            {visibleMessages.map((message) => {
+                  const bubbleClass = message.verificationFailed
+                    ? 'message failed'
+                    : message.direction === 'sent'
+                      ? 'message sent'
+                      : 'message received'
+                  const accessibleName = message.verificationFailed
+                    ? undefined
+                    : (message.plaintext ?? undefined)
+                  return (
+                    <li key={message.id} className="message-wrapper">
+                      <button
+                        type="button"
+                        className={bubbleClass}
+                        data-pending={message.pending ? 'true' : 'false'}
+                        aria-label={accessibleName}
+                        onClick={() => setOverlay({ kind: 'message', id: message.id })}
+                      >
+                        {message.verificationFailed ? (
+                          <span role="alert">message failed verification</span>
+                        ) : (
+                          <>
+                            {message.scamWarning ? (
+                              <p className="scam-banner" role="status">
+                                This message shows signs of a scam
+                              </p>
+                            ) : null}
+                            <span className="message-text">
+                              {message.plaintext}
+                              {message.revision > 0 ? (
+                                <span className="edited-indicator"> (edited)</span>
+                              ) : null}
+                            </span>
+                            <span className="message-time">
+                              {pendingLabel(message)}
+                              {message.direction === 'sent' && !message.pending ? (
+                                <span className="status-sent" aria-hidden="true">
+                                  ✓
+                                </span>
+                              ) : null}
+                            </span>
+                          </>
+                        )}
+                      </button>
+                    </li>
+                  )
+                })}
+          </ul>
+        )}
 
-        <form className="chat-composer" onSubmit={handleSend}>
-          <label className="visually-hidden" htmlFor="chat-draft">
-            Message
-          </label>
-          <input
-            id="chat-draft"
-            name="draft"
-            type="text"
-            autoComplete="off"
-            placeholder="Type a message"
-            value={draft}
-            onChange={(event) => handleDraftChange(event.target.value)}
-            disabled={!activeChat}
-          />
-          <button
-            className="primary-button chat-send-button"
-            type="submit"
-            disabled={!activeChat || !draft.trim()}
-          >
-            Send
-          </button>
-        </form>
+        {peerBlocked && activeChat ? (
+          <div className="blocked-input-banner">
+            <span>You can&apos;t send messages to a blocked user.</span>
+            <button type="button" className="unblock-link" onClick={() => void handleUnblockPeer()}>
+              Unblock to chat
+            </button>
+          </div>
+        ) : (
+          <form className="input-area" onSubmit={handleSend}>
+            <label className="visually-hidden" htmlFor="chat-draft">
+              Message
+            </label>
+            <input
+              id="chat-draft"
+              name="draft"
+              type="text"
+              autoComplete="off"
+              placeholder="Type a message..."
+              value={draft}
+              onChange={(event) => handleDraftChange(event.target.value)}
+              disabled={!activeChat}
+            />
+            <button
+              className="btn-send"
+              type="submit"
+              aria-label="Send"
+              disabled={!activeChat || !draft.trim()}
+            >
+              <IconSend />
+            </button>
+          </form>
+        )}
       </main>
 
       {overlay.kind === 'settings' ? (

@@ -1,16 +1,13 @@
-// Per-bubble actions ported from the legacy message-actions modal, with the known
-// bugs fixed rather than copied: edit is sender-only, v2-only, and refused while
-// the row is still pending an "accepted" ack; delete-for-everyone is sender-only;
-// hide-for-me is available on any already-accepted row; copy never writes
-// verification-failed text to the clipboard.
+// Per-bubble actions with vrati message-actions chrome. Edit is sender-only,
+// v2-only, and refused while the row is still pending; delete-for-everyone is
+// sender-only; hide-for-me is available on any already-accepted row.
 
 // Import React's state hook used by the inline edit field.
 import { useState } from 'react'
-
-// Import the reusable overlay this panel renders inside.
-import { Modal } from './Modal'
 // Import the in-memory bubble shape this modal inspects.
 import type { ChatMessage } from '../hooks/useEncryptedConversation'
+// Import the dismiss glyph used on the modal header.
+import { IconClose } from '../icons'
 
 // Describe the handlers ChatScreen wires into this modal.
 export interface MessageActionsModalProps {
@@ -39,8 +36,7 @@ export function MessageActionsModal({
   // Hold whether the inline editor is open (own, v2, not pending only).
   const [isEditing, setIsEditing] = useState(false)
 
-  // Own, already-accepted, v2 messages can be edited; history from before editing
-  // existed has a null clientMessageId and cannot be bound to a new revision.
+  // Own, already-accepted, v2 messages can be edited.
   const canEdit =
     message.direction === 'sent' &&
     !message.pending &&
@@ -75,63 +71,86 @@ export function MessageActionsModal({
   }
 
   return (
-    <Modal title="Message actions" onClose={onClose}>
-      {isEditing ? (
-        <form
-          className="chat-edit-form"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void handleSaveEdit()
-          }}
-        >
-          <label htmlFor="chat-edit-draft">Edited message</label>
-          <textarea
-            id="chat-edit-draft"
-            value={editDraft}
-            onChange={(event) => setEditDraft(event.target.value)}
-            rows={3}
-          />
-          <div className="chat-modal-actions">
-            <button type="submit" className="primary-button" disabled={!editDraft.trim()}>
-              Save edit
-            </button>
-            <button type="button" className="text-button" onClick={() => setIsEditing(false)}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      ) : (
-        <div className="chat-modal-actions chat-modal-actions-stack">
-          {canCopy ? (
-            <button type="button" className="text-button" onClick={() => void handleCopy()}>
-              Copy
-            </button>
-          ) : null}
-          {canEdit ? (
-            <button type="button" className="text-button" onClick={() => setIsEditing(true)}>
-              Edit
-            </button>
-          ) : null}
-          {canDeleteForEveryone ? (
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => void onDeleteForEveryone(message.id).then(onClose)}
-            >
-              Delete for everyone
-            </button>
-          ) : null}
-          {canHide ? (
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => void onHideForMe(message.id).then(onClose)}
-            >
-              Hide for me
-            </button>
-          ) : null}
+    <div
+      className="message-actions-overlay"
+      role="presentation"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          onClose()
+        }
+      }}
+    >
+      <div className="message-actions-modal" role="dialog" aria-modal="true" aria-labelledby="message-actions-title">
+        <div className="message-actions-header">
+          <span id="message-actions-title">Message actions</span>
+          <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+            <IconClose size={20} />
+          </button>
         </div>
-      )}
-    </Modal>
+        <div className="message-actions-content">
+          {isEditing ? (
+            <form
+              className="chat-edit-form"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void handleSaveEdit()
+              }}
+            >
+              <label htmlFor="chat-edit-draft">Edited message</label>
+              <textarea
+                id="chat-edit-draft"
+                value={editDraft}
+                onChange={(event) => setEditDraft(event.target.value)}
+                rows={3}
+              />
+              <div className="chat-modal-actions">
+                <button type="submit" className="primary-button" disabled={!editDraft.trim()}>
+                  Save edit
+                </button>
+                <button type="button" className="text-button" onClick={() => setIsEditing(false)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            <>
+              {canCopy ? (
+                <button type="button" className="message-action-btn" onClick={() => void handleCopy()}>
+                  Copy
+                </button>
+              ) : null}
+              {canEdit ? (
+                <button type="button" className="message-action-btn" onClick={() => setIsEditing(true)}>
+                  Edit
+                </button>
+              ) : null}
+              {canDeleteForEveryone ? (
+                <button
+                  type="button"
+                  className="message-action-btn"
+                  onClick={() => void onDeleteForEveryone(message.id).then(onClose)}
+                >
+                  Delete for everyone
+                </button>
+              ) : null}
+              {canHide ? (
+                <button
+                  type="button"
+                  className="message-action-btn"
+                  onClick={() => void onHideForMe(message.id).then(onClose)}
+                >
+                  Hide for me
+                </button>
+              ) : null}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }

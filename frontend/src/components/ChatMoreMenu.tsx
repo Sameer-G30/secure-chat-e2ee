@@ -1,10 +1,6 @@
-// Header "more options" menu ported from the legacy dropdown, with the known bugs
-// fixed rather than copied: export warns that it writes plaintext to disk; report
-// is metadata-only (contents are never attached); block is server-enforced;
-// "clear chat" is local-only and says so. Each item only fires its action — the
-// parent decides whether that action replaces this menu with another overlay
-// (export/report) or just closes it (search/clear/block). Calling onClose after
-// onExport would immediately dismiss the export warning dialog.
+// Header "more options" menu with vrati dropdown chrome. Export warns that it
+// writes plaintext to disk; report is metadata-only; block is server-enforced;
+// "clear chat" is local-only and says so. Each item only fires its action.
 
 // Describe the handlers ChatScreen wires into this menu.
 export interface ChatMoreMenuProps {
@@ -24,6 +20,8 @@ export interface ChatMoreMenuProps {
   onUnblock: () => void
   // Open the metadata-only report form.
   onReport: () => void
+  // Dismiss the overlay when the dimmed backdrop is clicked.
+  onDismiss: () => void
 }
 
 // Render the overflow actions for the open conversation (or a reduced set if none).
@@ -36,51 +34,67 @@ export function ChatMoreMenu({
   onBlock,
   onUnblock,
   onReport,
+  onDismiss,
 }: ChatMoreMenuProps) {
   return (
-    <div className="chat-more-menu" role="menu" aria-label="More options">
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-more-item"
-        onClick={onSearch}
-        disabled={!hasActiveChat}
-      >
-        Search in chat
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-more-item"
-        onClick={onExport}
-        disabled={!hasActiveChat}
-      >
-        Export chat
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="chat-more-item"
-        onClick={onClearLocal}
-        disabled={!hasActiveChat}
-      >
-        Clear local transcript
-      </button>
-      {hasActiveChat && !peerBlocked ? (
-        <button type="button" role="menuitem" className="chat-more-item" onClick={onBlock}>
-          Block
-        </button>
-      ) : null}
-      {hasActiveChat && peerBlocked ? (
-        <button type="button" role="menuitem" className="chat-more-item" onClick={onUnblock}>
-          Unblock
-        </button>
-      ) : null}
-      {hasActiveChat ? (
-        <button type="button" role="menuitem" className="chat-more-item" onClick={onReport}>
-          Report
-        </button>
-      ) : null}
+    <div
+      className="dropdown-overlay"
+      role="presentation"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onDismiss()
+        }
+      }}
+    >
+      <div className="dropdown-menu" role="menu" aria-label="More options">
+        <div className="dropdown-header">
+          <span>Chat Options</span>
+        </div>
+        <div className="dropdown-items">
+          <button
+            type="button"
+            role="menuitem"
+            className="dropdown-item"
+            onClick={onSearch}
+            disabled={!hasActiveChat}
+          >
+            Search in chat
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="dropdown-item"
+            onClick={onExport}
+            disabled={!hasActiveChat}
+          >
+            Export chat
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="dropdown-item"
+            onClick={onClearLocal}
+            disabled={!hasActiveChat}
+          >
+            Clear local transcript
+          </button>
+          {hasActiveChat && !peerBlocked ? (
+            <button type="button" role="menuitem" className="dropdown-item dropdown-item-danger" onClick={onBlock}>
+              Block
+            </button>
+          ) : null}
+          {hasActiveChat && peerBlocked ? (
+            <button type="button" role="menuitem" className="dropdown-item" onClick={onUnblock}>
+              Unblock
+            </button>
+          ) : null}
+          {hasActiveChat ? (
+            <button type="button" role="menuitem" className="dropdown-item dropdown-item-danger" onClick={onReport}>
+              Report
+            </button>
+          ) : null}
+        </div>
+      </div>
     </div>
   )
 }
