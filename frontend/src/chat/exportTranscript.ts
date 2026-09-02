@@ -24,7 +24,9 @@ export function formatTranscriptExport(
     }
     const who = message.direction === 'sent' ? selfUsername : peerUsername
     const edited = message.revision > 0 ? ' (edited)' : ''
-    lines.push(`${who}${edited}: ${message.plaintext}`)
+    const image = message.attachment
+    const body = image ? `[photo: ${image.name}]` : message.plaintext
+    lines.push(`${who}${edited}: ${body}`)
   }
   return `${lines.join('\n')}\n`
 }

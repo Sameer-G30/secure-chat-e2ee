@@ -1,5 +1,5 @@
 // Decode standard base64 ciphertext and nonce from conversation-history JSON.
-import { decodeBase64 } from '../crypto/keyExchange'
+import { decodeBase64, encodeBase64 } from '../crypto/keyExchange'
 // Import the envelope type already used by the live WebSocket parser.
 import type { RelayedEnvelope } from './chatSocket'
 
@@ -225,6 +225,9 @@ function parseHistoryEnvelope(value: unknown): RelayedEnvelope | null {
     message_id?: unknown
     revision?: unknown
     edited_at?: unknown
+    created_at?: unknown
+    peer_delivered?: unknown
+    peer_read?: unknown
   }
   if (frame.type !== 'envelope') {
     return null
@@ -251,6 +254,9 @@ function parseHistoryEnvelope(value: unknown): RelayedEnvelope | null {
       messageId: typeof frame.message_id === 'string' ? frame.message_id : null,
       revision: typeof frame.revision === 'number' ? frame.revision : 0,
       editedAt: typeof frame.edited_at === 'string' ? frame.edited_at : null,
+      createdAt: typeof frame.created_at === 'string' ? frame.created_at : '',
+      peerDelivered: frame.peer_delivered === true,
+      peerRead: frame.peer_read === true,
     }
   } catch {
     return null
@@ -295,6 +301,111 @@ export async function hideConversationMessage(
       extractErrorDetail(body, 'Could not hide that message. Please try again shortly.'),
       response.status,
     )
+  }
+}
+
+// Mark this conversation read for the caller so unread badges and peer ticks update.
+export async function markConversationRead(
+  accessToken: string,
+  conversationId: string,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/conversations/${encodeURIComponent(conversationId)}/read`,
+    { method: 'POST', headers: authHeaders(accessToken) },
+  )
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null)
+    throw new ConversationsApiError(
+      extractErrorDetail(body, 'Could not mark that conversation read. Please try again shortly.'),
+      response.status,
+    )
+  }
+}
+
+// Describe one sealed blob returned by POST/GET .../blobs.
+export interface EncryptedBlobRecord {
+  // Identify the blob with the client-chosen UUID.
+  id: string
+  // Identify which conversation this blob belongs to.
+  conversationId: string
+  // Carry the AEAD ciphertext without opened file bytes.
+  ciphertext: Uint8Array
+  // Carry the public nonce required for client-side decrypt.
+  nonce: Uint8Array
+}
+
+// Upload opaque sealed image bytes for one conversation the caller belongs to.
+export async function uploadEncryptedBlob(
+  accessToken: string,
+  conversationId: string,
+  payload: { id: string; ciphertext: Uint8Array; nonce: Uint8Array },
+): Promise<EncryptedBlobRecord> {
+  const response = await fetch(
+    `${API_BASE_URL}/conversations/${encodeURIComponent(conversationId)}/blobs`,
+    {
+      method: 'POST',
+      headers: authHeaders(accessToken),
+      body: JSON.stringify({
+        id: payload.id,
+        ciphertext: encodeBase64(payload.ciphertext),
+        nonce: encodeBase64(payload.nonce),
+      }),
+    },
+  )
+  const body: unknown = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new ConversationsApiError(
+      extractErrorDetail(body, 'Could not upload that image. Please try again shortly.'),
+      response.status,
+    )
+  }
+  return parseEncryptedBlob(body)
+}
+
+// Download opaque sealed image bytes for one conversation the caller belongs to.
+export async function fetchEncryptedBlob(
+  accessToken: string,
+  conversationId: string,
+  blobId: string,
+): Promise<EncryptedBlobRecord> {
+  const response = await fetch(
+    `${API_BASE_URL}/conversations/${encodeURIComponent(conversationId)}/blobs/${encodeURIComponent(blobId)}`,
+    { method: 'GET', headers: authHeaders(accessToken) },
+  )
+  const body: unknown = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new ConversationsApiError(
+      extractErrorDetail(body, 'Could not load that image. Please try again shortly.'),
+      response.status,
+    )
+  }
+  return parseEncryptedBlob(body)
+}
+
+// Narrow one blob JSON object into ciphertext bytes, or throw if it is malformed.
+function parseEncryptedBlob(value: unknown): EncryptedBlobRecord {
+  if (!value || typeof value !== 'object') {
+    throw new ConversationsApiError('Could not read that sealed image.', 500)
+  }
+  const frame = value as {
+    id?: unknown
+    conversation_id?: unknown
+    ciphertext?: unknown
+    nonce?: unknown
+  }
+  if (
+    typeof frame.id !== 'string' ||
+    typeof frame.conversation_id !== 'string' ||
+    typeof frame.ciphertext !== 'string' ||
+    typeof frame.nonce !== 'string'
+  ) {
+    throw new ConversationsApiError('Could not read that sealed image.', 500)
+  }
+  return {
+    id: frame.id,
+    conversationId: frame.conversation_id,
+    ciphertext: decodeBase64(frame.ciphertext),
+    nonce: decodeBase64(frame.nonce),
   }
 }
 

@@ -20,6 +20,7 @@ from app.models.message import Message
 from app.models.user import User
 
 # Import the validated request and response shapes for this router's endpoints.
+from app.schemas.blobs import EncryptedBlobIn, EncryptedBlobOut
 from app.schemas.conversations import (
     ConversationListResponse,
     ConversationResponse,
@@ -27,18 +28,22 @@ from app.schemas.conversations import (
     EpochResponse,
 )
 from app.schemas.messages import MessageDeletedOut, MessageHistoryResponse
+from app.schemas.receipts import ConversationReadResponse
 
 # Import the shared bearer-token authentication dependency.
 from app.security.dependencies import get_current_user
 
-# Import conversation load/create helpers so routers stay thin.
+# Import encrypted-blob store/fetch helpers (ciphertext only; no decrypt).
+from app.services.blobs import get_encrypted_blob, store_encrypted_blob
 from app.services.conversations import (
     get_conversation_for_participant,
     get_conversation_response,
     get_epoch_for_participant,
     get_or_create_conversation,
     list_conversations_for_user,
+    other_user_id,
 )
+from app.services.receipts import mark_conversation_read, peer_receipt_flags
 from app.services.relay import (
     connection_hub,
     delete_message_for_everyone,
@@ -140,7 +145,7 @@ async def fetch_conversation_messages(
     """
 
     # 404 if the conversation is missing or the caller is not a member.
-    await get_conversation_for_participant(db, conversation_id, current_user)
+    conversation = await get_conversation_for_participant(db, conversation_id, current_user)
     stored, next_cursor = await list_envelopes_page(
         db,
         conversation_id,
@@ -149,8 +154,22 @@ async def fetch_conversation_messages(
         limit=limit,
         after_id=after,
     )
+    # Attach the peer's delivered/read ticks onto the viewer's own sent envelopes only.
+    peer_id = other_user_id(conversation, current_user.id)
+    sent_ids = [row.id for row in stored if row.sender_id == current_user.id]
+    flags = await peer_receipt_flags(db, peer_id=peer_id, message_ids=sent_ids)
+    envelopes = []
+    for row in stored:
+        delivered, read = (
+            flags.get(row.id, (False, False))
+            if row.sender_id == current_user.id
+            else (False, False)
+        )
+        envelopes.append(
+            serialize_envelope(row, peer_delivered=delivered, peer_read=read)
+        )
     return MessageHistoryResponse(
-        messages=[serialize_envelope(row) for row in stored],
+        messages=envelopes,
         next_cursor=next_cursor,
     )
 
@@ -221,3 +240,79 @@ async def hide_conversation_message(
     if message_row is None or message_row.conversation_id != conversation_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="message not found")
     await hide_message_for_owner(db, message_row, current_user.id)
+
+
+# Mark this conversation read for the caller and ack inbound envelopes as read.
+@router.post("/conversations/{conversation_id}/read", response_model=ConversationReadResponse)
+async def mark_conversation_as_read(
+    # Identify which conversation to mark read.
+    conversation_id: UUID,
+    # Require a valid access token.
+    current_user: Annotated[User, Depends(get_current_user)],
+    # Inject a request-scoped async database session.
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ConversationReadResponse:
+    """Upsert the last-read cursor and fan delivered/read ticks to the peer.
+
+    This is metadata the server can already infer from WebSocket activity.
+    It never stores a preview string or a message body.
+    """
+
+    conversation = await get_conversation_for_participant(db, conversation_id, current_user)
+    last_read_at, frames = await mark_conversation_read(
+        db, conversation=conversation, viewer=current_user
+    )
+    for frame in frames:
+        await connection_hub.broadcast(
+            conversation.id,
+            frame,
+            exclude_user_id=current_user.id,
+        )
+    return ConversationReadResponse(
+        conversation_id=conversation.id, last_read_at=last_read_at
+    )
+
+
+# Store one client-encrypted image blob for a conversation the caller belongs to.
+@router.post(
+    "/conversations/{conversation_id}/blobs",
+    response_model=EncryptedBlobOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_conversation_blob(
+    # Identify which conversation this sealed file belongs to.
+    conversation_id: UUID,
+    # Accept opaque ciphertext, nonce, and a client-chosen blob id.
+    payload: EncryptedBlobIn,
+    # Require a valid access token.
+    current_user: Annotated[User, Depends(get_current_user)],
+    # Inject a request-scoped async database session.
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> EncryptedBlobOut:
+    """Persist sealed file bytes. The server never opens the ciphertext."""
+
+    conversation = await get_conversation_for_participant(db, conversation_id, current_user)
+    return await store_encrypted_blob(
+        db, conversation=conversation, uploader=current_user, payload=payload
+    )
+
+
+# Return one sealed blob that belongs to a conversation the caller is in.
+@router.get(
+    "/conversations/{conversation_id}/blobs/{blob_id}",
+    response_model=EncryptedBlobOut,
+)
+async def download_conversation_blob(
+    # Identify which conversation this sealed file belongs to.
+    conversation_id: UUID,
+    # Identify the client-chosen blob id.
+    blob_id: UUID,
+    # Require a valid access token.
+    current_user: Annotated[User, Depends(get_current_user)],
+    # Inject a request-scoped async database session.
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> EncryptedBlobOut:
+    """Return opaque ciphertext+nonce. Non-members receive 404."""
+
+    conversation = await get_conversation_for_participant(db, conversation_id, current_user)
+    return await get_encrypted_blob(db, conversation=conversation, blob_id=blob_id)

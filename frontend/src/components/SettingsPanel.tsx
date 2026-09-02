@@ -7,6 +7,8 @@
 import { useState } from 'react'
 // Import the stored preference type the theme hook already understands.
 import type { ThemePreference } from '../theme'
+// Import the avatar glyph used on the working profile form.
+import { Avatar } from './Avatar'
 // Import the vrati icon set used on each settings row.
 import {
   IconArrow,
@@ -30,6 +32,14 @@ export interface SettingsPanelProps {
   onClose: () => void
   // Sign out from the panel as well as from the header.
   onLogout: () => void
+  // Carry the signed-in account's editable public profile (not E2EE).
+  profileUsername: string
+  profileAccessToken: string
+  profileDisplayName: string
+  profileBio: string
+  profileHasAvatar: boolean
+  onSaveProfile: (displayName: string, bio: string) => Promise<void>
+  onUploadAvatar: (file: File) => Promise<void>
 }
 
 // Name the three theme choices with labels the Settings panel displays.
@@ -73,9 +83,22 @@ export function SettingsPanel({
   onThemePreferenceChange,
   onClose,
   onLogout,
+  profileUsername,
+  profileAccessToken,
+  profileDisplayName,
+  profileBio,
+  profileHasAvatar,
+  onSaveProfile,
+  onUploadAvatar,
 }: SettingsPanelProps) {
-  // Hold which slide is visible: the main list, or one coming-soon page.
+  // Hold which slide is visible: the main list, or one nested page.
   const [view, setView] = useState<'main' | string>('main')
+  // Hold the in-progress display name until Save.
+  const [displayName, setDisplayName] = useState(profileDisplayName)
+  // Hold the in-progress bio until Save.
+  const [bio, setBio] = useState(profileBio)
+  // Hold a profile-form status line distinct from the chat status.
+  const [profileStatus, setProfileStatus] = useState<string | null>(null)
   // Look up the open stub so the nested header can reuse its title.
   const stub = STUB_ROWS.find((row) => row.id === view) ?? null
 
@@ -194,11 +217,72 @@ export function SettingsPanel({
               </button>
             </div>
             <div className="settings-content">
-              <p className="settings-stub">
-                {stub?.title} is not implemented on this stack. There is no SMTP, avatar
-                storage, or two-factor flow in this deployment. Theme and logout work from
-                the main Settings list.
-              </p>
+              {view === 'profile' ? (
+                <form
+                  className="profile-form"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void onSaveProfile(displayName, bio).then(() => {
+                      setProfileStatus('Profile saved.')
+                    })
+                  }}
+                >
+                  <Avatar
+                    username={profileUsername}
+                    accessToken={profileAccessToken}
+                    className="contact-profile-avatar"
+                    initials={profileUsername.slice(0, 1).toUpperCase()}
+                  />
+                  {profileHasAvatar ? (
+                    <p className="settings-stub">A public photo is on this account.</p>
+                  ) : (
+                    <p className="settings-stub">No photo yet. JPEG, PNG, or WebP up to 200KB.</p>
+                  )}
+                  <label className="profile-file-label">
+                    Change photo
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      className="visually-hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0]
+                        if (file) {
+                          void onUploadAvatar(file).then(() => {
+                            setProfileStatus('Photo updated.')
+                          })
+                        }
+                        event.target.value = ''
+                      }}
+                    />
+                  </label>
+                  <label htmlFor="profile-display-name">Display name</label>
+                  <input
+                    id="profile-display-name"
+                    type="text"
+                    maxLength={64}
+                    value={displayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                  />
+                  <label htmlFor="profile-bio">Bio</label>
+                  <textarea
+                    id="profile-bio"
+                    maxLength={280}
+                    rows={3}
+                    value={bio}
+                    onChange={(event) => setBio(event.target.value)}
+                  />
+                  <button type="submit" className="primary-button">
+                    Save profile
+                  </button>
+                  {profileStatus ? <p className="chat-status">{profileStatus}</p> : null}
+                </form>
+              ) : (
+                <p className="settings-stub">
+                  {stub?.title} is not implemented on this stack. There is no SMTP or
+                  two-factor flow in this deployment. Theme, profile, and logout work from
+                  Settings.
+                </p>
+              )}
             </div>
           </>
         )}

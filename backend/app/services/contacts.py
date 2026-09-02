@@ -15,6 +15,9 @@ from app.models.user import User
 # Import the response shapes so routers do not rebuild contact payloads.
 from app.schemas.contacts import ContactListResponse, ContactResponse
 
+# Import unread counts so the sidebar badge is server-synced metadata, not a preview.
+from app.services.receipts import unread_counts_for_owner
+
 # Shared detail when the named account does not exist.
 _USER_NOT_FOUND_DETAIL = "user not found"
 # Shared detail when the caller tries to save their own account.
@@ -22,10 +25,22 @@ _SELF_CONTACT_DETAIL = "cannot add yourself as a contact"
 
 
 # Build the client-facing contact payload from ORM rows.
-def serialize_contact(contact: Contact, peer: User) -> ContactResponse:
-    """Return the contact's user id, handle, and when the owner saved them."""
+def serialize_contact(
+    contact: Contact,
+    peer: User,
+    *,
+    unread_count: int = 0,
+) -> ContactResponse:
+    """Return the contact's user id, handle, profile flags, and unread badge."""
 
-    return ContactResponse(id=peer.id, username=peer.username, created_at=contact.created_at)
+    return ContactResponse(
+        id=peer.id,
+        username=peer.username,
+        display_name=peer.display_name,
+        has_avatar=peer.avatar_bytes is not None,
+        unread_count=unread_count,
+        created_at=contact.created_at,
+    )
 
 
 # Return every contact the authenticated owner has saved, newest first.
@@ -42,7 +57,12 @@ async def list_contacts_for_owner(db: AsyncSession, owner: User) -> ContactListR
         )
     ).all()
     # Serialize each joined pair into the public response shape.
-    items = [serialize_contact(contact, peer) for contact, peer in rows]
+    peer_ids = [peer.id for _contact, peer in rows]
+    unread = await unread_counts_for_owner(db, owner, peer_ids)
+    items = [
+        serialize_contact(contact, peer, unread_count=unread.get(peer.id, 0))
+        for contact, peer in rows
+    ]
     return ContactListResponse(contacts=items)
 
 

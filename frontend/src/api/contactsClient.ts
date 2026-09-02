@@ -7,6 +7,12 @@ export interface ContactRecord {
   id: string
   // Identify the contact account with the handle the sidebar displays.
   username: string
+  // Carry the optional public display name when the contact has set one.
+  displayName: string | null
+  // Signal whether GET /users/{username}/avatar will return image bytes.
+  hasAvatar: boolean
+  // Count peer envelopes newer than this owner's last-read cursor.
+  unreadCount: number
   // Record when the owner saved this contact, as an ISO-8601 string.
   createdAt: string
 }
@@ -43,10 +49,20 @@ function authHeaders(accessToken: string): HeadersInit {
 }
 
 // Parse one contact payload into camelCase for the UI.
-function parseContact(body: { id: string; username: string; created_at: string }): ContactRecord {
+function parseContact(body: {
+  id: string
+  username: string
+  created_at: string
+  display_name?: string | null
+  has_avatar?: boolean
+  unread_count?: number
+}): ContactRecord {
   return {
     id: body.id,
     username: body.username,
+    displayName: typeof body.display_name === 'string' ? body.display_name : null,
+    hasAvatar: body.has_avatar === true,
+    unreadCount: typeof body.unread_count === 'number' ? body.unread_count : 0,
     createdAt: body.created_at,
   }
 }
@@ -64,7 +80,16 @@ export async function listContacts(accessToken: string): Promise<ContactRecord[]
       response.status,
     )
   }
-  const payload = body as { contacts?: Array<{ id: string; username: string; created_at: string }> }
+  const payload = body as {
+    contacts?: Array<{
+      id: string
+      username: string
+      created_at: string
+      display_name?: string | null
+      has_avatar?: boolean
+      unread_count?: number
+    }>
+  }
   if (!Array.isArray(payload.contacts)) {
     return []
   }
@@ -85,7 +110,16 @@ export async function addContact(accessToken: string, username: string): Promise
       response.status,
     )
   }
-  return parseContact(body as { id: string; username: string; created_at: string })
+  return parseContact(
+    body as {
+      id: string
+      username: string
+      created_at: string
+      display_name?: string | null
+      has_avatar?: boolean
+      unread_count?: number
+    },
+  )
 }
 
 // Remove a named account from the owner's address book. The legacy React prototype

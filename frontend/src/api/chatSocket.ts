@@ -29,6 +29,12 @@ export interface RelayedEnvelope {
   revision: number
   // Carry the most recent edit time, or null if this message was never edited.
   editedAt: string | null
+  // Carry the insertion timestamp as an ISO-8601 string for the bubble clock.
+  createdAt?: string
+  // True when the peer's device has acknowledged this envelope (sender-view only).
+  peerDelivered?: boolean
+  // True when the peer has focused the chat on this envelope (sender-view only).
+  peerRead?: boolean
 }
 
 // Describe the frame the server broadcasts to the peer after a hard delete-for-everyone.
@@ -63,7 +69,9 @@ export interface ChatSocketHandlers {
   // Receive the server-assigned row id for a message this tab just sent or edited.
   // Used to reconcile a send's temporary local id with the real id later edit/delete
   // calls need to target (see useEncryptedConversation.ts's pendingSendQueueRef).
-  onAccepted?: (id: string) => void
+  onAccepted?: (id: string, createdAt?: string) => void
+  // Receive a delivered/read tick for an envelope this tab sent (metadata only).
+  onReceipt?: (kind: 'delivered' | 'read', messageId: string, recipientId: string) => void
 }
 
 // Describe optional v2 fields a send or edit may carry on the wire.
@@ -86,6 +94,8 @@ export interface ChatSocket {
   ) => void
   // Send a typing metadata frame without including the draft text.
   sendTyping: (isTyping: boolean) => void
+  // Send delivered/read ticks for envelopes this tab received (metadata only).
+  sendReceipt: (kind: 'delivered' | 'read', messageIds: string[]) => void
   // Close the socket when the user leaves the conversation or logs out.
   close: () => void
 }
@@ -107,6 +117,9 @@ export function parseRelayedEnvelope(value: unknown): RelayedEnvelope | null {
     message_id?: unknown
     revision?: unknown
     edited_at?: unknown
+    created_at?: unknown
+    peer_delivered?: unknown
+    peer_read?: unknown
   }
   if (frame.type !== 'envelope') {
     return null
@@ -135,6 +148,9 @@ export function parseRelayedEnvelope(value: unknown): RelayedEnvelope | null {
       messageId: typeof frame.message_id === 'string' ? frame.message_id : null,
       revision: typeof frame.revision === 'number' ? frame.revision : 0,
       editedAt: typeof frame.edited_at === 'string' ? frame.edited_at : null,
+      createdAt: typeof frame.created_at === 'string' ? frame.created_at : '',
+      peerDelivered: frame.peer_delivered === true,
+      peerRead: frame.peer_read === true,
     }
   } catch {
     // Malformed base64 is treated as a dropped frame rather than corrupted plaintext.
@@ -202,9 +218,26 @@ export function handleRelayJson(parsed: unknown, handlers: ChatSocketHandlers): 
     // rendered plaintext locally; the id here only matters for reconciling a
     // temporary local id with the real row id (see ChatSocketHandlers.onAccepted).
     if (type === 'accepted') {
-      const acceptedFrame = parsed as { id?: unknown }
+      const acceptedFrame = parsed as { id?: unknown; created_at?: unknown }
       if (typeof acceptedFrame.id === 'string') {
-        handlers.onAccepted?.(acceptedFrame.id)
+        const createdAt =
+          typeof acceptedFrame.created_at === 'string' ? acceptedFrame.created_at : undefined
+        handlers.onAccepted?.(acceptedFrame.id, createdAt)
+      }
+      return
+    }
+    if (type === 'receipt') {
+      const receiptFrame = parsed as {
+        kind?: unknown
+        message_id?: unknown
+        recipient_id?: unknown
+      }
+      if (
+        (receiptFrame.kind === 'delivered' || receiptFrame.kind === 'read') &&
+        typeof receiptFrame.message_id === 'string' &&
+        typeof receiptFrame.recipient_id === 'string'
+      ) {
+        handlers.onReceipt?.(receiptFrame.kind, receiptFrame.message_id, receiptFrame.recipient_id)
       }
       return
     }
@@ -319,6 +352,12 @@ export function connectChatSocket(
         return
       }
       socket.send(JSON.stringify({ type: 'typing', is_typing: isTyping }))
+    },
+    sendReceipt(kind, messageIds) {
+      if (socket.readyState !== WebSocket.OPEN || messageIds.length === 0) {
+        return
+      }
+      socket.send(JSON.stringify({ type: 'receipt', kind, message_ids: messageIds }))
     },
     close() {
       if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {

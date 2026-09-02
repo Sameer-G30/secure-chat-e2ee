@@ -54,6 +54,9 @@ vi.mock('../api/conversationsClient', async () => {
     fetchConversationMessages: vi.fn(),
     deleteConversationMessage: vi.fn(async () => {}),
     hideConversationMessage: vi.fn(async () => {}),
+    markConversationRead: vi.fn(async () => {}),
+    uploadEncryptedBlob: vi.fn(),
+    fetchEncryptedBlob: vi.fn(),
   }
 })
 
@@ -75,6 +78,22 @@ vi.mock('../api/usersClient', async () => {
   return {
     ...actual,
     searchUsers: vi.fn(async () => []),
+    fetchMyProfile: vi.fn(async () => ({
+      username: 'alice',
+      email: 'alice@example.com',
+      displayName: null,
+      bio: null,
+      hasAvatar: false,
+    })),
+    fetchUserProfile: vi.fn(async () => ({
+      username: 'bob',
+      displayName: null,
+      bio: null,
+      hasAvatar: false,
+    })),
+    patchMyProfile: vi.fn(),
+    uploadMyAvatar: vi.fn(),
+    fetchUserAvatar: vi.fn(async () => null),
   }
 })
 
@@ -134,6 +153,7 @@ import {
   fetchConversationMessages,
   hideConversationMessage,
   startOrFetchConversation,
+  uploadEncryptedBlob,
 } from '../api/conversationsClient'
 import { connectChatSocket } from '../api/chatSocket'
 import { addContact, deleteContact, listContacts } from '../api/contactsClient'
@@ -158,6 +178,7 @@ const mockedBlockUser = vi.mocked(blockUser)
 const mockedReportUser = vi.mocked(reportUser)
 const mockedDeleteConversationMessage = vi.mocked(deleteConversationMessage)
 const mockedHideConversationMessage = vi.mocked(hideConversationMessage)
+const mockedUploadEncryptedBlob = vi.mocked(uploadEncryptedBlob)
 const mockedEnableDistilbertOptIn = vi.mocked(enableDistilbertOptIn)
 const mockedClassify = vi.mocked(classifyVerifiedPlaintext)
 
@@ -167,6 +188,7 @@ const bobId = '00000000-0000-4000-8000-000000000003'
 
 const sendEnvelope = vi.fn()
 const sendTyping = vi.fn()
+const sendReceipt = vi.fn()
 const closeSocket = vi.fn()
 let capturedHandlers: ChatSocketHandlers | null = null
 
@@ -183,6 +205,7 @@ beforeAll(async () => {
 afterEach(() => {
   sendEnvelope.mockReset()
   sendTyping.mockReset()
+  sendReceipt.mockReset()
   closeSocket.mockReset()
   capturedHandlers = null
   window.localStorage.clear()
@@ -248,11 +271,14 @@ async function startChatWithBob(
     id: bobId,
     username: 'bob',
     createdAt: '2026-08-14T00:00:00Z',
+    displayName: null,
+    hasAvatar: false,
+    unreadCount: 0,
   })
   capturedHandlers = null
   mockedConnectChatSocket.mockImplementation((_id, _token, handlers) => {
     capturedHandlers = handlers
-    return { sendEnvelope, sendTyping, close: closeSocket }
+    return { sendEnvelope, sendTyping, sendReceipt, close: closeSocket }
   })
 
   fireEvent.change(screen.getByLabelText('Add contact'), { target: { value: 'bob' } })
@@ -294,6 +320,7 @@ describe('ChatScreen', () => {
     renderChatScreen()
     await screen.findByRole('heading', { name: 'Secure Chat' })
     await startChatWithBob()
+    sendReceipt.mockClear()
 
     const relayed: RelayedEnvelope = {
       id: 'msg-1',
@@ -308,8 +335,43 @@ describe('ChatScreen', () => {
       editedAt: null,
     }
     capturedHandlers?.onEnvelope(relayed)
-    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
     expect(screen.queryByText('message failed verification')).not.toBeInTheDocument()
+    expect(sendReceipt).toHaveBeenCalledWith('delivered', ['msg-1'])
+    expect(sendReceipt).toHaveBeenCalledWith('read', ['msg-1'])
+  })
+
+  it('acks a hidden inbound envelope as delivered only', async () => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    })
+    try {
+      renderChatScreen()
+      await screen.findByRole('heading', { name: 'Secure Chat' })
+      await startChatWithBob()
+      sendReceipt.mockClear()
+      capturedHandlers?.onEnvelope({
+        id: 'msg-hidden',
+        conversationId,
+        senderId: bobId,
+        ciphertext: new Uint8Array(32).fill(1),
+        nonce: new Uint8Array(24).fill(2),
+        keyEpoch: 0,
+        adVersion: 1,
+        messageId: null,
+        revision: 0,
+        editedAt: null,
+      })
+      expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
+      expect(sendReceipt).toHaveBeenCalledWith('delivered', ['msg-hidden'])
+      expect(sendReceipt).not.toHaveBeenCalledWith('read', ['msg-hidden'])
+    } finally {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => 'visible',
+      })
+    }
   })
 
   it('shows message failed verification instead of corrupted plaintext', async () => {
@@ -332,7 +394,7 @@ describe('ChatScreen', () => {
 
     expect(await screen.findByText('message failed verification')).toBeInTheDocument()
     expect(screen.queryByText('do not show garbage')).not.toBeInTheDocument()
-    expect(screen.queryByText('hello from bob')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'hello from bob' })).not.toBeInTheDocument()
     expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
   })
 
@@ -403,7 +465,7 @@ describe('ChatScreen', () => {
       revision: 0,
       editedAt: null,
     })
-    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
     expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
     expect(mockedClassify).not.toHaveBeenCalled()
     mockedClassify.mockResolvedValue({
@@ -455,7 +517,7 @@ describe('ChatScreen', () => {
         editedAt: null,
       },
     ])
-    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
     expect(screen.getByText('This message shows signs of a scam')).toBeInTheDocument()
     expect(mockedClassify).not.toHaveBeenCalled()
   })
@@ -485,7 +547,7 @@ describe('ChatScreen', () => {
       editedAt: null,
     })
 
-    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
     expect(await screen.findByText('This message shows signs of a scam')).toBeInTheDocument()
   })
 
@@ -528,7 +590,7 @@ describe('ChatScreen', () => {
       revision: 0,
       editedAt: null,
     })
-    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Message'), {
       target: { value: 'please send the wallet seed phrase tonight' },
     })
@@ -564,7 +626,7 @@ describe('ChatScreen', () => {
         editedAt: null,
       },
     ])
-    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
     expect(mockedFetchConversationMessages).toHaveBeenCalledWith('access-token', conversationId)
   })
 
@@ -586,7 +648,7 @@ describe('ChatScreen', () => {
       },
     ])
     expect(await screen.findByText('message failed verification')).toBeInTheDocument()
-    expect(screen.queryByText('hello from bob')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'hello from bob' })).not.toBeInTheDocument()
     expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
   })
 
@@ -652,7 +714,7 @@ describe('ChatScreen', () => {
       { currentEpoch: 1 },
     )
     // History must still decrypt; decrypt uses the envelope's keyEpoch, not currentEpoch.
-    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
     expect(vi.mocked(decryptMessage)).toHaveBeenCalledWith(
       expect.objectContaining({ keyEpoch: 0 }),
       expect.any(Uint8Array),
@@ -695,7 +757,7 @@ describe('ChatScreen', () => {
       revision: 0,
       editedAt: null,
     })
-    fireEvent.click(await screen.findByText('hello from bob'))
+    fireEvent.click(await screen.findByRole('button', { name: 'hello from bob' }))
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Hide for me' }))
     await waitFor(() => {
@@ -794,7 +856,7 @@ describe('ChatScreen', () => {
       revision: 0,
       editedAt: null,
     })
-    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'More' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Search in chat' }))
     fireEvent.change(screen.getByLabelText('Search in chat'), { target: { value: 'nope' } })
@@ -803,7 +865,14 @@ describe('ChatScreen', () => {
 
   it('removes a contact from the server-side address book', async () => {
     mockedListContacts.mockResolvedValue([
-      { id: bobId, username: 'bob', createdAt: '2026-08-14T00:00:00Z' },
+      {
+        id: bobId,
+        username: 'bob',
+        createdAt: '2026-08-14T00:00:00Z',
+        displayName: null,
+        hasAvatar: false,
+        unreadCount: 0,
+      },
     ])
     mockedDeleteContact.mockResolvedValue(undefined)
     renderChatScreen()
@@ -813,5 +882,36 @@ describe('ChatScreen', () => {
     await waitFor(() => {
       expect(mockedDeleteContact).toHaveBeenCalledWith('access-token', 'bob')
     })
+  })
+
+  it('seals and sends an attached image while leaving video disabled', async () => {
+    mockedUploadEncryptedBlob.mockResolvedValue({
+      id: '11111111-1111-4111-8111-111111111111',
+      conversationId,
+      ciphertext: new Uint8Array([1]),
+      nonce: new Uint8Array(24),
+    })
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Video attachments coming later' })).toBeDisabled()
+    await startChatWithBob()
+    expect(screen.getByRole('button', { name: 'Attach image' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Video attachments coming later' })).toBeDisabled()
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'photo.png', { type: 'image/png' })
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:photo')
+    const input = document.querySelector(
+      'input[accept="image/jpeg,image/png,image/webp,image/gif"]',
+    )
+    expect(input).not.toBeNull()
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } })
+    await waitFor(() => {
+      expect(mockedUploadEncryptedBlob).toHaveBeenCalled()
+    })
+    await waitFor(() => {
+      expect(sendEnvelope).toHaveBeenCalled()
+    })
+    expect(await screen.findByRole('button', { name: 'photo.png' })).toBeInTheDocument()
+    createObjectURL.mockRestore()
   })
 })

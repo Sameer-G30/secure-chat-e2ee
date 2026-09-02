@@ -33,12 +33,12 @@ def test_env_example_documents_every_settings_field() -> None:
         assert env_name in example_text, f"{env_name} is missing from .env.example"
 
 
-# Confirm CORS is still a single FRONTEND_ORIGIN, now with DELETE added.
-def test_cors_uses_single_frontend_origin_and_get_post_delete_only() -> None:
-    """Document CORS after the pre-deployment review: one origin, GET/POST/DELETE.
+# Confirm CORS is still a single FRONTEND_ORIGIN, now with DELETE and PATCH.
+def test_cors_uses_single_frontend_origin_and_documented_verbs() -> None:
+    """Document CORS: one origin, GET/POST/DELETE/PATCH.
 
     DELETE was added for contact removal, unblocking, and message
-    delete-for-everyone. Nothing in this API uses PUT/PATCH.
+    delete-for-everyone. PATCH was added for the signed-in profile update.
     """
 
     # Collect CORSMiddleware from the live app stack without a typed cls identity check.
@@ -54,7 +54,7 @@ def test_cors_uses_single_frontend_origin_and_get_post_delete_only() -> None:
     # Require a one-element allow-list, not a wildcard or guessed origin list.
     assert raw_options["allow_origins"] == [get_settings().frontend_origin]
     # Require the verbs this API's routers actually use.
-    assert raw_options["allow_methods"] == ["GET", "POST", "DELETE"]
+    assert raw_options["allow_methods"] == ["GET", "POST", "DELETE", "PATCH"]
 
 
 # Confirm the Compose API image still migrates before binding uvicorn.

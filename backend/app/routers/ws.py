@@ -19,11 +19,15 @@ from app.db import get_db
 # Import the validated inbound envelope schema.
 from app.schemas.messages import RelayEnvelopeIn
 
+# Import the validated inbound receipt schema (metadata only, never a message body).
+from app.schemas.receipts import ReceiptFrameIn
+
 # Import the shared access-token verifier used by HTTP Bearer auth.
 from app.security.dependencies import get_user_from_access_token
 
 # Import persist/fan-out helpers; none of these decrypt or handle private keys.
 from app.services.conversations import other_user_id
+from app.services.receipts import apply_receipt_batch
 from app.services.relay import (
     EnvelopeRejected,
     EnvelopeSilentlyDropped,
@@ -121,6 +125,27 @@ async def conversation_relay(
                     exclude_user_id=user.id,
                 )
                 continue
+            # Receipt frames are metadata only: delivered/read ticks, never a message body.
+            if isinstance(raw_frame, dict) and raw_frame.get("type") == "receipt":
+                try:
+                    receipt = ReceiptFrameIn.model_validate(raw_frame)
+                    frames = await apply_receipt_batch(
+                        db,
+                        conversation=conversation,
+                        recipient=user,
+                        kind=receipt.kind,
+                        message_ids=receipt.message_ids,
+                    )
+                except (ValidationError, HTTPException, ValueError):
+                    await websocket.send_json({"type": "error", "detail": "invalid receipt"})
+                    continue
+                for frame in frames:
+                    await connection_hub.broadcast(
+                        conversation.id,
+                        frame,
+                        exclude_user_id=user.id,
+                    )
+                continue
             try:
                 # Validate ciphertext/nonce/epoch shape without attempting decryption.
                 envelope = RelayEnvelopeIn.model_validate(raw_frame)
@@ -151,7 +176,13 @@ async def conversation_relay(
                 exclude_user_id=user.id,
             )
             # Acknowledge persistence so the sender can attach the server-assigned id.
-            await websocket.send_json({"type": "accepted", "id": str(outbound.id)})
+            await websocket.send_json(
+                {
+                    "type": "accepted",
+                    "id": str(outbound.id),
+                    "created_at": outbound.created_at,
+                }
+            )
             # Broadcast the new counter to every member, including the sender.
             if rotated_epoch is not None:
                 # Metadata only: the integer clients use as the next KDF subkey id.

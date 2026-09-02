@@ -29,6 +29,12 @@ class ContactResponse(BaseModel):
     id: UUID
     # Identify the contact account with the handle the sidebar displays.
     username: str
+    # Carry the optional public display name when the contact has set one.
+    display_name: str | None = None
+    # Signal whether GET /users/{username}/avatar will return image bytes.
+    has_avatar: bool = False
+    # Count peer envelopes newer than this owner's last-read cursor (0 if none).
+    unread_count: int = 0
     # Record when the owner saved this contact.
     created_at: datetime
 

@@ -427,7 +427,12 @@ async def list_envelopes_page(
 
 
 # Serialize a stored envelope for the WebSocket without adding plaintext fields.
-def serialize_envelope(message: Message) -> RelayEnvelopeOut:
+def serialize_envelope(
+    message: Message,
+    *,
+    peer_delivered: bool = False,
+    peer_read: bool = False,
+) -> RelayEnvelopeOut:
     """Return the ciphertext-only frame the peer will decrypt locally."""
 
     created_at = message.created_at.isoformat() if message.created_at is not None else ""
@@ -444,6 +449,8 @@ def serialize_envelope(message: Message) -> RelayEnvelopeOut:
         message_id=message.client_message_id,
         revision=message.revision,
         edited_at=edited_at,
+        peer_delivered=peer_delivered,
+        peer_read=peer_read,
     )
 
 

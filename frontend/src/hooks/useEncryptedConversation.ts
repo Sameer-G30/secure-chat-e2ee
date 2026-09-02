@@ -19,8 +19,11 @@ import {
   deleteConversationMessage,
   fetchConversationEpoch,
   fetchConversationMessages,
+  fetchEncryptedBlob,
   hideConversationMessage,
+  markConversationRead,
   startOrFetchConversation,
+  uploadEncryptedBlob,
 } from '../api/conversationsClient'
 // Import the authenticated ciphertext-only WebSocket wrapper.
 import { connectChatSocket } from '../api/chatSocket'
@@ -32,6 +35,7 @@ import {
   decodeBase64,
   decryptMessage,
   deriveSessionKeys,
+  encodeBase64,
   encryptMessage,
   initializeSodium,
 } from '../crypto/keyExchange'
@@ -50,6 +54,31 @@ import {
 // Reuse AuthContext's own Session shape instead of declaring a second, structurally
 // coincidental copy of the same four fields.
 import type { Session } from '../context/AuthContext'
+import {
+  assertAttachableImage,
+  openImageBytes,
+  parseImageAttachmentPayload,
+  sealImageBytes,
+  serializeImageAttachmentPayload,
+} from '../chat/imageAttachment'
+import { previewTextForMessage, writeLastMessagePreview } from '../chat/lastMessagePreview'
+
+// Describe delivery ticks the sender's bubble shows after the peer acks metadata.
+export type DeliveryStatus = 'pending' | 'sent' | 'delivered' | 'read'
+
+// Describe a locally decrypted image that was stored as a sealed blob.
+export interface ChatImageAttachment {
+  // Identify the sealed blob GET path.
+  blobId: string
+  // Carry the media type used to build the object URL.
+  mime: string
+  // Carry the original filename for the accessible name.
+  name: string
+  // Carry a blob: URL once the image bytes are opened, or null while loading.
+  objectUrl: string | null
+  // Signal that sealed-file decrypt or download failed.
+  failed: boolean
+}
 
 // Describe one bubble in the in-memory message list (no server-side pagination yet).
 export interface ChatMessage {
@@ -75,6 +104,12 @@ export interface ChatMessage {
   // True only for an own just-sent message still waiting on the server's "accepted"
   // ack (and therefore not yet safe to edit/delete, since its real row id is unknown).
   pending: boolean
+  // Carry the insertion timestamp used by the bubble clock.
+  createdAt: string
+  // Carry sender-side delivery ticks (ignored for received bubbles).
+  deliveryStatus: DeliveryStatus
+  // Carry a decrypted image pointer, or null for ordinary text.
+  attachment: ChatImageAttachment | null
 }
 
 // Describe the live conversation this tab has derived keys for.
@@ -114,6 +149,8 @@ export interface EncryptedConversationApi {
   handleDeleteMessage: (id: string) => Promise<void>
   // Hide a message (own or the peer's) from this account's own future history only.
   handleHideMessage: (id: string) => Promise<void>
+  // Encrypt and send a picked JPEG/PNG/WebP/GIF; video stays a UI placeholder.
+  handleSendImage: (file: File) => Promise<void>
   // Drop this tab's in-memory transcript without touching the server (legacy "clear
   // chat" was a Firebase wipe; here it is local-only and documented as such).
   handleClearLocalTranscript: () => void
@@ -124,6 +161,16 @@ export interface EncryptedConversationApi {
 
 // The server's WebSocket auth-failure close code (see backend/app/routers/ws.py).
 const WS_CLOSE_UNAUTHORIZED = 4401
+
+// Decide whether this tab can honestly mark envelopes read (WhatsApp-style).
+function chatDocumentIsVisible(): boolean {
+  // Treat a missing document as visible so Node/jsdom tests still send read ticks.
+  if (typeof document === 'undefined') {
+    return true
+  }
+  // Hidden tabs still receive ciphertext and can tick delivered, but not read.
+  return document.visibilityState === 'visible'
+}
 
 // Drive one ChatScreen's live encrypted conversation: lookup, key derivation, history,
 // relay socket, send/edit/delete/receive, epoch rotation, and local classification.
@@ -196,6 +243,37 @@ export function useEncryptedConversation(
     messagesRef.current = messages
   }, [messages])
 
+  // Catch up delivered+read when the user returns to a backgrounded open chat.
+  useEffect(() => {
+    function onVisible() {
+      // Ignore the hidden half of visibilitychange so we do not mark-read in the background.
+      if (!chatDocumentIsVisible()) {
+        return
+      }
+      const current = activeChatRef.current
+      const socket = socketRef.current
+      if (!current || !socket) {
+        return
+      }
+      const receivedIds = messagesRef.current
+        .filter((row) => row.direction === 'received')
+        .map((row) => row.id)
+      socket.sendReceipt('delivered', receivedIds)
+      socket.sendReceipt('read', receivedIds)
+      void authorizedRequest
+        .request((accessToken) => markConversationRead(accessToken, current.conversationId))
+        .catch(() => {
+          // Unread sync is best-effort when returning to a backgrounded tab.
+        })
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [authorizedRequest.request])
+
   // Close any open relay socket when this screen unmounts (logout or session end).
   useEffect(() => {
     return () => {
@@ -243,6 +321,10 @@ export function useEncryptedConversation(
     // Skip verification failures; they must never reach the classifier.
     if (row.verificationFailed || !row.plaintext) {
       // No plaintext to score.
+      return false
+    }
+    // Image pointers are JSON, not chat text the scam model should score.
+    if (row.attachment !== null || parseImageAttachmentPayload(row.plaintext)) {
       return false
     }
     // Cache hit: skip WASM on reload (DistilBERT session create is ~1s plus infer/msg).
@@ -349,6 +431,15 @@ export function useEncryptedConversation(
       envelope.messageId !== null
         ? { messageId: envelope.messageId, revision: envelope.revision }
         : {}
+    const createdAt = envelope.createdAt ?? ''
+    const deliveryStatus: DeliveryStatus =
+      direction === 'sent'
+        ? envelope.peerRead
+          ? 'read'
+          : envelope.peerDelivered
+            ? 'delivered'
+            : 'sent'
+        : 'sent'
     if (key === null) {
       return {
         id: envelope.id,
@@ -360,6 +451,9 @@ export function useEncryptedConversation(
         revision: envelope.revision,
         editedAt: envelope.editedAt,
         pending: false,
+        createdAt,
+        deliveryStatus: 'sent',
+        attachment: null,
       }
     }
     try {
@@ -376,6 +470,7 @@ export function useEncryptedConversation(
           ...identity,
         },
       )
+      const image = parseImageAttachmentPayload(plaintext)
       return applyCachedBanner({
         id: envelope.id,
         direction,
@@ -386,6 +481,17 @@ export function useEncryptedConversation(
         revision: envelope.revision,
         editedAt: envelope.editedAt,
         pending: false,
+        createdAt,
+        deliveryStatus,
+        attachment: image
+          ? {
+              blobId: image.blobId,
+              mime: image.mime,
+              name: image.name,
+              objectUrl: null,
+              failed: false,
+            }
+          : null,
       })
     } catch {
       return {
@@ -398,6 +504,76 @@ export function useEncryptedConversation(
         revision: envelope.revision,
         editedAt: envelope.editedAt,
         pending: false,
+        createdAt,
+        deliveryStatus,
+        attachment: null,
+      }
+    }
+  }
+
+  // Open a sealed image blob and attach a blob: URL to the matching bubble.
+  function hydrateImageAttachment(messageId: string, conversationId: string, plaintext: string) {
+    const payload = parseImageAttachmentPayload(plaintext)
+    if (payload === null) {
+      return
+    }
+    void authorizedRequest
+      .request((accessToken) => fetchEncryptedBlob(accessToken, conversationId, payload.blobId))
+      .then(async (blob) => {
+        const bytes = await openImageBytes(
+          blob.ciphertext,
+          blob.nonce,
+          payload.fileKey,
+          conversationId,
+          payload.blobId,
+        )
+        const copy = new ArrayBuffer(bytes.byteLength)
+        new Uint8Array(copy).set(bytes)
+        const objectUrl = URL.createObjectURL(new Blob([copy], { type: payload.mime }))
+        setMessages((existing) =>
+          existing.map((message) => {
+            if (message.id !== messageId || message.attachment === null) {
+              return message
+            }
+            if (message.attachment.objectUrl) {
+              URL.revokeObjectURL(message.attachment.objectUrl)
+            }
+            return {
+              ...message,
+              attachment: { ...message.attachment, objectUrl, failed: false },
+            }
+          }),
+        )
+      })
+      .catch(() => {
+        setMessages((existing) =>
+          existing.map((message) =>
+            message.id === messageId && message.attachment
+              ? { ...message, attachment: { ...message.attachment, failed: true } }
+              : message,
+          ),
+        )
+      })
+  }
+
+  // Remember a sidebar snippet after a verified send or receive.
+  function persistPreview(row: ChatMessage, peerUsername: string) {
+    const username = usernameRef.current
+    if (!username || row.verificationFailed || row.plaintext === null) {
+      return
+    }
+    void writeLastMessagePreview(
+      username,
+      peerUsername,
+      previewTextForMessage(row.plaintext, row.direction, row.attachment !== null),
+    )
+  }
+
+  // Drop blob: URLs so a transcript clear cannot leak object URLs.
+  function revokeAllAttachments(rows: ChatMessage[]) {
+    for (const row of rows) {
+      if (row.attachment?.objectUrl) {
+        URL.revokeObjectURL(row.attachment.objectUrl)
       }
     }
   }
@@ -432,6 +608,21 @@ export function useEncryptedConversation(
       updated[index] = row
       return updated
     })
+    persistPreview(row, current.peerUsername)
+    if (row.attachment && row.plaintext) {
+      hydrateImageAttachment(row.id, current.conversationId, row.plaintext)
+    }
+    // Ciphertext reached this device: tick delivered even if the tab is in the background.
+    socketRef.current?.sendReceipt('delivered', [row.id])
+    if (chatDocumentIsVisible()) {
+      // Gold ticks and a zero unread badge only while the user is looking at this chat.
+      socketRef.current?.sendReceipt('read', [row.id])
+      void authorizedRequest
+        .request((accessToken) => markConversationRead(accessToken, current.conversationId))
+        .catch(() => {
+          // Unread sync is best-effort; a failed mark-read must not hide the bubble.
+        })
+    }
     if (needsClassify(row) && row.plaintext) {
       classifyAndFlag(row.id, row.plaintext, row.revision, row.direction, messagesRef.current)
     }
@@ -471,7 +662,7 @@ export function useEncryptedConversation(
   // Reconcile a just-sent message's temporary local id with the server's real row id
   // once its "accepted" ack arrives, so later edit/delete calls have something to
   // target. Edits reuse an already-reconciled id and do not enqueue here.
-  function handleAccepted(serverId: string) {
+  function handleAccepted(serverId: string, createdAt?: string) {
     const localId = pendingSendQueueRef.current.shift()
     // No queued send means this ack is not for an optimistic bubble.
     if (localId === undefined) {
@@ -480,22 +671,43 @@ export function useEncryptedConversation(
     }
     // Remember the mapping so a slow classify() result still finds the row.
     acceptedIdsRef.current.set(localId, serverId)
-    // Server reused the optimistic id; the bubble already has the right key.
-    if (localId === serverId) {
-      // Nothing to rename in React state or in the banner cache.
-      return
-    }
     // Follow the id change in the banner cache so reload looks up the server UUID.
     const username = usernameRef.current
     // Skip storage when ChatScreen is in the logout render.
-    if (username) {
+    if (username && localId !== serverId) {
       // Move the pending-id row onto the history id.
       renameCachedBanner(username, localId, serverId)
     }
     setMessages((existing) =>
       existing.map((message) =>
-        message.id === localId ? { ...message, id: serverId, pending: false } : message,
+        message.id === localId
+          ? {
+              ...message,
+              id: serverId,
+              pending: false,
+              deliveryStatus: 'sent',
+              createdAt: createdAt ?? message.createdAt,
+            }
+          : message,
       ),
+    )
+  }
+
+  // Advance sender-side ticks when the peer's device reports delivered or read.
+  function handleReceipt(kind: 'delivered' | 'read', messageId: string) {
+    setMessages((existing) =>
+      existing.map((message) => {
+        if (message.id !== messageId || message.direction !== 'sent') {
+          return message
+        }
+        if (kind === 'read') {
+          return { ...message, deliveryStatus: 'read' }
+        }
+        if (message.deliveryStatus === 'read') {
+          return message
+        }
+        return { ...message, deliveryStatus: 'delivered' }
+      }),
     )
   }
 
@@ -506,6 +718,7 @@ export function useEncryptedConversation(
     return connectChatSocket(conversationId, accessToken, {
       onEnvelope: handleIncomingEnvelope,
       onAccepted: handleAccepted,
+      onReceipt: handleReceipt,
       onMessageDeleted: handleMessageDeleted,
       onProtocolError: (detail) => {
         setErrorMessage(detail)
@@ -583,6 +796,7 @@ export function useEncryptedConversation(
     pendingSendQueueRef.current = []
     // Drop optimistic-id mappings for the conversation we are leaving.
     acceptedIdsRef.current = new Map()
+    revokeAllAttachments(messagesRef.current)
     setMessages([])
     setActiveChat(null)
 
@@ -617,11 +831,25 @@ export function useEncryptedConversation(
       const hydrated: ChatMessage[] = history.map((envelope) => decryptEnvelope(envelope, nextChat))
       setMessages(hydrated)
       for (const row of hydrated) {
+        persistPreview(row, nextChat.peerUsername)
+        if (row.attachment && row.plaintext) {
+          hydrateImageAttachment(row.id, nextChat.conversationId, row.plaintext)
+        }
         if (needsClassify(row) && row.plaintext) {
           classifyAndFlag(row.id, row.plaintext, row.revision, row.direction, hydrated)
         }
       }
       socketRef.current = openSocketForConversation(conversation.id, currentSession.accessToken)
+      const receivedIds = hydrated
+        .filter((row) => row.direction === 'received')
+        .map((row) => row.id)
+      socketRef.current.sendReceipt('delivered', receivedIds)
+      socketRef.current.sendReceipt('read', receivedIds)
+      void authorizedRequest
+        .request((accessToken) => markConversationRead(accessToken, conversation.id))
+        .catch(() => {
+          // Unread sync is best-effort; the transcript is already on screen.
+        })
       setStatusMessage(
         `Encrypted chat with ${conversation.peer.username} is ready (epoch ${epoch.currentEpoch}).`,
       )
@@ -669,9 +897,82 @@ export function useEncryptedConversation(
     )
     const localId = crypto.randomUUID()
     pendingSendQueueRef.current.push(localId)
-    setMessages((existing) => [
-      ...existing,
-      {
+    const createdAt = new Date().toISOString()
+    const image = parseImageAttachmentPayload(plaintext)
+    const optimistic: ChatMessage = {
+      id: localId,
+      direction: 'sent',
+      plaintext,
+      verificationFailed: false,
+      scamWarning: false,
+      clientMessageId,
+      revision: 0,
+      editedAt: null,
+      pending: true,
+      createdAt,
+      deliveryStatus: 'pending',
+      attachment: image
+        ? {
+            blobId: image.blobId,
+            mime: image.mime,
+            name: image.name,
+            objectUrl: null,
+            failed: false,
+          }
+        : null,
+    }
+    setMessages((existing) => [...existing, optimistic])
+    persistPreview(optimistic, current.peerUsername)
+    classifyAndFlag(localId, plaintext, 0, 'sent', messagesRef.current)
+    setDraft('')
+  }
+
+  // Seal a picked image, upload opaque bytes, then send a v2 envelope whose body is the pointer JSON.
+  async function handleSendImage(file: File): Promise<void> {
+    const current = activeChatRef.current
+    const socket = socketRef.current
+    if (!current || !socket) {
+      return
+    }
+    try {
+      assertAttachableImage(file)
+      const blobId = crypto.randomUUID()
+      const fileBytes = new Uint8Array(await file.arrayBuffer())
+      const sealed = await sealImageBytes(fileBytes, current.conversationId, blobId)
+      await authorizedRequest.request((accessToken) =>
+        uploadEncryptedBlob(accessToken, current.conversationId, {
+          id: blobId,
+          ciphertext: sealed.ciphertext,
+          nonce: sealed.nonce,
+        }),
+      )
+      const plaintext = serializeImageAttachmentPayload({
+        blobId,
+        fileKey: encodeBase64(sealed.fileKey),
+        mime: file.type,
+        name: file.name,
+      })
+      const clientMessageId = crypto.randomUUID()
+      const envelope = encryptMessage(
+        plaintext,
+        current.sessionKeys.transmitKey,
+        current.currentEpoch,
+        {
+          conversationId: current.conversationId,
+          senderId: current.selfId,
+          messageId: clientMessageId,
+          revision: 0,
+        },
+      )
+      socket.sendEnvelope(
+        envelope,
+        { conversationId: current.conversationId, senderId: current.selfId },
+        { messageId: clientMessageId, revision: 0 },
+      )
+      const localId = crypto.randomUUID()
+      pendingSendQueueRef.current.push(localId)
+      const localUrl = URL.createObjectURL(file)
+      const optimistic: ChatMessage = {
         id: localId,
         direction: 'sent',
         plaintext,
@@ -681,10 +982,27 @@ export function useEncryptedConversation(
         revision: 0,
         editedAt: null,
         pending: true,
-      },
-    ])
-    classifyAndFlag(localId, plaintext, 0, 'sent', messagesRef.current)
-    setDraft('')
+        createdAt: new Date().toISOString(),
+        deliveryStatus: 'pending',
+        attachment: {
+          blobId,
+          mime: file.type,
+          name: file.name,
+          objectUrl: localUrl,
+          failed: false,
+        },
+      }
+      setMessages((existing) => [...existing, optimistic])
+      persistPreview(optimistic, current.peerUsername)
+    } catch (error) {
+      const message =
+        error instanceof ConversationsApiError
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : 'Could not attach that image. Please try again shortly.'
+      setErrorMessage(message)
+    }
   }
 
   // Re-encrypt and resend an own message with the same message identity and an
@@ -705,7 +1023,8 @@ export function useEncryptedConversation(
       target.direction !== 'sent' ||
       target.pending ||
       target.verificationFailed ||
-      target.clientMessageId === null
+      target.clientMessageId === null ||
+      target.attachment !== null
     ) {
       return
     }
@@ -815,6 +1134,7 @@ export function useEncryptedConversation(
     peerTyping,
     openConversation,
     handleSend,
+    handleSendImage,
     handleDraftChange,
     handleEditMessage,
     handleDeleteMessage,
@@ -824,6 +1144,7 @@ export function useEncryptedConversation(
       pendingSendQueueRef.current = []
       // Drop optimistic-id mappings for the conversation we are leaving.
       acceptedIdsRef.current = new Map()
+      revokeAllAttachments(messagesRef.current)
       setMessages([])
     },
     closeConversation() {
@@ -834,6 +1155,7 @@ export function useEncryptedConversation(
       pendingSendQueueRef.current = []
       // Drop optimistic-id mappings for the conversation we are leaving.
       acceptedIdsRef.current = new Map()
+      revokeAllAttachments(messagesRef.current)
       // Stop treating this pairing as the open conversation.
       activeChatRef.current = null
       setActiveChat(null)

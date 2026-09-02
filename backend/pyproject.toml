@@ -27,6 +27,8 @@ dependencies = [
     "email-validator>=2.2,<3",
     # Issue and verify JWT access/refresh tokens (A4: maintained replacement for python-jose).
     "pyjwt>=2.9,<3",
+    # Parse multipart avatar uploads on POST /users/me/avatar.
+    "python-multipart>=0.0.9,<1",
 ]
 
 # Keep test, lint, and type-checking tools out of the runtime dependency set.

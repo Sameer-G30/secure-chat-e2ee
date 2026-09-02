@@ -135,6 +135,10 @@ class RelayEnvelopeOut(BaseModel):
     revision: int = 0
     # Carry the most recent edit time as an ISO-8601 string, or null if never edited.
     edited_at: str | None = None
+    # True when the peer's device has acknowledged this envelope (sender-view only).
+    peer_delivered: bool = False
+    # True when the peer has focused the chat on this envelope (sender-view only).
+    peer_read: bool = False
 
 
 # Describe the broadcast frame sent to a conversation's members after a hard

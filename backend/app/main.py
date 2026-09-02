@@ -51,9 +51,10 @@ app.add_middleware(
     allow_credentials=True,
     # Allow the HTTP verbs this API's routers currently use. DELETE was added during
     # the pre-deployment review for contact removal, unblocking, and message
-    # delete-for-everyone; nothing in this API uses PUT/PATCH (message *editing*
-    # travels over the existing WebSocket relay, not a REST verb).
-    allow_methods=["GET", "POST", "DELETE"],
+    # delete-for-everyone. PATCH was added for the signed-in profile update
+    # (display name and bio); message *editing* still travels over the WebSocket
+    # relay, not a REST verb.
+    allow_methods=["GET", "POST", "DELETE", "PATCH"],
     # Allow the headers the frontend needs to send, including future auth headers.
     allow_headers=["Authorization", "Content-Type"],
 )

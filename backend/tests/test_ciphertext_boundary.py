@@ -74,6 +74,65 @@ def test_messages_table_stores_only_ciphertext_nonce_and_epoch() -> None:
     }
 
 
+# Confirm conversation_reads stores only a last-read cursor, never a preview string.
+def test_conversation_reads_table_stores_cursor_only() -> None:
+    """Require (user_id, conversation_id, last_read_at) metadata, never a body."""
+
+    columns = set(Base.metadata.tables["conversation_reads"].c.keys())
+    assert columns == {
+        "id",
+        "user_id",
+        "conversation_id",
+        "last_read_at",
+        "last_read_message_id",
+    }
+
+
+# Confirm message_receipts stores only delivered/read timestamps.
+def test_message_receipts_table_stores_ticks_only() -> None:
+    """Require (message_id, recipient_id, delivered_at, read_at) only."""
+
+    columns = set(Base.metadata.tables["message_receipts"].c.keys())
+    assert columns == {
+        "id",
+        "message_id",
+        "recipient_id",
+        "delivered_at",
+        "read_at",
+    }
+
+
+# Confirm encrypted_blobs stores sealed bytes, never opened file pixels.
+def test_encrypted_blobs_table_stores_ciphertext_only() -> None:
+    """Require ciphertext, nonce, and routing metadata, never a body column."""
+
+    columns = set(Base.metadata.tables["encrypted_blobs"].c.keys())
+    assert columns == {
+        "id",
+        "conversation_id",
+        "uploader_id",
+        "ciphertext",
+        "nonce",
+        "byte_length",
+        "created_at",
+    }
+
+
+# Confirm users gained public profile columns without growing a body or key column.
+def test_users_table_public_profile_columns_are_not_message_bodies() -> None:
+    """Require avatar_bytes/display_name/bio as public metadata, never a chat body."""
+
+    columns = set(Base.metadata.tables["users"].c.keys())
+    assert "display_name" in columns
+    assert "bio" in columns
+    assert "avatar_bytes" in columns
+    assert "avatar_media_type" in columns
+    assert "content" not in columns
+    assert "body" not in columns
+    assert "text" not in columns
+    assert "plaintext" not in columns
+
+
 # Confirm blocks store only who-blocked-whom metadata, never a message body or key.
 def test_blocks_table_stores_blocker_and_blocked_ids_only() -> None:
     """Require (blocker_id, blocked_id) metadata, matching the pre-deployment review."""

@@ -1,7 +1,7 @@
 // Import React's state/callback hooks used by the small amount of state this
 // presentational shell still owns directly (shared status/error banners, the
 // add-contact input, overlays, and conversation-start in-flight flag).
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 // Import the form-event type separately; verbatimModuleSyntax requires type-only imports.
 import type { FormEvent } from 'react'
 
@@ -18,6 +18,23 @@ import { clearTheme } from '../theme'
 import type { ThemePreference } from '../theme'
 // Import the plaintext-export helpers; the UI always warns before writing to disk.
 import { downloadTranscriptFile, formatTranscriptExport } from '../chat/exportTranscript'
+import { formatMessageClock } from '../chat/messageClock'
+import { previewTextForMessage, readAllLastMessagePreviews } from '../chat/lastMessagePreview'
+import type { LastMessagePreview } from '../chat/lastMessagePreview'
+import {
+  clearConversationWallpaper,
+  MAX_WALLPAPER_BYTES,
+  readConversationWallpaper,
+  writeConversationWallpaper,
+} from '../chat/wallpaper'
+import {
+  fetchMyProfile,
+  fetchUserProfile,
+  patchMyProfile,
+  uploadMyAvatar,
+  UsersApiError,
+} from '../api/usersClient'
+import type { PublicProfile } from '../api/usersClient'
 
 // Import the extracted hooks this screen now composes instead of owning every effect
 // and handler itself (Phase 3a of the pre-deployment review: ChatScreen had grown to
@@ -37,7 +54,9 @@ import { MessageActionsModal } from './MessageActionsModal'
 import { Modal } from './Modal'
 import { SettingsPanel } from './SettingsPanel'
 // Import the vrati icon set used on the sidebar, header, and circular send button.
-import { IconGear, IconMore, IconSearch, IconSend } from '../icons'
+import { IconGear, IconImage, IconMore, IconSearch, IconSend, IconVideo } from '../icons'
+import { Avatar } from './Avatar'
+import { ContactProfilePanel } from './ContactProfilePanel'
 
 // Name the mutually exclusive overlays so only one dialog is open at a time.
 type ChatOverlay =
@@ -47,6 +66,7 @@ type ChatOverlay =
   | { kind: 'message'; id: string }
   | { kind: 'export' }
   | { kind: 'report' }
+  | { kind: 'profile' }
 
 // Build a one-letter avatar label from a username.
 function initialsFromUsername(username: string): string {
@@ -65,6 +85,9 @@ function messageMatchesQuery(message: ChatMessage, query: string): boolean {
   const trimmed = query.trim().toLowerCase()
   if (!trimmed) {
     return true
+  }
+  if (message.attachment) {
+    return `${message.attachment.name} photo`.toLowerCase().includes(trimmed)
   }
   if (message.verificationFailed || message.plaintext === null) {
     return false
@@ -95,6 +118,20 @@ export function ChatScreen() {
   const [reportReason, setReportReason] = useState('')
   // Hold whether the currently open peer is on this account's server-side block list.
   const [peerBlocked, setPeerBlocked] = useState(false)
+  // Hold the signed-in public profile used by the Settings form.
+  const [myDisplayName, setMyDisplayName] = useState('')
+  const [myBio, setMyBio] = useState('')
+  const [myHasAvatar, setMyHasAvatar] = useState(false)
+  // Hold last-message snippets keyed by peer username (IndexedDB, this device only).
+  const [previews, setPreviews] = useState<Map<string, LastMessagePreview>>(new Map())
+  // Hold the open peer's public profile for the contact-info panel.
+  const [peerProfile, setPeerProfile] = useState<PublicProfile | null>(null)
+  // Hold the wallpaper data URL for the open conversation.
+  const [wallpaperUrl, setWallpaperUrl] = useState<string | null>(null)
+  // Point at the hidden image-attach input so the paperclip button can open it.
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  // Point at the hidden wallpaper input so Chat wallpaper can open it.
+  const wallpaperInputRef = useRef<HTMLInputElement>(null)
 
   // Publish a rotated token pair into AuthContext; every wrapped call in the hooks
   // below reads the latest pair back out on its very next attempt. Memoized (like
@@ -110,7 +147,7 @@ export function ChatScreen() {
   // conversation both reuse it instead of each rolling their own.
   const authorizedRequest = useAuthorizedRequest(session, handleTokensRotated)
 
-  const { contacts, addContact, removeContact } = useContacts(
+  const { contacts, addContact, removeContact, clearUnread, reloadContacts } = useContacts(
     session?.username,
     authorizedRequest,
     setErrorMessage,
@@ -135,6 +172,7 @@ export function ChatScreen() {
     peerTyping,
     openConversation,
     handleSend,
+    handleSendImage,
     handleDraftChange,
     handleEditMessage,
     handleDeleteMessage,
@@ -150,6 +188,99 @@ export function ChatScreen() {
     classifier.generation,
     classifier.scoringCheckpointId,
   )
+
+  useEffect(() => {
+    if (!session) {
+      return
+    }
+    let cancelled = false
+    void authorizedRequest
+      .request((accessToken) => fetchMyProfile(accessToken))
+      .then((profile) => {
+        if (!cancelled) {
+          setMyDisplayName(profile.displayName ?? '')
+          setMyBio(profile.bio ?? '')
+          setMyHasAvatar(profile.hasAvatar)
+        }
+      })
+      .catch(() => {
+        // Profile load is best-effort; Settings can still open with empty fields.
+      })
+    void readAllLastMessagePreviews(session.username).then((rows) => {
+      if (!cancelled) {
+        setPreviews(rows)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [session?.username, authorizedRequest.request])
+
+  useEffect(() => {
+    if (!session || !activeChat) {
+      setWallpaperUrl(null)
+      setPeerProfile(null)
+      return
+    }
+    setWallpaperUrl(readConversationWallpaper(session.username, activeChat.conversationId))
+    let cancelled = false
+    void authorizedRequest
+      .request((accessToken) => fetchUserProfile(accessToken, activeChat.peerUsername))
+      .then((profile) => {
+        if (!cancelled) {
+          setPeerProfile(profile)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPeerProfile(null)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [session?.username, activeChat?.conversationId, activeChat?.peerUsername, authorizedRequest.request])
+
+  useEffect(() => {
+    if (!activeChat) {
+      return
+    }
+    const last = [...messages].reverse().find(
+      (row) => !row.verificationFailed && row.plaintext !== null,
+    )
+    if (!last || last.plaintext === null) {
+      return
+    }
+    const snippet = previewTextForMessage(
+      last.plaintext,
+      last.direction,
+      last.attachment !== null,
+    )
+    setPreviews((existing) => {
+      const next = new Map(existing)
+      next.set(activeChat.peerUsername, snippet)
+      return next
+    })
+  }, [messages, activeChat?.peerUsername])
+
+  // Reload unread badges when this tab is focused or becomes visible again.
+  useEffect(() => {
+    function onVisible() {
+      // Skip the hidden half of visibilitychange; focus events are always "visible".
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return
+      }
+      void reloadContacts().catch(() => {
+        // Unread refresh is best-effort.
+      })
+    }
+    window.addEventListener('focus', onVisible)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('focus', onVisible)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [reloadContacts])
 
   // This screen is only ever rendered while a session exists (see App.tsx routing);
   // this guard covers the one intermediate render described above.
@@ -177,6 +308,7 @@ export function ChatScreen() {
       setPeerInput('')
       setPeerBlocked(false)
       await openConversation(saved.username)
+      clearUnread(saved.username)
     } catch (caught: unknown) {
       const message =
         caught instanceof ContactsApiError
@@ -190,6 +322,7 @@ export function ChatScreen() {
   // Open an existing contact without creating a duplicate address-book row.
   function handleSelectContact(username: string) {
     setPeerBlocked(false)
+    clearUnread(username)
     void openConversation(username)
   }
 
@@ -219,6 +352,62 @@ export function ChatScreen() {
   // Persist an explicit theme preference from the Settings panel, including "system".
   function handleThemePreferenceChange(preference: ThemePreference) {
     setThemePreference(currentSession.username, preference)
+  }
+
+  async function handleSaveProfile(displayName: string, bio: string) {
+    try {
+      const saved = await authorizedRequest.request((accessToken) =>
+        patchMyProfile(accessToken, { displayName, bio }),
+      )
+      setMyDisplayName(saved.displayName ?? '')
+      setMyBio(saved.bio ?? '')
+      setMyHasAvatar(saved.hasAvatar)
+    } catch (caught: unknown) {
+      const message =
+        caught instanceof UsersApiError
+          ? caught.message
+          : 'Could not save your profile. Please try again shortly.'
+      setErrorMessage(message)
+    }
+  }
+
+  async function handleUploadAvatar(file: File) {
+    try {
+      const saved = await authorizedRequest.request((accessToken) =>
+        uploadMyAvatar(accessToken, file),
+      )
+      setMyDisplayName(saved.displayName ?? myDisplayName)
+      setMyBio(saved.bio ?? myBio)
+      setMyHasAvatar(saved.hasAvatar)
+    } catch (caught: unknown) {
+      const message =
+        caught instanceof UsersApiError
+          ? caught.message
+          : 'Could not upload that photo. Please try again shortly.'
+      setErrorMessage(message)
+    }
+  }
+
+  function handleWallpaperFile(file: File) {
+    if (!activeChat) {
+      return
+    }
+    if (file.size > MAX_WALLPAPER_BYTES) {
+      setErrorMessage('That wallpaper is too large for this device.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string' && activeChat) {
+        writeConversationWallpaper(
+          currentSession.username,
+          activeChat.conversationId,
+          reader.result,
+        )
+        setWallpaperUrl(reader.result)
+      }
+    }
+    reader.readAsDataURL(file)
   }
 
   // Ask the server whether the open peer is blocked so the menu can show Unblock.
@@ -319,27 +508,50 @@ export function ChatScreen() {
   const searchMatchCount = visibleMessages.length
   // Label sent bubbles with Sending until the server ack, then Sent.
   function pendingLabel(message: ChatMessage): string {
-    // A pending own message has no server id yet.
-    if (message.pending) {
-      return 'Sending'
-    }
-    // Received bubbles do not show a delivery tick.
+    return formatMessageClock(message.createdAt)
+  }
+
+  function deliveryTickClass(message: ChatMessage): string {
     if (message.direction !== 'sent') {
       return ''
     }
-    // Accepted own messages show the gold-adjacent sent mark in CSS.
-    return 'Sent'
+    if (message.pending || message.deliveryStatus === 'pending') {
+      return ''
+    }
+    if (message.deliveryStatus === 'read') {
+      return 'status-read'
+    }
+    if (message.deliveryStatus === 'delivered') {
+      return 'status-delivered'
+    }
+    return 'status-sent'
+  }
+
+  function deliveryTick(message: ChatMessage): string {
+    if (message.direction !== 'sent') {
+      return ''
+    }
+    if (message.pending || message.deliveryStatus === 'pending') {
+      return ''
+    }
+    if (message.deliveryStatus === 'delivered' || message.deliveryStatus === 'read') {
+      return '✓✓'
+    }
+    return '✓'
   }
 
   return (
     <div className="chat-app">
       <aside className="sidebar" aria-label="Contacts">
         <div className="sidebar-header">
-          <div className="user-avatar" aria-hidden="true">
-            {initialsFromUsername(currentSession.username)}
-          </div>
+          <Avatar
+            username={currentSession.username}
+            accessToken={currentSession.accessToken}
+            className="user-avatar"
+            initials={initialsFromUsername(currentSession.username)}
+          />
           <div className="user-info">
-            <div className="user-name">{currentSession.username}</div>
+            <div className="user-name">{myDisplayName.trim() || currentSession.username}</div>
             <div className="user-status">Online</div>
           </div>
           <div className="sidebar-actions">
@@ -424,19 +636,28 @@ export function ChatScreen() {
                   onClick={() => handleSelectContact(contact.username)}
                   disabled={isConnecting}
                 >
-                  <span className="contact-avatar" aria-hidden="true">
-                    {initialsFromUsername(contact.username)}
-                  </span>
+                  <Avatar
+                    username={contact.username}
+                    accessToken={currentSession.accessToken}
+                    className="contact-avatar"
+                    initials={initialsFromUsername(contact.username)}
+                  />
                   <span className="contact-info">
-                    <span className="contact-name">{contact.username}</span>
+                    <span className="contact-name">
+                      {contact.displayName?.trim() || contact.username}
+                    </span>
                     <span className="contact-preview">
-                      {activeChat?.peerId === contact.id
-                        ? peerOnline
-                          ? 'Online'
-                          : 'Offline'
-                        : 'Tap to chat'}
+                      {previews.get(contact.username)?.preview ??
+                        (activeChat?.peerId === contact.id
+                          ? peerOnline
+                            ? 'Online'
+                            : 'Offline'
+                          : 'Tap to chat')}
                     </span>
                   </span>
+                  {contact.unreadCount > 0 ? (
+                    <span className="unread-badge">{contact.unreadCount}</span>
+                  ) : null}
                 </button>
                 <button
                   type="button"
@@ -473,21 +694,39 @@ export function ChatScreen() {
         </div>
       </aside>
 
-      <main className="chat-area">
+      <main
+        className={wallpaperUrl ? 'chat-area has-wallpaper' : 'chat-area'}
+        style={wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : undefined}
+      >
         <h1 className="chat-product-heading">Secure Chat</h1>
         <header className="chat-header">
           <div className="chat-header-left">
             {activeChat ? (
               <>
-                <div className="chat-contact-avatar" aria-hidden="true">
-                  {initialsFromUsername(activeChat.peerUsername)}
-                </div>
-                <div>
-                  <div className="chat-contact-name">{activeChat.peerUsername}</div>
-                  <div className="chat-contact-status">
-                    {peerBlocked ? 'Blocked' : peerOnline ? 'Online · end-to-end encrypted' : 'End-to-end encrypted'}
+                <button
+                  type="button"
+                  className="chat-header-identity"
+                  onClick={() => setOverlay({ kind: 'profile' })}
+                >
+                  <Avatar
+                    username={activeChat.peerUsername}
+                    accessToken={currentSession.accessToken}
+                    className="chat-contact-avatar"
+                    initials={initialsFromUsername(activeChat.peerUsername)}
+                  />
+                  <div>
+                    <div className="chat-contact-name">
+                      {peerProfile?.displayName?.trim() || activeChat.peerUsername}
+                    </div>
+                    <div className="chat-contact-status">
+                      {peerBlocked
+                        ? 'Blocked'
+                        : peerOnline
+                          ? 'Online · end-to-end encrypted'
+                          : 'End-to-end encrypted'}
+                    </div>
                   </div>
-                </div>
+                </button>
               </>
             ) : (
               <div>
@@ -552,6 +791,15 @@ export function ChatScreen() {
               void handleUnblockPeer()
             }}
             onReport={() => setOverlay({ kind: 'report' })}
+            onContactInfo={() => setOverlay({ kind: 'profile' })}
+            onWallpaper={() => wallpaperInputRef.current?.click()}
+            onClearWallpaper={() => {
+              if (activeChat) {
+                clearConversationWallpaper(currentSession.username, activeChat.conversationId)
+                setWallpaperUrl(null)
+              }
+              setOverlay({ kind: 'none' })
+            }}
           />
         ) : null}
 
@@ -652,7 +900,11 @@ export function ChatScreen() {
                       : 'message received'
                   const accessibleName = message.verificationFailed
                     ? undefined
-                    : (message.plaintext ?? undefined)
+                    : message.attachment
+                      ? message.attachment.name
+                      : (message.plaintext ?? undefined)
+                  const tickClass = deliveryTickClass(message)
+                  const tick = deliveryTick(message)
                   return (
                     <li key={message.id} className="message-wrapper">
                       <button
@@ -671,17 +923,35 @@ export function ChatScreen() {
                                 This message shows signs of a scam
                               </p>
                             ) : null}
-                            <span className="message-text">
-                              {message.plaintext}
-                              {message.revision > 0 ? (
-                                <span className="edited-indicator"> (edited)</span>
-                              ) : null}
-                            </span>
+                            {message.attachment ? (
+                              <span className="message-attachment">
+                                {message.attachment.objectUrl ? (
+                                  <img
+                                    src={message.attachment.objectUrl}
+                                    alt=""
+                                    className="message-image"
+                                  />
+                                ) : (
+                                  <span className="message-image-placeholder">
+                                    {message.attachment.failed
+                                      ? 'Photo failed to load'
+                                      : 'Loading photo…'}
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              <span className="message-text">
+                                {message.plaintext}
+                                {message.revision > 0 ? (
+                                  <span className="edited-indicator"> (edited)</span>
+                                ) : null}
+                              </span>
+                            )}
                             <span className="message-time">
                               {pendingLabel(message)}
-                              {message.direction === 'sent' && !message.pending ? (
-                                <span className="status-sent" aria-hidden="true">
-                                  ✓
+                              {tick ? (
+                                <span className={tickClass} aria-hidden="true">
+                                  {tick}
                                 </span>
                               ) : null}
                             </span>
@@ -703,6 +973,40 @@ export function ChatScreen() {
           </div>
         ) : (
           <form className="input-area" onSubmit={handleSend}>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              className="visually-hidden"
+              aria-hidden="true"
+              tabIndex={-1}
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) {
+                  void handleSendImage(file)
+                }
+                event.target.value = ''
+              }}
+            />
+            <button
+              type="button"
+              className="input-attach"
+              aria-label="Attach image"
+              disabled={!activeChat}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <IconImage />
+            </button>
+            {/* Video stays a disabled placeholder; sealed video blobs are not implemented yet. */}
+            <button
+              type="button"
+              className="input-attach"
+              aria-label="Video attachments coming later"
+              title="Video attachments coming later"
+              disabled
+            >
+              <IconVideo />
+            </button>
             <label className="visually-hidden" htmlFor="chat-draft">
               Message
             </label>
@@ -734,6 +1038,13 @@ export function ChatScreen() {
           onThemePreferenceChange={handleThemePreferenceChange}
           onClose={() => setOverlay({ kind: 'none' })}
           onLogout={handleLogout}
+          profileUsername={currentSession.username}
+          profileAccessToken={currentSession.accessToken}
+          profileDisplayName={myDisplayName}
+          profileBio={myBio}
+          profileHasAvatar={myHasAvatar}
+          onSaveProfile={handleSaveProfile}
+          onUploadAvatar={handleUploadAvatar}
         />
       ) : null}
 
@@ -801,6 +1112,47 @@ export function ChatScreen() {
           </form>
         </Modal>
       ) : null}
+
+      {overlay.kind === 'profile' && activeChat ? (
+        <ContactProfilePanel
+          username={activeChat.peerUsername}
+          accessToken={currentSession.accessToken}
+          profile={peerProfile}
+          online={peerOnline}
+          blocked={peerBlocked}
+          onClose={() => setOverlay({ kind: 'none' })}
+          onSearch={() => {
+            setSearchOpen(true)
+            setOverlay({ kind: 'none' })
+          }}
+          onBlock={() => {
+            setOverlay({ kind: 'none' })
+            void handleBlockPeer()
+          }}
+          onUnblock={() => {
+            setOverlay({ kind: 'none' })
+            void handleUnblockPeer()
+          }}
+          onReport={() => setOverlay({ kind: 'report' })}
+        />
+      ) : null}
+
+      <input
+        ref={wallpaperInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="visually-hidden"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) {
+            handleWallpaperFile(file)
+          }
+          event.target.value = ''
+          setOverlay({ kind: 'none' })
+        }}
+      />
     </div>
   )
 }

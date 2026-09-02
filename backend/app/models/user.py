@@ -6,8 +6,8 @@ from datetime import datetime
 # Import uuid for typed primary-key annotations and default generation.
 from uuid import UUID, uuid4
 
-# Import server-side default helpers, the expression-index helper, and the portable UUID type.
-from sqlalchemy import DateTime, Index, Uuid, func
+# Import binary, bounded strings, timestamp, expression-index, and UUID column types.
+from sqlalchemy import DateTime, Index, LargeBinary, String, Uuid, func
 
 # Import typed declarative mapping helpers introduced in SQLAlchemy 2.0.
 from sqlalchemy.orm import Mapped, mapped_column
@@ -56,6 +56,14 @@ class User(Base):
     # A database NOT NULL constraint is still not added: registration
     # remains decoupled from client-side key generation.
     public_key: Mapped[str | None] = mapped_column(nullable=True, default=None)
+    # Store an optional public display name; this is not a secret and is not E2EE.
+    display_name: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    # Store an optional public bio; this is not a secret and is not E2EE.
+    bio: Mapped[str | None] = mapped_column(String(280), nullable=True, default=None)
+    # Store an optional public avatar as raw image bytes (JPEG/PNG/WebP), never a message body.
+    avatar_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, default=None)
+    # Store the avatar media type so GET /users/{username}/avatar can set Content-Type.
+    avatar_media_type: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     # Record account creation time using the database server's clock.
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

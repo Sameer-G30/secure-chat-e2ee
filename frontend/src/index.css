@@ -717,6 +717,15 @@ body {
     cursor: pointer;
     transition: background var(--transition);
     border-left: 2px solid transparent;
+    flex: 1;
+    background: none;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+    width: 100%;
+    text-align: left;
+    color: inherit;
+    font: inherit;
 }
 
 .contact-item:hover {
@@ -1024,10 +1033,22 @@ body {
 .input-attach {
     color: var(--text-muted);
     flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .input-attach:hover {
     color: var(--text-primary);
+}
+
+.input-attach:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 .input-area input {
@@ -2584,4 +2605,118 @@ button.search-result-item {
 .modal-body code {
     font-family: var(--font-mono);
     font-size: 12px;
+}
+
+.avatar-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    display: block;
+}
+
+.chat-header-identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+}
+
+.chat-area.has-wallpaper {
+    background-size: cover;
+    background-position: center;
+}
+
+.chat-area.has-wallpaper .messages {
+    background: transparent;
+}
+
+.message-image {
+    max-width: 220px;
+    max-height: 220px;
+    border-radius: 8px;
+    display: block;
+}
+
+.message-image-placeholder {
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+.contact-profile-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 24px;
+}
+
+.contact-profile-avatar {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-hover) 100%);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-family: var(--font-display);
+    font-size: 32px;
+    overflow: hidden;
+}
+
+.contact-profile-name {
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.contact-profile-handle,
+.contact-profile-status {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.contact-profile-bio {
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.contact-profile-actions {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 12px;
+}
+
+.profile-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px 24px 32px;
+}
+
+.profile-form input,
+.profile-form textarea {
+    padding: 10px 12px;
+    border: 1.5px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+}
+
+.profile-file-label {
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 14px;
+    font-weight: 600;
 }

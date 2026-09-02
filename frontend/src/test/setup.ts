@@ -56,4 +56,6 @@ vi.mock('onnxruntime-web/wasm', () => {
 afterEach(() => {
   // Unmount components and clear Testing Library's document containers.
   cleanup()
+  // Drop last-message previews so ChatScreen tests cannot leak snippets across cases.
+  indexedDB.deleteDatabase('secure-chat-previews')
 })

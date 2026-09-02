@@ -7,7 +7,7 @@
 // contact list — only an actual sign-in/sign-out does.
 
 // Import React's state/effect hooks.
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 // Import the server-side address book client this hook wraps.
 import {
@@ -31,6 +31,10 @@ export interface ContactsApi {
   addContact: (username: string) => Promise<ContactRecord>
   // Remove a handle from the server-side address book (legacy was add-only).
   removeContact: (username: string) => Promise<void>
+  // Clear the unread badge locally after this tab marks the chat read.
+  clearUnread: (username: string) => void
+  // Reload the address book so unread counts stay in sync after a focus.
+  reloadContacts: () => Promise<void>
 }
 
 // Load and manage the signed-in user's server-side contact list.
@@ -95,5 +99,16 @@ export function useContacts(
     setContacts((existing) => existing.filter((row) => row.username !== peerUsername))
   }
 
-  return { contacts, addContact, removeContact }
+  function clearUnread(peerUsername: string) {
+    setContacts((existing) =>
+      existing.map((row) => (row.username === peerUsername ? { ...row, unreadCount: 0 } : row)),
+    )
+  }
+
+  const reloadContacts = useCallback(async (): Promise<void> => {
+    const rows = await authorizedRequest.request((accessToken) => listContacts(accessToken))
+    setContacts(rows)
+  }, [authorizedRequest.request])
+
+  return { contacts, addContact, removeContact, clearUnread, reloadContacts }
 }

@@ -17,6 +17,9 @@ function bubble(overrides: Partial<ChatMessage>): ChatMessage {
     revision: 0,
     editedAt: null,
     pending: false,
+    createdAt: '2026-08-14T12:00:00Z',
+    deliveryStatus: 'sent',
+    attachment: null,
     ...overrides,
   }
 }

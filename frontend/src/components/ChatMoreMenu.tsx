@@ -20,6 +20,12 @@ export interface ChatMoreMenuProps {
   onUnblock: () => void
   // Open the metadata-only report form.
   onReport: () => void
+  // Open the wallpaper file picker for this conversation.
+  onWallpaper: () => void
+  // Remove the local wallpaper for this conversation.
+  onClearWallpaper: () => void
+  // Open the contact profile slide-over.
+  onContactInfo: () => void
   // Dismiss the overlay when the dimmed backdrop is clicked.
   onDismiss: () => void
 }
@@ -34,6 +40,9 @@ export function ChatMoreMenu({
   onBlock,
   onUnblock,
   onReport,
+  onWallpaper,
+  onClearWallpaper,
+  onContactInfo,
   onDismiss,
 }: ChatMoreMenuProps) {
   return (
@@ -77,6 +86,33 @@ export function ChatMoreMenu({
             disabled={!hasActiveChat}
           >
             Clear local transcript
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="dropdown-item"
+            onClick={onContactInfo}
+            disabled={!hasActiveChat}
+          >
+            Contact info
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="dropdown-item"
+            onClick={onWallpaper}
+            disabled={!hasActiveChat}
+          >
+            Chat wallpaper
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="dropdown-item"
+            onClick={onClearWallpaper}
+            disabled={!hasActiveChat}
+          >
+            Remove wallpaper
           </button>
           {hasActiveChat && !peerBlocked ? (
             <button type="button" role="menuitem" className="dropdown-item dropdown-item-danger" onClick={onBlock}>

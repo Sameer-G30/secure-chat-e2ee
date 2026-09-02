@@ -41,13 +41,14 @@ export function MessageActionsModal({
     message.direction === 'sent' &&
     !message.pending &&
     !message.verificationFailed &&
-    message.clientMessageId !== null
+    message.clientMessageId !== null &&
+    message.attachment === null
   // Own, already-accepted messages can be hard-deleted for everyone.
   const canDeleteForEveryone = message.direction === 'sent' && !message.pending
   // Any already-accepted row can be hidden from this account's own history.
   const canHide = !message.pending
-  // Copy is only meaningful for verified plaintext.
-  const canCopy = !message.verificationFailed && message.plaintext !== null
+  // Copy is only meaningful for verified text, not image-pointer JSON.
+  const canCopy = !message.verificationFailed && message.plaintext !== null && message.attachment === null
 
   async function handleSaveEdit() {
     const trimmed = editDraft.trim()
