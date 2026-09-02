@@ -111,7 +111,7 @@ async def apply_receipt_batch(
     recipient: User,
     kind: str,
     message_ids: list[UUID],
-) -> list[dict[str, str]]:
+) -> list[dict[str, object]]:
     """Record delivered/read ticks for envelopes this member received.
 
     Skips unknown ids, own-sent envelopes, and envelopes outside this
@@ -126,7 +126,7 @@ async def apply_receipt_batch(
     # Stamp every row in this batch with the same server clock reading.
     at = _utc_now()
     # Collect outbound metadata frames for senders who still have a socket.
-    outbound: list[dict[str, str]] = []
+    outbound: list[dict[str, object]] = []
     # Deduplicate ids so a retried frame cannot double-write in one batch.
     seen: set[UUID] = set()
     for message_id in message_ids:
@@ -173,7 +173,7 @@ async def mark_conversation_read(
     *,
     conversation: Conversation,
     viewer: User,
-) -> tuple[datetime, list[dict[str, str]]]:
+) -> tuple[datetime, list[dict[str, object]]]:
     """Upsert the last-read cursor and mark inbound envelopes delivered+read.
 
     Returns (last_read_at, receipt frames to broadcast to the peer).
@@ -200,7 +200,7 @@ async def mark_conversation_read(
         last_read_message_id=last_message_id,
         at=at,
     )
-    outbound: list[dict[str, str]] = []
+    outbound: list[dict[str, object]] = []
     for stored in inbound:
         receipt = await upsert_message_receipt(
             db,
