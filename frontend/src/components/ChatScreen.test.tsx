@@ -489,6 +489,64 @@ describe('ChatScreen', () => {
     expect(await screen.findByText('This message shows signs of a scam')).toBeInTheDocument()
   })
 
+  it('does not classify a trivial short send that has no URL', async () => {
+    mockedClassify.mockResolvedValue({
+      pScam: 0.99,
+      warned: true,
+      checkpointId: 'tfidf_best',
+      inferenceMs: 2,
+    })
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'ok' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(screen.getByText('ok')).toBeInTheDocument()
+    expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
+    expect(mockedClassify).not.toHaveBeenCalled()
+  })
+
+  it('scores a send against the last conversation turns, not the new DM alone', async () => {
+    mockedClassify.mockResolvedValue({
+      pScam: 0.01,
+      warned: false,
+      checkpointId: 'tfidf_best',
+      inferenceMs: 2,
+    })
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    capturedHandlers?.onEnvelope({
+      id: 'msg-ctx',
+      conversationId,
+      senderId: bobId,
+      ciphertext: new Uint8Array(32).fill(1),
+      nonce: new Uint8Array(24).fill(2),
+      keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
+    })
+    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: 'please send the wallet seed phrase tonight' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => {
+      const scored = mockedClassify.mock.calls
+        .map((call) => call[0])
+        .filter((text) => typeof text === 'string')
+      expect(
+        scored.some(
+          (text) =>
+            text.includes('Them: hello from bob') &&
+            text.includes('Me: please send the wallet seed phrase tonight'),
+        ),
+      ).toBe(true)
+    })
+  })
+
   it('decrypts scoped history after opening a contact', async () => {
     renderChatScreen()
     await screen.findByRole('heading', { name: 'Secure Chat' })

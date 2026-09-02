@@ -39,6 +39,10 @@ import type { DirectionalSessionKeys } from '../crypto/keyExchange'
 import type { CheckpointId, ClassifyResult } from '../ml/types'
 import { CHATSCREEN_DEFAULT_ID } from '../ml/types'
 import {
+  buildConversationScoringText,
+  isTrivialShortNoUrl,
+} from '../ml/conversationContext'
+import {
   readCachedBanner,
   renameCachedBanner,
   writeCachedBanner,
@@ -245,12 +249,54 @@ export function useEncryptedConversation(
     return cachedWarning(row.id, row.revision) === null
   }
 
-  // Classify verified plaintext locally. Banners may turn on *or* off when the model changes.
-  function classifyAndFlag(messageId: string, plaintext: string, revision: number) {
+  // Persist a banner decision (including "do not warn") under the server id when known.
+  function persistBannerDecision(
+    messageId: string,
+    revision: number,
+    checkpointId: CheckpointId,
+    warned: boolean,
+  ) {
+    // Remember this decision so the next reload does not wait on WASM.
+    const username = usernameRef.current
+    // Prefer the server id if the accepted ack already renamed this send.
+    const resolvedId = acceptedIdsRef.current.get(messageId) ?? messageId
+    // Only persist when a handle exists (not the logout render).
+    if (username) {
+      // Store warned/revision/checkpointId; never plaintext.
+      writeCachedBanner(username, resolvedId, revision, checkpointId, warned)
+    }
+    // Apply the decision, including clearing a previous false alarm.
+    setMessages((existing) =>
+      existing.map((message) =>
+        message.id === resolvedId && message.scamWarning !== warned
+          ? { ...message, scamWarning: warned }
+          : message,
+      ),
+    )
+  }
+
+  // Classify verified plaintext locally, using the last 5–8 turns as context.
+  // Banners may turn on *or* off when the model changes.
+  function classifyAndFlag(
+    messageId: string,
+    plaintext: string,
+    revision: number,
+    direction: ChatMessage['direction'],
+    transcript: ChatMessage[] = messagesRef.current,
+  ) {
+    // Tiny URL-free chit-chat has no scam signal on its own; still keep it in later windows.
+    if (isTrivialShortNoUrl(plaintext)) {
+      // Cache "no banner" so reload does not re-enter WASM for "ok"/"lol".
+      persistBannerDecision(messageId, revision, scoringCheckpointRef.current, false)
+      // Do not call the model for this bubble.
+      return
+    }
+    // Concatenate recent verified turns (current DM last) so split scams are visible.
+    const scoringText = buildConversationScoringText(transcript, messageId, plaintext, direction)
     // Capture the model generation so a DistilBERT result cannot overwrite a later TF-IDF pass.
     const seq = classifySeqRef.current
     // Run after decrypt/send so the bubble appears before WASM returns.
-    void classifyRef.current(plaintext)
+    void classifyRef.current(scoringText)
       .then((result) => {
         // Ignore results from a previous DistilBERT/TF-IDF/LSTM generation.
         if (seq !== classifySeqRef.current) {
@@ -262,23 +308,8 @@ export function useEncryptedConversation(
           // Cache misses are classified when classifierGeneration bumps after load.
           return
         }
-        // Remember this decision so the next reload does not wait on WASM.
-        const username = usernameRef.current
-        // Prefer the server id if the accepted ack already renamed this send.
-        const resolvedId = acceptedIdsRef.current.get(messageId) ?? messageId
-        // Only persist when a handle exists (not the logout render).
-        if (username) {
-          // Store warned/revision/checkpointId; never plaintext.
-          writeCachedBanner(username, resolvedId, revision, result.checkpointId, result.warned)
-        }
-        // Apply the ready model's decision, including clearing a TF-IDF false alarm.
-        setMessages((existing) =>
-          existing.map((message) =>
-            message.id === resolvedId && message.scamWarning !== result.warned
-              ? { ...message, scamWarning: result.warned }
-              : message,
-          ),
-        )
+        // Remember and paint the ready model's decision for this bubble.
+        persistBannerDecision(messageId, revision, result.checkpointId, result.warned)
       })
       .catch(() => {
         // Classification is non-blocking; a thrown WASM error must not surface as an unhandled rejection.
@@ -295,8 +326,8 @@ export function useEncryptedConversation(
     for (const row of messagesRef.current) {
       // Skip rows whose last DistilBERT/TF-IDF decision is already on disk.
       if (needsClassify(row) && row.plaintext) {
-        // Score with the model that is ready now.
-        classifyAndFlag(row.id, row.plaintext, row.revision)
+        // Score with the model that is ready now, using the live transcript as context.
+        classifyAndFlag(row.id, row.plaintext, row.revision, row.direction, messagesRef.current)
       }
     }
     // classifierGeneration / scoringCheckpointId are the triggers; classifyAndFlag reads refs.
@@ -402,7 +433,7 @@ export function useEncryptedConversation(
       return updated
     })
     if (needsClassify(row) && row.plaintext) {
-      classifyAndFlag(row.id, row.plaintext, row.revision)
+      classifyAndFlag(row.id, row.plaintext, row.revision, row.direction, messagesRef.current)
     }
   }
 
@@ -587,7 +618,7 @@ export function useEncryptedConversation(
       setMessages(hydrated)
       for (const row of hydrated) {
         if (needsClassify(row) && row.plaintext) {
-          classifyAndFlag(row.id, row.plaintext, row.revision)
+          classifyAndFlag(row.id, row.plaintext, row.revision, row.direction, hydrated)
         }
       }
       socketRef.current = openSocketForConversation(conversation.id, currentSession.accessToken)
@@ -652,7 +683,7 @@ export function useEncryptedConversation(
         pending: true,
       },
     ])
-    classifyAndFlag(localId, plaintext, 0)
+    classifyAndFlag(localId, plaintext, 0, 'sent', messagesRef.current)
     setDraft('')
   }
 
@@ -699,8 +730,8 @@ export function useEncryptedConversation(
           : message,
       ),
     )
-    // Re-score the new plaintext; a previous scam banner must be allowed to clear.
-    classifyAndFlag(id, trimmed, nextRevision)
+    // Re-score the new plaintext against prior turns; a previous banner may clear.
+    classifyAndFlag(id, trimmed, nextRevision, 'sent', messagesRef.current)
   }
 
   // Hard-delete an own message for every participant. Guarded to the sender's own,

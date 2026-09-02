@@ -10,7 +10,9 @@ import type { CheckpointId } from './types'
 export const BANNER_CACHE_PREFIX = 'secure-chat-scam-banners:'
 
 // Schema version so a future layout can ignore stale blobs instead of throwing.
-const CACHE_VERSION = 1
+// v2 drops v1 rows: conversation-window scoring and the ChatScreen 0.35 overlay
+// would otherwise reuse banners computed from a single isolated DM.
+const CACHE_VERSION = 2
 
 // Cap stored rows so a long-lived tab cannot grow localStorage without bound.
 const MAX_CACHED_BANNERS = 500

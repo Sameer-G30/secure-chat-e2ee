@@ -114,7 +114,8 @@ export interface LoadCheckRow {
 // Which heavy graph ChatScreen should score with; TF-IDF Best stays the eager fallback.
 export type ChatHeavyPreference = 'tfidf' | 'distilbert' | 'lstm'
 
-// ChatScreen eager default: TF-IDF Best (10k terms, C=1.0, threshold 0.20).
+// ChatScreen eager default: TF-IDF Best (10k terms, C=1.0, sidecar threshold 0.20).
+// The live banner also requires P(scam) >= 0.35 (see conversationContext.ts).
 export const CHATSCREEN_DEFAULT_ID: CheckpointId = 'tfidf_best'
 
 // DistilBERT opt-in loads Slice 5 default (256-token int8, threshold 0.30), not the 512-token sweep winner.

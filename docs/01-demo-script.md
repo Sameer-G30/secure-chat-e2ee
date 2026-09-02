@@ -76,7 +76,7 @@ Epoch rotation is **not** forward secrecy. Compromising the static master sessio
 
 ## 4. Scam banner on verified plaintext (Slice 6)
 
-ChatScreen eagerly classifies **verified** plaintext with **TF-IDF Best** (10k terms, C=1.0, threshold 0.20) in the browser after decrypt (and on send, on plaintext the sender already has). Scores never leave the tab.
+ChatScreen eagerly classifies **verified** plaintext with **TF-IDF Best** (10k terms, C=1.0, sidecar threshold 0.20, ChatScreen overlay 0.35) in the browser after decrypt (and on send, on plaintext the sender already has). Scoring uses the last 6 verified turns; trivial short lines with no URL are not classified. Scores never leave the tab.
 
 Send a locked-chat-style scam DM (prize, seed phrase, fake support). A non-blocking **This message shows signs of a scam** banner may appear on a verified bubble. The message is never hidden, blocked, or deleted.
 

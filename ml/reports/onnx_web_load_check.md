@@ -80,7 +80,7 @@ Confusion: `[[94, 6], [8, 92]]` — 6 ham warned, 8 scams missed. DistilBERT def
 
 ## ChatScreen default
 
-**Eager ChatScreen model: TF-IDF Best** (`tfidf_best`, 10k terms, C=1.0, threshold 0.20).
+**Eager ChatScreen model: TF-IDF Best** (`tfidf_best`, 10k terms, C=1.0, sidecar threshold 0.20). ChatScreen then requires P(scam) ≥ 0.35 and scores the last 6 verified turns; `/?mlLoadCheck=1` still uses the sidecar cut on isolated fixtures.
 
 **Lazy DistilBERT opt-in: DistilBERT default** (`distilbert_default`, 256-token int8, threshold 0.30) via “Use DistilBERT (large download)”.
 

@@ -32,6 +32,7 @@ import type {
   ClassifyResult,
   FixtureScore,
 } from './types'
+import { applyChatScreenThreshold } from './conversationContext'
 import { CHATSCREEN_DEFAULT_ID, DISTILBERT_OPT_IN_ID, LSTM_OPT_IN_ID } from './types'
 
 // Convert DistilBERT/LSTM [logit0, logit1] into P(scam) with a stable softmax.
@@ -307,7 +308,8 @@ export async function fetchFixtureScores(id: CheckpointId, filename: string): Pr
   return fetchJson<FixtureScore[]>(id, filename)
 }
 
-// ChatScreen eager default: TF-IDF Best (10k terms, C=1.0, threshold 0.20).
+// ChatScreen eager default: TF-IDF Best (10k terms, C=1.0, sidecar threshold 0.20).
+// classifyVerifiedPlaintext then applies CHATSCREEN_MIN_SCAM_THRESHOLD (0.35).
 let chatDefaultReady: Promise<void> | null = null
 
 // Load TF-IDF Best once (idempotent).
@@ -331,8 +333,8 @@ export async function classifyVerifiedPlaintext(
     // Score only when the Slice 5 DistilBERT default graph is actually loaded.
     if (distilbertVocab?.id === DISTILBERT_OPT_IN_ID) {
       try {
-        // Run the transformer on this verified plaintext.
-        return await classifyDistilbert(text)
+        // Run the transformer on this verified plaintext (possibly a conversation window).
+        return applyChatScreenThreshold(await classifyDistilbert(text))
       } catch {
         // WASM abort: skip the banner rather than falling through to TF-IDF.
         return null
@@ -346,8 +348,8 @@ export async function classifyVerifiedPlaintext(
     // Score only when the 8-epoch opt-in graph is actually loaded.
     if (lstmMeta?.id === LSTM_OPT_IN_ID) {
       try {
-        // Run the word BiLSTM on this verified plaintext.
-        return await classifyLstm(text)
+        // Run the word BiLSTM on this verified plaintext (possibly a conversation window).
+        return applyChatScreenThreshold(await classifyLstm(text))
       } catch {
         // WASM abort: skip the banner rather than falling through to TF-IDF.
         return null
@@ -360,8 +362,8 @@ export async function classifyVerifiedPlaintext(
   try {
     // Ensure TF-IDF Best is loaded.
     await ensureChatDefaultClassifier()
-    // Score with the logistic head.
-    return classifyTfidf(text)
+    // Score with the logistic head, then apply the ChatScreen 0.35 overlay.
+    return applyChatScreenThreshold(await classifyTfidf(text))
   } catch {
     // Missing export or WASM abort: skip the banner rather than blocking chat.
     return null
