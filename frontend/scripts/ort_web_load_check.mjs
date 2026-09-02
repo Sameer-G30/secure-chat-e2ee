@@ -37,10 +37,45 @@ const browser = await chromium.launch({
 const page = await browser.newPage()
 // Capture page errors so a WASM abort is visible in the JSON sidecar.
 const pageErrors = []
+// Record Content-Encoding and Content-Length for /ml/**/*.onnx (not .gz/.br URLs).
+const onnxTransfers = []
 // Record uncaught exceptions without aborting the six-way sequence.
 page.on('pageerror', (error) => {
   // Store the message; per-row failures are also in the table.
   pageErrors.push(error.message)
+})
+// Observe the DistilBERT/LSTM/TF-IDF graph fetches so download size is measured.
+page.on('response', (response) => {
+  // Only checkpoint graphs; sidecars are JSON.
+  const responseUrl = response.url()
+  // Skip if this is not an ONNX graph request.
+  if (!responseUrl.includes('/ml/') || !responseUrl.includes('.onnx')) {
+    // Ignore WASM, JSON, and HTML.
+    return
+  }
+  // Ignore direct fetches of the sibling files (the tab still requests model.onnx).
+  if (responseUrl.endsWith('.onnx.gz') || responseUrl.endsWith('.onnx.br')) {
+    // Those URLs are not what ChatScreen loads.
+    return
+  }
+  // Skip query-string-only matches that are not serving graphs.
+  if (!/\.onnx(\?|$)/.test(responseUrl)) {
+    // Not a serving graph.
+    return
+  }
+  // Read negotiated encoding and compressed length from response headers.
+  const headers = response.headers()
+  // Push one transfer record for the JSON sidecar.
+  onnxTransfers.push({
+    // Full URL the tab requested (still /model.onnx).
+    url: responseUrl,
+    // br, gzip, or identity when the Vite plugin fell through.
+    contentEncoding: headers['content-encoding'] || 'identity',
+    // Compressed byte count when Content-Encoding is set.
+    contentLength: headers['content-length'] ? Number(headers['content-length']) : null,
+    // HTTP status so a 404 is visible beside a failed load row.
+    status: response.status(),
+  })
 })
 try {
   // Load the measurement page; Vite must already be serving public/ml.
@@ -54,7 +89,7 @@ try {
   // Parse so a truncated log fails here instead of silently writing garbage.
   const rows = JSON.parse(raw)
   // Bundle page errors with the six rows for the markdown write-up.
-  const payload = { url, pageErrors, rows }
+  const payload = { url, pageErrors, rows, onnxTransfers }
   // Ensure reports/ exists (it already does in this repo).
   fs.mkdirSync(path.dirname(jsonOut), { recursive: true })
   // Pretty JSON matches the textarea the operator would copy by hand.
@@ -64,6 +99,13 @@ try {
     // Show load success and latency without dumping the full JSON twice.
     console.log(
       `${row.loadOrder} ${row.id} load=${row.loadSuccess} initMs=${row.initMs} inferMs=${row.inferenceMsPerMessage} onnx=${row.onnxBytes}`,
+    )
+  }
+  // Print negotiated encodings so the README can cite compressed download size.
+  for (const transfer of onnxTransfers) {
+    // One line per ONNX GET (DistilBERT int8 should be contentEncoding=br).
+    console.log(
+      `onnx ${transfer.url} encoding=${transfer.contentEncoding} contentLength=${transfer.contentLength} status=${transfer.status}`,
     )
   }
   // Point the operator at the file README Slice 6 will cite.

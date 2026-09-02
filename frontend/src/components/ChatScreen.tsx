@@ -116,7 +116,7 @@ export function ChatScreen() {
   const { theme, themePreference, toggleTheme, setThemePreference } = useChatTheme(
     session?.username,
   )
-  const classifier = useScamClassifierPreference()
+  const classifier = useScamClassifierPreference(session?.username)
   const userSearch = useUserSearch(peerInput, authorizedRequest, setErrorMessage)
 
   // Every hook must run unconditionally, on every render, per the Rules of Hooks —
@@ -145,6 +145,8 @@ export function ChatScreen() {
     classifier.classify,
     setStatusMessage,
     setErrorMessage,
+    classifier.generation,
+    classifier.scoringCheckpointId,
   )
 
   // This screen is only ever rendered while a session exists (see App.tsx routing);

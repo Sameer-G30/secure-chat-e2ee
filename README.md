@@ -219,7 +219,7 @@ Tokens stay in memory only: refreshing a tab requires logging in again. Multi-de
 3. Log out and back in on the same browser, open the same contact: the first two history rows still decrypt (they keep `key_epoch: 0`). Network history GET remains ciphertext-only.
 4. Automated proof of the same relay path: `cd backend && uv run pytest tests/test_epoch_rotation.py` (tests set N=2; they do not change the production default).
 
-Verified plaintext (sent locally, and received after decrypt) may show a non-blocking **This message shows signs of a scam** banner from the on-device TF-IDF Best classifier. Verification-failed rows never get a banner. Optional **Use DistilBERT (large download)** lazy-loads the Slice 5 256-token graph (unpadded sequences, ORT Web Worker). Optional **Use Word BiLSTM Best** lazy-loads the 8-epoch LSTM. Sequential ORT Web measurement: `http://localhost:5173/?mlLoadCheck=1`.
+Verified plaintext (sent locally, and received after decrypt) may show a non-blocking **This message shows signs of a scam** banner from the on-device TF-IDF Best classifier. Verification-failed rows never get a banner. Optional **Use DistilBERT (large download)** lazy-loads Slice 5 `distilbert_default` (256-token int8, threshold 0.30; unpadded sequences, ORT Web Worker; gzip/brotli on the wire). Last DistilBERT/TF-IDF banner flags are cached per username (message id + revision + checkpoint only, never plaintext) so a reload can paint warnings before WASM is ready. Optional **Use Word BiLSTM Best** lazy-loads the 8-epoch LSTM. Sequential ORT Web measurement: `http://localhost:5173/?mlLoadCheck=1`.
 
 To inspect ciphertext-only storage after a send (API container + `psql` are optional; the automated tests already assert this):
 
@@ -321,23 +321,22 @@ Slice 5 adds:
 Slice 6 adds:
 
 - **Backend:** none. No classification endpoints, no scores in Postgres. E2EE, JWT, WebSocket relay, epoch, and auth are unchanged.
-- **Frontend:** ONNX Runtime Web loads one checkpoint at a time. ChatScreen eagerly uses TF-IDF Best (TypeScript vectorizer + logistic-head ONNX, A5). DistilBERT-default (256-token int8) is a lazy opt-in (A6; unpadded WordPiece + ORT Web Worker + WASM threads when COOP/COEP isolate the page). Word BiLSTM Best is a second lazy opt-in. Verified plaintext can show a non-blocking scam banner; verification-failed rows never do. Sequential measurement page: `/?mlLoadCheck=1`.
+- **Frontend:** ONNX Runtime Web loads one checkpoint at a time. ChatScreen eagerly uses TF-IDF Best (TypeScript vectorizer + logistic-head ONNX, A5). DistilBERT default (256-token int8, threshold 0.30) is a lazy opt-in (A6; unpadded WordPiece + ORT Web Worker + WASM threads when COOP/COEP isolate the page; Vite serves gzip/brotli). Word BiLSTM Best is a second lazy opt-in. Verified plaintext can show a non-blocking scam banner; verification-failed rows never do. Sequential measurement page: `/?mlLoadCheck=1`.
 - **ML:** `scripts/export_onnx_web.py` writes gitignored ONNX + JSON sidecars under `ml/exports/onnx_web/` and copies them to `frontend/public/ml/`. It does not overwrite published metric JSON. Published TF-IDF joblib is fitted once into `models/baseline_onnx_export/` when `models/baseline/` is missing. Browser cost table: `ml/reports/onnx_web_load_check.md`.
 
-Chromium sequential load (Playwright, `/?mlLoadCheck=1`). Fixture banners vs Python 4/4 on every row. These are **not** TEST accuracy.
+Chromium sequential load (Playwright, `/?mlLoadCheck=1`, unpadded DistilBERT). These are **not** TEST accuracy. DistilBERT int8 download is brotli ~37.1 MiB (`Content-Encoding: br`); uncompressed serving graph is still 64.3 MiB.
+
+| #   | Checkpoint                         | Load      | Init   | Infer / msg | Uncompressed ONNX | Download (br) |
+| --- | ---------------------------------- | --------- | ------ | ----------- | ----------------- | ------------- |
+| 1   | DistilBERT best (512, 0.20)        | yes, int8 | 916 ms | 29 ms       | 64.3 MiB          | 37.1 MiB      |
+| 2   | DistilBERT default (256, 0.30)     | yes, int8 | 597 ms | 11 ms       | 64.3 MiB          | 37.1 MiB      |
+| 3   | BiLSTM best (8 ep, 0.20)           | yes       | 189 ms | 1.5 ms      | 13.2 MiB          | 12.1 MiB      |
+| 4   | BiLSTM default (4 ep, 0.30)        | yes       | 186 ms | 0.6 ms      | 13.2 MiB          | 12.1 MiB      |
+| 5   | TF-IDF best (10k, C=1.0, 0.20)     | yes       | 19 ms  | 0.8 ms      | 39 KiB            | 36 KiB        |
+| 6   | TF-IDF default (50k, C=0.25, 0.30) | yes       | 39 ms  | 0.8 ms      | 196 KiB           | 178 KiB       |
 
 
-| #   | Checkpoint                         | Load      | Init   | Infer / msg | Serving ONNX |
-| --- | ---------------------------------- | --------- | ------ | ----------- | ------------ |
-| 1   | DistilBERT best (512, 0.20)        | yes, int8 | 642 ms | 759 ms      | 64.3 MiB     |
-| 2   | DistilBERT default (256, 0.30)     | yes, int8 | 254 ms | 345 ms      | 64.3 MiB     |
-| 3   | BiLSTM best (8 ep, 0.20)           | yes       | 76 ms  | 1.3 ms      | 13.2 MiB     |
-| 4   | BiLSTM default (4 ep, 0.30)        | yes       | 72 ms  | 0.8 ms      | 13.2 MiB     |
-| 5   | TF-IDF best (10k, C=1.0, 0.20)     | yes       | 17 ms  | 0.7 ms      | 39 KiB       |
-| 6   | TF-IDF default (50k, C=0.25, 0.30) | yes       | 37 ms  | 1.0 ms      | 196 KiB      |
-
-
-ChatScreen eager default is row 5 (TF-IDF Best). DistilBERT row 2 and Word BiLSTM Best row 3 are lazy opt-ins. Row 6 remains the published TF-IDF switch-back; row 4 remains the published LSTM switch-back.
+ChatScreen eager default is row 5 (TF-IDF Best). DistilBERT default (row 2) and Word BiLSTM Best (row 3) are lazy opt-ins. Row 1 remains the DistilBERT 512-token sweep export (not the checkbox); row 6 remains the published TF-IDF switch-back; row 4 remains the published LSTM switch-back.
 
 Slice 7 adds:
 
@@ -394,6 +393,8 @@ Verification: 81 backend tests, `ruff check .` clean, `mypy app tests` clean, 50
 `ChatScreen.tsx` itself is now a presentational shell (~300 lines) that composes these hooks and owns only the state genuinely shared across them (the add-contact input, and the one status/error banner both contacts and the conversation state machine can write to). The JSX tree, CSS class names, and every user-visible string are unchanged — this was a pure structural move, verified by running the existing `ChatScreen.test.tsx` (which exercises encrypt/decrypt, verification failure, the scam banner, history hydration, dark-mode persistence, and epoch rotation end-to-end) unmodified against the new structure.
 
 Verification: 50 frontend tests (unchanged pass/fail set), `tsc -b --noEmit` clean, `npm run build` clean, `oxlint` clean (one new, non-blocking `exhaustive-deps` warning on a dependency array that intentionally lists a stable member-function reference rather than its parent object, documented in `useContacts.ts`).
+
+**DistilBERT default opt-in and browser payload.** ChatScreen's DistilBERT checkbox loads Slice 5 `distilbert_default` (256-token int8, threshold 0.30). The 512-token sweep winner stays exported as `distilbert_best` for the sequential load-check, not the chat toggle. Uncompressed ONNX size is the same (~64.3 MiB); short DMs stay unpadded. Last banner flags are cached per username (id + revision + checkpoint; never plaintext) so reload does not wait on WASM to paint warnings. `copy_export_to_frontend` omits `model.fp32.onnx` (~256 MiB) from `frontend/public/ml/`. Export writes `model.onnx.gz` / `model.onnx.br`; Vite serves them with `Content-Encoding` so `fetch('/ml/distilbert_default/model.onnx')` still works. Refresh existing copies without re-quantizing: `uv run python scripts/prepare_browser_onnx.py`. Measurements: `ml/reports/onnx_web_load_check.md`.
 
 ## E2EE and client-side AI
 
@@ -579,11 +580,11 @@ Chat-eval confusion matrix: `[[91, 9], [12, 88]]` — 9 false positives out of 1
 
 The Slice 5 goal was to cut chat ham false alarms **below 70/100** without giving up ~0.99 in-domain / 1.00 chat-eval scam recall. DistilBERT **met the false-alarm goal** (9/100 chat ham warned; 66 vs 489 in-domain). In-domain scam recall stayed near 0.99 (0.983 vs 0.992: 33 extra TEST misses). Chat-eval scam recall **did drop** (0.880 vs 1.000: 12 misses). That is the honest VAL-frozen trade-off, not a reason to hunt 0.15 / 0.11 on the 200-row file. Side-by-side JSON: `ml/reports/distilbert/comparison_vs_tfidf.json`.
 
-Slice 5 itself did not export ONNX. Slice 6 exported this checkpoint as `distilbert_default` (int8 `model.onnx`, max_length 256, threshold 0.30) and lazy-loads it behind ChatScreen's DistilBERT checkbox. ChatScreen DistilBERT truncates at 256 tokens but does **not** pad short DMs to 256 (the ONNX graph already has a dynamic sequence axis). Inference runs in an ORT Web Worker so the composer does not freeze. It is not the eager ChatScreen default.
+Slice 5 itself did not export ONNX. Slice 6 exported this checkpoint as `distilbert_default` (int8 `model.onnx`, max_length 256, threshold 0.30). ChatScreen's DistilBERT checkbox lazy-loads **`distilbert_default`**. The 512-token sweep winner remains exported as `distilbert_best` for `/?mlLoadCheck=1`, not the checkbox. ChatScreen DistilBERT truncates at the checkpoint's `max_length` but does **not** pad short DMs (the ONNX graph already has a dynamic sequence axis). Inference runs in an ORT Web Worker so the composer does not freeze. Vite serves the int8 graph with gzip/brotli `Content-Encoding` and does not publish `model.fp32.onnx`. It is not the eager ChatScreen default.
 
 ### DistilBERT one-at-a-time parameter sweep (offline; not the browser default)
 
-This is a **separate** experiment from the Slice 5 DistilBERT point above. It does **not** overwrite `ml/reports/distilbert/` or `ml/models/distilbert/`. Keep those as the **switch-back default** if `max_length` 512 is too heavy for ONNX Runtime Web (longer sequences mean more memory and latency in the browser). Until that cost is measured, treat Slice 5 (`max_length` 256, threshold 0.30) as the recipe to export.
+This is a **separate** experiment from the Slice 5 DistilBERT point above. It does **not** overwrite `ml/reports/distilbert/` or `ml/models/distilbert/`. ChatScreen's opt-in checkbox loads Slice 5 (`distilbert_default`, max_length 256, threshold 0.30). The 512-token winner stays a catalog export (`distilbert_best`); short DMs are unpadded so they do not pay 512² attention. `train_distilbert.py` still trains the Slice 5 recipe by default.
 
 **Protocol.** Same 71,370-row `llm_intent_v1` corpus, same 70/20/10 split (`random_state=42`), same VAL rule (maximize scam recall subject to legitimate recall ≥ 0.85). Eighteen full TRAIN-only retrains on the RTX 4060 (~3.1 h). One run is the documented recipe with an **expanded VAL threshold grid** `0.20, 0.25, …, 0.70`. Each other run changes **exactly one** training knob from that recipe:
 

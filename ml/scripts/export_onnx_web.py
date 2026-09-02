@@ -2,6 +2,7 @@
 
 Does not overwrite ml/reports/*.json. Does not start the 71k LLM rewrite.
 Does not change train_baseline.py / train_distilbert.py / train_lstm.py defaults.
+Copies int8 ONNX + gzip/brotli siblings into frontend/public/ml; omits model.fp32.onnx.
 
 Usage (from ml/):
 
@@ -9,6 +10,7 @@ Usage (from ml/):
     uv run python scripts/export_onnx_web.py --only tfidf_default
     uv run python scripts/export_onnx_web.py --skip-frontend-copy
     uv run python scripts/export_onnx_web.py --no-quantize
+    uv run python scripts/prepare_browser_onnx.py
 """
 
 # Import argparse for the documented operator flags.

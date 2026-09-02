@@ -2,11 +2,13 @@
 import react from '@vitejs/plugin-react'
 // Import Vitest-aware Vite configuration typing.
 import { defineConfig } from 'vitest/config'
+// Import the plugin that serves public/ml/*.onnx with brotli/gzip Content-Encoding.
+import { precompressedOnnxPlugin } from './vite.precompressedOnnx.ts'
 
 // Configure both the browser build and colocated component tests.
 export default defineConfig({
   // Transform React 19 TypeScript and enable development fast refresh.
-  plugins: [react()],
+  plugins: [react(), precompressedOnnxPlugin()],
   // Treat ORT's SIMD binary as a static asset so Vite serves the correct MIME type.
   assetsInclude: ['**/*.wasm'],
   // Avoid prebundling ORT Web so its WASM assets resolve from the package dist.

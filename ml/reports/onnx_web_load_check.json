@@ -8,10 +8,13 @@
       "label": "DistilBERT best (max_length 512, threshold 0.20)",
       "loadSuccess": true,
       "error": null,
-      "initMs": 641.5,
-      "inferenceMsPerMessage": 758.5499999998137,
+      "initMs": 916.4049999997951,
+      "inferenceMsPerMessage": 29.353750000009313,
+      "inferenceMsP50": 18.62250000005588,
+      "inferenceMsP95": 60.98975000008939,
+      "inferenceMsP99": 66.64595000006257,
       "onnxBytes": 67404393,
-      "jsHeapBytes": 91700000,
+      "jsHeapBytes": 17100000,
       "fixtureBannerMatch": [
         true,
         true,
@@ -35,13 +38,16 @@
       "label": "DistilBERT default (max_length 256, threshold 0.30)",
       "loadSuccess": true,
       "error": null,
-      "initMs": 254,
-      "inferenceMsPerMessage": 345.32499999925494,
+      "initMs": 597.4399999999441,
+      "inferenceMsPerMessage": 10.78374999994412,
+      "inferenceMsP50": 10.75249999994412,
+      "inferenceMsP95": 11.97525000013411,
+      "inferenceMsP99": 12.139050000160932,
       "onnxBytes": 67404393,
-      "jsHeapBytes": 91700000,
+      "jsHeapBytes": 17100000,
       "fixtureBannerMatch": [
         true,
-        true,
+        false,
         true,
         true
       ],
@@ -62,10 +68,13 @@
       "label": "Word BiLSTM best (8 epochs, threshold 0.20)",
       "loadSuccess": true,
       "error": null,
-      "initMs": 75.69999999925494,
-      "inferenceMsPerMessage": 1.349999999627471,
+      "initMs": 189.4949999996461,
+      "inferenceMsPerMessage": 1.5162499999860302,
+      "inferenceMsP50": 1.2124999999068677,
+      "inferenceMsP95": 2.88750000023283,
+      "inferenceMsP99": 3.0495000002998855,
       "onnxBytes": 13861285,
-      "jsHeapBytes": 91700000,
+      "jsHeapBytes": 17100000,
       "fixtureBannerMatch": [
         true,
         true,
@@ -89,10 +98,13 @@
       "label": "Word BiLSTM default (4 epochs, threshold 0.30)",
       "loadSuccess": true,
       "error": null,
-      "initMs": 72.39999999850988,
-      "inferenceMsPerMessage": 0.775000000372529,
+      "initMs": 185.714999999851,
+      "inferenceMsPerMessage": 0.6199999999953434,
+      "inferenceMsP50": 0.5825000000186265,
+      "inferenceMsP95": 0.7602500001434236,
+      "inferenceMsP99": 0.780050000147894,
       "onnxBytes": 13861285,
-      "jsHeapBytes": 91700000,
+      "jsHeapBytes": 17100000,
       "fixtureBannerMatch": [
         true,
         true,
@@ -116,10 +128,13 @@
       "label": "TF-IDF best (max_features 10000, C=1.0, threshold 0.20)",
       "loadSuccess": true,
       "error": null,
-      "initMs": 16.5,
-      "inferenceMsPerMessage": 0.724999999627471,
+      "initMs": 18.62999999988824,
+      "inferenceMsPerMessage": 0.8287499999860302,
+      "inferenceMsP50": 0.6049999997485429,
+      "inferenceMsP95": 1.565000000130385,
+      "inferenceMsP99": 1.6730000001750884,
       "onnxBytes": 40318,
-      "jsHeapBytes": 91700000,
+      "jsHeapBytes": 17100000,
       "fixtureBannerMatch": [
         true,
         true,
@@ -143,10 +158,13 @@
       "label": "TF-IDF default (max_features 50000, C=0.25, threshold 0.30)",
       "loadSuccess": true,
       "error": null,
-      "initMs": 36.5,
-      "inferenceMsPerMessage": 1,
+      "initMs": 39.33499999996275,
+      "inferenceMsPerMessage": 0.7900000000372529,
+      "inferenceMsP50": 0.7649999998975545,
+      "inferenceMsP95": 0.9380000002216546,
+      "inferenceMsP99": 0.9596000002976506,
       "onnxBytes": 200320,
-      "jsHeapBytes": 91700000,
+      "jsHeapBytes": 17100000,
       "fixtureBannerMatch": [
         true,
         true,
@@ -163,6 +181,44 @@
         "chat_fp": 70,
         "note": "Offline TEST/chat-eval only. Browser fixtures are not TEST accuracy."
       }
+    }
+  ],
+  "onnxTransfers": [
+    {
+      "url": "http://127.0.0.1:5173/ml/distilbert_best/model.onnx",
+      "contentEncoding": "br",
+      "contentLength": 38948206,
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:5173/ml/distilbert_default/model.onnx",
+      "contentEncoding": "br",
+      "contentLength": 38943502,
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:5173/ml/lstm_best/model.onnx",
+      "contentEncoding": "br",
+      "contentLength": 12712684,
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:5173/ml/lstm_default/model.onnx",
+      "contentEncoding": "br",
+      "contentLength": 12710732,
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:5173/ml/tfidf_best/logistic_head.onnx",
+      "contentEncoding": "br",
+      "contentLength": 37110,
+      "status": 200
+    },
+    {
+      "url": "http://127.0.0.1:5173/ml/tfidf_default/logistic_head.onnx",
+      "contentEncoding": "br",
+      "contentLength": 182016,
+      "status": 200
     }
   ]
 }

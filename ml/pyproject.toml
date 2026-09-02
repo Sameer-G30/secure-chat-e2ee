@@ -28,6 +28,8 @@ dependencies = [
     "accelerate>=1.6,<2",
     # Export DistilBERT/LSTM graphs and the TF-IDF logistic head for ONNX Runtime Web.
     "onnx>=1.17,<2",
+    # Write model.onnx.br siblings so Vite can serve DistilBERT int8 with Content-Encoding: br.
+    "brotli>=1.1,<2",
     # Quantize DistilBERT and verify exported graphs on CPU without touching the 71k reports.
     "onnxruntime>=1.20,<2",
     # Load TF-IDF sweep joblib dumps when exporting the 10k logistic head.

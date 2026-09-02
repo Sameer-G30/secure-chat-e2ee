@@ -117,7 +117,7 @@ export type ChatHeavyPreference = 'tfidf' | 'distilbert' | 'lstm'
 // ChatScreen eager default: TF-IDF Best (10k terms, C=1.0, threshold 0.20).
 export const CHATSCREEN_DEFAULT_ID: CheckpointId = 'tfidf_best'
 
-// DistilBERT opt-in loads the Slice 5 256-token graph, not the 512-token winner.
+// DistilBERT opt-in loads Slice 5 default (256-token int8, threshold 0.30), not the 512-token sweep winner.
 export const DISTILBERT_OPT_IN_ID: CheckpointId = 'distilbert_default'
 
 // Word BiLSTM opt-in loads the 8-epoch sweep winner, not the published 4-epoch default.

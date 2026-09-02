@@ -37,13 +37,17 @@ from secure_chat_ml.lstm import (
     transform_url_features,
 )
 from secure_chat_ml.onnx_export import (
+    DISTILBERT_FP32_NAME,
     DistilBertLogitsWrapper,
     ExportableWordBiLstm,
     build_logistic_head_onnx,
+    copy_export_to_frontend,
     encode_lstm_unpadded,
     extract_tfidf_export_payload,
     force_eager_attention,
     run_logistic_onnx,
+    strip_fp32_from_browser_tree,
+    write_compressed_onnx_siblings,
     write_tfidf_sidecars,
     write_wordpiece_vocab,
 )
@@ -455,3 +459,77 @@ def test_tiny_distilbert_onnx_matches_pytorch(tmp_path: Path) -> None:
         rtol=1e-3,
         atol=1e-3,
     )
+
+
+# Gzip and brotli siblings must exist and be smaller than highly redundant ONNX bytes.
+def test_write_compressed_onnx_siblings_are_smaller(tmp_path: Path) -> None:
+    """Assert .gz/.br files are written and compress a repetitive payload."""
+
+    # Serving graph path matches DistilBERT's browser filename.
+    onnx_path = tmp_path / "model.onnx"
+    # Repeating bytes compress well so the assertion is robust.
+    onnx_path.write_bytes(b"A" * 10_000)
+    # Write gzip and brotli siblings beside the serving graph.
+    sizes = write_compressed_onnx_siblings(onnx_path)
+    # Uncompressed size is the original payload.
+    assert sizes["onnx"] == 10_000
+    # Gzip must shrink this payload.
+    assert sizes["onnx_gzip"] < sizes["onnx"]
+    # Brotli must also shrink this payload.
+    assert sizes["onnx_brotli"] < sizes["onnx"]
+    # Gzip sibling uses the documented suffix.
+    assert (tmp_path / "model.onnx.gz").is_file()
+    # Brotli sibling uses the documented suffix.
+    assert (tmp_path / "model.onnx.br").is_file()
+
+
+# Vite public/ml must not receive the 256 MiB DistilBERT fp32 fallback.
+def test_copy_export_to_frontend_excludes_fp32(tmp_path: Path) -> None:
+    """Assert copy_export_to_frontend omits model.fp32.onnx."""
+
+    # Fake an export directory the way DistilBERT export writes files.
+    export_dir = tmp_path / "export"
+    # Create the source tree.
+    export_dir.mkdir()
+    # Int8 serving graph the tab fetches.
+    (export_dir / "model.onnx").write_bytes(b"int8-graph")
+    # fp32 fallback that must stay in ml/exports only.
+    (export_dir / DISTILBERT_FP32_NAME).write_bytes(b"fp32-graph")
+    # Manifest the loader fetches first.
+    (export_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    # Destination mimics frontend/public/ml.
+    public_ml = tmp_path / "public_ml"
+    # Copy the way export_onnx_web.py copies DistilBERT best.
+    dest = copy_export_to_frontend(export_dir, public_ml, "distilbert_best")
+    # Serving graph must arrive.
+    assert (dest / "model.onnx").read_bytes() == b"int8-graph"
+    # Manifest must arrive.
+    assert (dest / "manifest.json").is_file()
+    # fp32 fallback must not be fetchable from /ml/distilbert_best/.
+    assert not (dest / DISTILBERT_FP32_NAME).exists()
+
+
+# A previous export that already copied fp32 into public/ml can be sanitized.
+def test_strip_fp32_from_browser_tree_unlinks_fallback(tmp_path: Path) -> None:
+    """Assert strip_fp32_from_browser_tree deletes model.fp32.onnx only."""
+
+    # Checkpoint folder as Vite would serve it.
+    folder = tmp_path / "distilbert_best"
+    # Create the folder.
+    folder.mkdir()
+    # Leftover fp32 from an older copytree.
+    fp32 = folder / DISTILBERT_FP32_NAME
+    # Write dummy bytes.
+    fp32.write_bytes(b"x")
+    # Serving int8 graph must survive.
+    serving = folder / "model.onnx"
+    # Write dummy serving bytes.
+    serving.write_bytes(b"y")
+    # Run the sanitizer the prepare_browser_onnx script uses.
+    removed = strip_fp32_from_browser_tree(tmp_path)
+    # The fp32 path must be in the removed list.
+    assert fp32 in removed
+    # Serving graph stays for ORT Web.
+    assert serving.is_file()
+    # fp32 is gone from the browser tree.
+    assert not fp32.exists()

@@ -17,6 +17,9 @@ This module never overwrites reports/*.json and never reads chat_eval for
 fitting. A missing published TF-IDF joblib is refit into a separate folder.
 """
 
+# Import gzip to write model.onnx.gz siblings the Vite plugin can serve.
+import gzip
+
 # Import json to write sidecars and manifests the browser will fetch.
 import json
 
@@ -34,6 +37,9 @@ from pathlib import Path
 
 # Import Any for sklearn/report dictionaries.
 from typing import Any
+
+# Import brotli to write model.onnx.br siblings (smaller than gzip on DistilBERT int8).
+import brotli
 
 # Import numpy for coefficient matrices, dummy tensors, and fixture vectors.
 import numpy as np
@@ -104,8 +110,17 @@ URL_SCALER_NAME = "url_scaler.json"
 # DistilBERT graph filename; int8 is preferred, fp32 is the fallback.
 DISTILBERT_ONNX_NAME = "model.onnx"
 
-# DistilBERT fp32 graph kept beside int8 so a WASM abort can switch files.
+# DistilBERT fp32 graph kept in ml/exports only; it is never copied to the browser.
 DISTILBERT_FP32_NAME = "model.fp32.onnx"
+
+# Gzip sibling served with Content-Encoding: gzip (model.onnx.gz).
+ONNX_GZIP_SUFFIX = ".gz"
+
+# Brotli sibling served with Content-Encoding: br (model.onnx.br).
+ONNX_BROTLI_SUFFIX = ".br"
+
+# Files that must stay out of frontend/public/ml (256 MiB fp32 fallback, quantizer temps).
+BROWSER_EXCLUDED_ONNX_NAMES = frozenset({DISTILBERT_FP32_NAME})
 
 # WordPiece token list written for the TypeScript tokenizer.
 WORDPIECE_VOCAB_NAME = "wordpiece_vocab.json"
@@ -614,9 +629,105 @@ def write_manifest(output_dir: Path, payload: dict[str, Any]) -> None:
     (output_dir / MANIFEST_NAME).write_text(json.dumps(payload, indent=2))
 
 
+# Write gzip and brotli siblings next to an ONNX graph for Content-Encoding serving.
+def write_compressed_onnx_siblings(onnx_path: Path) -> dict[str, int]:
+    """Return uncompressed/gzip/brotli byte counts after writing .gz and .br files."""
+
+    # Read the serving graph once so gzip and brotli compress the same bytes.
+    raw = onnx_path.read_bytes()
+    # Gzip path is the ONNX filename plus .gz (model.onnx.gz).
+    gzip_path = Path(str(onnx_path) + ONNX_GZIP_SUFFIX)
+    # Brotli path is the ONNX filename plus .br (model.onnx.br).
+    brotli_path = Path(str(onnx_path) + ONNX_BROTLI_SUFFIX)
+    # Level 9 is slow on 64 MiB DistilBERT but this is a one-shot export step.
+    gzip_path.write_bytes(gzip.compress(raw, compresslevel=9))
+    # Quality 11 is brotli's maximum; DistilBERT int8 shrinks more than gzip.
+    brotli_path.write_bytes(brotli.compress(raw, quality=11))
+    # Return sizes the manifest and README download table can cite.
+    return {
+        "onnx": len(raw),
+        "onnx_gzip": int(gzip_path.stat().st_size),
+        "onnx_brotli": int(brotli_path.stat().st_size),
+    }
+
+
+# Tell shutil.copytree which DistilBERT artifacts must not reach the browser.
+def _browser_copy_ignore(_directory: str, names: list[str]) -> set[str]:
+    """Return names to skip when copying an export folder into frontend/public/ml."""
+
+    # Accumulate skip names for this directory listing.
+    skipped: set[str] = set()
+    # Walk the listing shutil hands us (files and subdirectories).
+    for name in names:
+        # Never publish the 256 MiB fp32 DistilBERT fallback to Vite public/.
+        if name in BROWSER_EXCLUDED_ONNX_NAMES:
+            # Record the skip so copytree omits the file.
+            skipped.add(name)
+        # Quantizer shape-inference temps are not serving graphs.
+        if name.endswith(".inferred.onnx"):
+            # Omit the temp file from the browser tree.
+            skipped.add(name)
+    # Return the skip set shutil.copytree expects.
+    return skipped
+
+
+# Delete leftover fp32 / inferred graphs under frontend/public/ml.
+def strip_fp32_from_browser_tree(frontend_public_ml: Path) -> list[Path]:
+    """Unlink model.fp32.onnx and *.inferred.onnx under the Vite public ML folder."""
+
+    # Collect paths we remove so the CLI can print them.
+    removed: list[Path] = []
+    # Missing public/ml is a no-op (export has not been copied yet).
+    if not frontend_public_ml.is_dir():
+        # Return an empty list so callers can still iterate.
+        return removed
+    # Remove every DistilBERT fp32 fallback a previous export copied.
+    for path in frontend_public_ml.rglob(DISTILBERT_FP32_NAME):
+        # Unlink the 256 MiB file the tab must not be able to fetch.
+        path.unlink()
+        # Remember the path for the operator log.
+        removed.append(path)
+    # Remove leftover quantizer temps if any survived a partial copy.
+    for path in frontend_public_ml.rglob("*.inferred.onnx"):
+        # These are not serving graphs.
+        path.unlink()
+        # Remember the path for the operator log.
+        removed.append(path)
+    # Return everything we deleted.
+    return removed
+
+
+# Compress every serving ONNX under a tree (public/ml or ml/exports/onnx_web).
+def compress_onnx_tree(root: Path) -> list[Path]:
+    """Write .gz/.br siblings for each serving ONNX; skip fp32 fallback files."""
+
+    # Collect serving graphs we compressed.
+    written: list[Path] = []
+    # Missing tree is a no-op.
+    if not root.is_dir():
+        # Return an empty list.
+        return written
+    # Walk ONNX files; rglob("*.onnx") does not match .onnx.gz.
+    for onnx_path in root.rglob("*.onnx"):
+        # Do not gzip the 256 MiB fp32 fallback (it stays in ml/exports only).
+        if onnx_path.name in BROWSER_EXCLUDED_ONNX_NAMES:
+            # Skip this file.
+            continue
+        # Do not compress quantizer temps.
+        if onnx_path.name.endswith(".inferred.onnx"):
+            # Skip this file.
+            continue
+        # Write gzip and brotli siblings beside the serving graph.
+        write_compressed_onnx_siblings(onnx_path)
+        # Record the serving path (not the sibling) for the CLI summary.
+        written.append(onnx_path)
+    # Return compressed serving graphs.
+    return written
+
+
 # Copy an export directory into frontend/public/ml/<id>/ for Vite.
 def copy_export_to_frontend(export_dir: Path, frontend_public_ml: Path, dirname: str) -> Path:
-    """Replace frontend/public/ml/<dirname> with the freshly exported files."""
+    """Replace frontend/public/ml/<dirname> with browser-safe export files."""
 
     # Destination is gitignored; Vite serves it as /ml/<dirname>/.
     dest = frontend_public_ml / dirname
@@ -624,8 +735,14 @@ def copy_export_to_frontend(export_dir: Path, frontend_public_ml: Path, dirname:
     if dest.exists():
         # rmtree is safe here: dest is under frontend/public/ml, not reports/.
         shutil.rmtree(dest)
-    # Copy the whole checkpoint tree including ONNX + JSON sidecars.
-    shutil.copytree(export_dir, dest)
+    # Copy sidecars + int8 ONNX + compressed siblings; omit model.fp32.onnx.
+    shutil.copytree(export_dir, dest, ignore=_browser_copy_ignore)
+    # Belt-and-suspenders: unlink fp32 if a future ignore-list miss copies it.
+    leftover_fp32 = dest / DISTILBERT_FP32_NAME
+    # Only unlink when the file actually appeared.
+    if leftover_fp32.exists():
+        # Keep the browser tree free of the 256 MiB fallback.
+        leftover_fp32.unlink()
     # Return the public path so the CLI can print it.
     return dest
 
@@ -670,6 +787,8 @@ def export_tfidf_checkpoint(
     onnx_bytes = int(onnx_path.stat().st_size)
     # Vocabulary JSON is the bulky TF-IDF artifact (10k vs 50k terms).
     vocab_bytes = int((output_dir / TFIDF_VOCAB_NAME).stat().st_size)
+    # Write gzip/brotli siblings so Vite can serve Content-Encoding without changing the URL.
+    compressed = write_compressed_onnx_siblings(onnx_path)
     # Build the manifest the load-check reads to know which files to fetch.
     write_manifest(
         output_dir,
@@ -688,7 +807,9 @@ def export_tfidf_checkpoint(
                 "fixtures": FIXTURE_SCORES_NAME,
             },
             "artifact_bytes": {
-                "onnx": onnx_bytes,
+                "onnx": compressed["onnx"],
+                "onnx_gzip": compressed["onnx_gzip"],
+                "onnx_brotli": compressed["onnx_brotli"],
                 "tfidf_json": vocab_bytes,
             },
             "offline": offline,
@@ -858,6 +979,8 @@ def export_lstm_checkpoint(
     offline = read_offline_quality(ml_root, spec)
     # Measure ONNX bytes for the cost table.
     onnx_bytes = int(onnx_path.stat().st_size)
+    # Write gzip/brotli siblings so the browser download can be smaller than 13 MiB.
+    compressed = write_compressed_onnx_siblings(onnx_path)
     # Write the load-check manifest.
     write_manifest(
         output_dir,
@@ -875,7 +998,11 @@ def export_lstm_checkpoint(
                 "url_scaler": URL_SCALER_NAME,
                 "fixtures": FIXTURE_SCORES_NAME,
             },
-            "artifact_bytes": {"onnx": onnx_bytes},
+            "artifact_bytes": {
+                "onnx": compressed["onnx"],
+                "onnx_gzip": compressed["onnx_gzip"],
+                "onnx_brotli": compressed["onnx_brotli"],
+            },
             "offline": offline,
             "wired_in_chatscreen_by_default": False,
         },
@@ -1086,6 +1213,8 @@ def export_distilbert_checkpoint(
     serving_path = output_dir / serving_name
     # Stat the file the browser will actually fetch.
     onnx_bytes = int(serving_path.stat().st_size)
+    # Write gzip/brotli siblings; Vite serves them with Content-Encoding.
+    compressed = write_compressed_onnx_siblings(serving_path)
     # Write the load-check manifest.
     write_manifest(
         output_dir,
@@ -1104,9 +1233,12 @@ def export_distilbert_checkpoint(
                 "fixtures": FIXTURE_SCORES_NAME,
             },
             "artifact_bytes": {
-                "onnx": onnx_bytes,
+                "onnx": compressed["onnx"],
+                "onnx_gzip": compressed["onnx_gzip"],
+                "onnx_brotli": compressed["onnx_brotli"],
                 "fp32_onnx": int(fp32_path.stat().st_size),
             },
+            "browser_ships_fp32": False,
             "offline": offline,
             "wired_in_chatscreen_by_default": False,
         },

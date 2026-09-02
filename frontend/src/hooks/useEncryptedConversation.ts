@@ -36,7 +36,13 @@ import {
   initializeSodium,
 } from '../crypto/keyExchange'
 import type { DirectionalSessionKeys } from '../crypto/keyExchange'
-import type { ClassifyResult } from '../ml/types'
+import type { CheckpointId, ClassifyResult } from '../ml/types'
+import { CHATSCREEN_DEFAULT_ID } from '../ml/types'
+import {
+  readCachedBanner,
+  renameCachedBanner,
+  writeCachedBanner,
+} from '../ml/scamBannerCache'
 // Reuse AuthContext's own Session shape instead of declaring a second, structurally
 // coincidental copy of the same four fields.
 import type { Session } from '../context/AuthContext'
@@ -130,6 +136,10 @@ export function useEncryptedConversation(
   classify: (plaintext: string) => Promise<ClassifyResult | null>,
   setStatusMessage: (message: string) => void,
   setErrorMessage: (message: string | null) => void,
+  // Bump when the ready scam model changes so cache misses are re-scored (banners can clear).
+  classifierGeneration: number = 0,
+  // Catalog id for cache hits (DistilBERT default while the graph is still loading).
+  scoringCheckpointId: CheckpointId = CHATSCREEN_DEFAULT_ID,
 ): EncryptedConversationApi {
   const [isConnecting, setIsConnecting] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -154,6 +164,23 @@ export function useEncryptedConversation(
   // sent and acks them in that same order, so the oldest queued local id always
   // corresponds to the next "accepted" frame that carries a real, not-yet-seen row id.
   const pendingSendQueueRef = useRef<string[]>([])
+  // Map optimistic send ids to server ids so a slow DistilBERT result still finds the row.
+  const acceptedIdsRef = useRef<Map<string, string>>(new Map())
+  // Always call the latest classify() from socket/history callbacks (the function identity changes).
+  const classifyRef = useRef(classify)
+  // Drop stale classify results after the ready model changes (DistilBERT load vs TF-IDF).
+  const classifySeqRef = useRef(0)
+  // Latest handle for banner-cache keys (socket callbacks must not close over a stale session).
+  const usernameRef = useRef(session?.username)
+  // Latest catalog id so hydrate can paint DistilBERT banners before WASM is ready.
+  const scoringCheckpointRef = useRef(scoringCheckpointId)
+
+  // Keep classifyRef current every render so hydrate/socket paths do not close over TF-IDF forever.
+  classifyRef.current = classify
+  // Keep the cache username in lockstep with the signed-in handle.
+  usernameRef.current = session?.username
+  // Keep the cache checkpoint in lockstep with the checkbox (not the WASM-ready flag).
+  scoringCheckpointRef.current = scoringCheckpointId
 
   // Mirror active chat into the ref whenever React state changes.
   useEffect(() => {
@@ -176,22 +203,104 @@ export function useEncryptedConversation(
     }
   }, [])
 
-  // Classify verified plaintext locally and attach a non-blocking banner.
-  function classifyAndFlag(messageId: string, plaintext: string) {
-    // Run after decrypt/send so the bubble appears before WASM returns.
-    void classify(plaintext).then((result) => {
-      // A missing export, empty string, or WASM abort leaves the message unwarned.
-      if (result === null || !result.warned) {
-        return
-      }
-      // Flip only this row's warning flag; never hide or delete the text.
-      setMessages((existing) =>
-        existing.map((message) =>
-          message.id === messageId ? { ...message, scamWarning: true } : message,
-        ),
-      )
-    })
+  // Look up a prior banner for this id+revision+checkpoint; null means classify.
+  function cachedWarning(messageId: string, revision: number): boolean | null {
+    // No signed-in handle means we cannot read a per-user cache key.
+    const username = usernameRef.current
+    // Skip storage when ChatScreen is in the logout render.
+    if (!username) {
+      // Treat as a miss so a later classify still runs.
+      return null
+    }
+    // Match checkpoint so DistilBERT default cannot reuse a TF-IDF row.
+    return readCachedBanner(username, messageId, revision, scoringCheckpointRef.current)
   }
+
+  // Paint a cached DistilBERT/TF-IDF/LSTM banner without waiting for WASM.
+  function applyCachedBanner(row: ChatMessage): ChatMessage {
+    // Verification failures never show a banner and are never cached.
+    if (row.verificationFailed || row.plaintext === null) {
+      // Leave the row unchanged.
+      return row
+    }
+    // Read last session's decision for this catalog id.
+    const warned = cachedWarning(row.id, row.revision)
+    // Cache miss: keep whatever the caller set (usually false) until classify returns.
+    if (warned === null) {
+      // New or edited plaintext still needs the ready model.
+      return row
+    }
+    // Reload path: show the banner immediately.
+    return { ...row, scamWarning: warned }
+  }
+
+  // True when this bubble has no matching cache row for the current checkpoint.
+  function needsClassify(row: ChatMessage): boolean {
+    // Skip verification failures; they must never reach the classifier.
+    if (row.verificationFailed || !row.plaintext) {
+      // No plaintext to score.
+      return false
+    }
+    // Cache hit: skip WASM on reload (DistilBERT session create is ~1s plus infer/msg).
+    return cachedWarning(row.id, row.revision) === null
+  }
+
+  // Classify verified plaintext locally. Banners may turn on *or* off when the model changes.
+  function classifyAndFlag(messageId: string, plaintext: string, revision: number) {
+    // Capture the model generation so a DistilBERT result cannot overwrite a later TF-IDF pass.
+    const seq = classifySeqRef.current
+    // Run after decrypt/send so the bubble appears before WASM returns.
+    void classifyRef.current(plaintext)
+      .then((result) => {
+        // Ignore results from a previous DistilBERT/TF-IDF/LSTM generation.
+        if (seq !== classifySeqRef.current) {
+          // A newer re-score is in flight or already applied.
+          return
+        }
+        // null means the requested heavy graph is still loading (or classify failed): leave the flag.
+        if (result === null) {
+          // Cache misses are classified when classifierGeneration bumps after load.
+          return
+        }
+        // Remember this decision so the next reload does not wait on WASM.
+        const username = usernameRef.current
+        // Prefer the server id if the accepted ack already renamed this send.
+        const resolvedId = acceptedIdsRef.current.get(messageId) ?? messageId
+        // Only persist when a handle exists (not the logout render).
+        if (username) {
+          // Store warned/revision/checkpointId; never plaintext.
+          writeCachedBanner(username, resolvedId, revision, result.checkpointId, result.warned)
+        }
+        // Apply the ready model's decision, including clearing a TF-IDF false alarm.
+        setMessages((existing) =>
+          existing.map((message) =>
+            message.id === resolvedId && message.scamWarning !== result.warned
+              ? { ...message, scamWarning: result.warned }
+              : message,
+          ),
+        )
+      })
+      .catch(() => {
+        // Classification is non-blocking; a thrown WASM error must not surface as an unhandled rejection.
+      })
+  }
+
+  // Re-score cache misses when DistilBERT/LSTM becomes ready or is turned off.
+  useEffect(() => {
+    // Invalidate in-flight scores from the previous model.
+    classifySeqRef.current += 1
+    // Apply cached banners for the new checkpoint (reload / toggle) without WASM.
+    setMessages((existing) => existing.map((row) => applyCachedBanner(row)))
+    // Walk the live transcript (may be empty before a conversation is opened).
+    for (const row of messagesRef.current) {
+      // Skip rows whose last DistilBERT/TF-IDF decision is already on disk.
+      if (needsClassify(row) && row.plaintext) {
+        // Score with the model that is ready now.
+        classifyAndFlag(row.id, row.plaintext, row.revision)
+      }
+    }
+    // classifierGeneration / scoringCheckpointId are the triggers; classifyAndFlag reads refs.
+  }, [classifierGeneration, scoringCheckpointId])
 
   // Decrypt one envelope with the matching directional key, or record a verification failure.
   function decryptEnvelope(envelope: RelayedEnvelope, current: ActiveChat): ChatMessage {
@@ -236,7 +345,7 @@ export function useEncryptedConversation(
           ...identity,
         },
       )
-      return {
+      return applyCachedBanner({
         id: envelope.id,
         direction,
         plaintext,
@@ -246,7 +355,7 @@ export function useEncryptedConversation(
         revision: envelope.revision,
         editedAt: envelope.editedAt,
         pending: false,
-      }
+      })
     } catch {
       return {
         id: envelope.id,
@@ -292,8 +401,8 @@ export function useEncryptedConversation(
       updated[index] = row
       return updated
     })
-    if (!row.verificationFailed && row.plaintext) {
-      classifyAndFlag(row.id, row.plaintext)
+    if (needsClassify(row) && row.plaintext) {
+      classifyAndFlag(row.id, row.plaintext, row.revision)
     }
   }
 
@@ -333,8 +442,24 @@ export function useEncryptedConversation(
   // target. Edits reuse an already-reconciled id and do not enqueue here.
   function handleAccepted(serverId: string) {
     const localId = pendingSendQueueRef.current.shift()
-    if (localId === undefined || localId === serverId) {
+    // No queued send means this ack is not for an optimistic bubble.
+    if (localId === undefined) {
+      // Ignore a stray accepted frame.
       return
+    }
+    // Remember the mapping so a slow classify() result still finds the row.
+    acceptedIdsRef.current.set(localId, serverId)
+    // Server reused the optimistic id; the bubble already has the right key.
+    if (localId === serverId) {
+      // Nothing to rename in React state or in the banner cache.
+      return
+    }
+    // Follow the id change in the banner cache so reload looks up the server UUID.
+    const username = usernameRef.current
+    // Skip storage when ChatScreen is in the logout render.
+    if (username) {
+      // Move the pending-id row onto the history id.
+      renameCachedBanner(username, localId, serverId)
     }
     setMessages((existing) =>
       existing.map((message) =>
@@ -425,6 +550,8 @@ export function useEncryptedConversation(
     socketRef.current?.close()
     socketRef.current = null
     pendingSendQueueRef.current = []
+    // Drop optimistic-id mappings for the conversation we are leaving.
+    acceptedIdsRef.current = new Map()
     setMessages([])
     setActiveChat(null)
 
@@ -459,8 +586,8 @@ export function useEncryptedConversation(
       const hydrated: ChatMessage[] = history.map((envelope) => decryptEnvelope(envelope, nextChat))
       setMessages(hydrated)
       for (const row of hydrated) {
-        if (!row.verificationFailed && row.plaintext) {
-          classifyAndFlag(row.id, row.plaintext)
+        if (needsClassify(row) && row.plaintext) {
+          classifyAndFlag(row.id, row.plaintext, row.revision)
         }
       }
       socketRef.current = openSocketForConversation(conversation.id, currentSession.accessToken)
@@ -525,7 +652,7 @@ export function useEncryptedConversation(
         pending: true,
       },
     ])
-    classifyAndFlag(localId, plaintext)
+    classifyAndFlag(localId, plaintext, 0)
     setDraft('')
   }
 
@@ -572,6 +699,8 @@ export function useEncryptedConversation(
           : message,
       ),
     )
+    // Re-score the new plaintext; a previous scam banner must be allowed to clear.
+    classifyAndFlag(id, trimmed, nextRevision)
   }
 
   // Hard-delete an own message for every participant. Guarded to the sender's own,
@@ -662,6 +791,8 @@ export function useEncryptedConversation(
     handleClearLocalTranscript() {
       // Forget pending send ids so a later "accepted" ack cannot rename a gone row.
       pendingSendQueueRef.current = []
+      // Drop optimistic-id mappings for the conversation we are leaving.
+      acceptedIdsRef.current = new Map()
       setMessages([])
     },
     closeConversation() {
@@ -670,6 +801,8 @@ export function useEncryptedConversation(
       socketRef.current = null
       // Forget pending ids the same way a local-clear does.
       pendingSendQueueRef.current = []
+      // Drop optimistic-id mappings for the conversation we are leaving.
+      acceptedIdsRef.current = new Map()
       // Stop treating this pairing as the open conversation.
       activeChatRef.current = null
       setActiveChat(null)

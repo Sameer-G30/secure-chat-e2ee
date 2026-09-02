@@ -326,15 +326,35 @@ export async function classifyVerifiedPlaintext(
   text: string,
   heavy: ChatHeavyPreference,
 ): Promise<ClassifyResult | null> {
-  // DistilBERT opt-in uses the 256-token Slice 5 graph when it is loaded.
-  if (heavy === 'distilbert' && distilbertVocab?.id === DISTILBERT_OPT_IN_ID) {
-    // Score with DistilBERT; A6 lazy-load must have completed first.
-    return classifyDistilbert(text)
+  // DistilBERT was requested: never silently score with TF-IDF while the graph is missing.
+  if (heavy === 'distilbert') {
+    // Score only when the Slice 5 DistilBERT default graph is actually loaded.
+    if (distilbertVocab?.id === DISTILBERT_OPT_IN_ID) {
+      try {
+        // Run the transformer on this verified plaintext.
+        return await classifyDistilbert(text)
+      } catch {
+        // WASM abort: skip the banner rather than falling through to TF-IDF.
+        return null
+      }
+    }
+    // Caller should retry after enableDistilbertOptIn; do not mix in TF-IDF banners.
+    return null
   }
-  // Word BiLSTM Best opt-in uses the 8-epoch graph when it is loaded.
-  if (heavy === 'lstm' && lstmMeta?.id === LSTM_OPT_IN_ID) {
-    // Score with LSTM; lazy-load must have completed first.
-    return classifyLstm(text)
+  // LSTM was requested: never silently score with TF-IDF while the graph is missing.
+  if (heavy === 'lstm') {
+    // Score only when the 8-epoch opt-in graph is actually loaded.
+    if (lstmMeta?.id === LSTM_OPT_IN_ID) {
+      try {
+        // Run the word BiLSTM on this verified plaintext.
+        return await classifyLstm(text)
+      } catch {
+        // WASM abort: skip the banner rather than falling through to TF-IDF.
+        return null
+      }
+    }
+    // Caller should retry after enableLstmOptIn; do not mix in TF-IDF banners.
+    return null
   }
   // Eager TF-IDF Best path (A5).
   try {
@@ -348,9 +368,9 @@ export async function classifyVerifiedPlaintext(
   }
 }
 
-// Lazy-load DistilBERT-default behind the ChatScreen opt-in toggle (A6).
+// Lazy-load Slice 5 DistilBERT default behind the ChatScreen opt-in toggle (A6).
 export async function enableDistilbertOptIn(): Promise<void> {
-  // Load the 256-token Slice 5 graph (not the 512-token winner).
+  // Load the 256-token int8 graph (threshold 0.30); distilbert_best stays exported as a catalog row.
   await loadDistilbertCheckpoint(DISTILBERT_OPT_IN_ID)
 }
 

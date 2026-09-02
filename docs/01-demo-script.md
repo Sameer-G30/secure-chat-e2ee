@@ -80,7 +80,7 @@ ChatScreen eagerly classifies **verified** plaintext with **TF-IDF Best** (10k t
 
 Send a locked-chat-style scam DM (prize, seed phrase, fake support). A non-blocking **This message shows signs of a scam** banner may appear on a verified bubble. The message is never hidden, blocked, or deleted.
 
-Optional: check **Use DistilBERT (large download)** or **Use Word BiLSTM Best** (XOR; one heavy graph at a time). DistilBERT stays unpadded 256-token int8 in an ORT worker with package-export `wasmPaths`. Do not treat the six-row ORT table as TEST accuracy; see `ml/reports/onnx_web_load_check.md`.
+Optional: check **Use DistilBERT (large download)** or **Use Word BiLSTM Best** (XOR; one heavy graph at a time). DistilBERT is unpadded 256-token int8 (`distilbert_default`, threshold 0.30) in an ORT worker with package-export `wasmPaths`; the tab fetches int8 `model.onnx` (gzip/brotli), not `model.fp32.onnx`. Last banner flags are cached locally so reload can paint warnings before WASM is ready. Do not treat the six-row ORT table as TEST accuracy; see `ml/reports/onnx_web_load_check.md`.
 
 ## 5. Verification-failed row
 

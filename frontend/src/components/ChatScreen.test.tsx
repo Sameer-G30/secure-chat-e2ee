@@ -140,7 +140,8 @@ import { addContact, deleteContact, listContacts } from '../api/contactsClient'
 import { searchUsers } from '../api/usersClient'
 import { blockUser, listBlocks } from '../api/blocksClient'
 import { reportUser } from '../api/reportsClient'
-import { classifyVerifiedPlaintext } from '../ml/scamClassifier'
+import { classifyVerifiedPlaintext, enableDistilbertOptIn } from '../ml/scamClassifier'
+import { writeCachedBanner } from '../ml/scamBannerCache'
 import { decryptMessage } from '../crypto/keyExchange'
 
 const mockedFetchPublicKey = vi.mocked(fetchPublicKey)
@@ -157,6 +158,8 @@ const mockedBlockUser = vi.mocked(blockUser)
 const mockedReportUser = vi.mocked(reportUser)
 const mockedDeleteConversationMessage = vi.mocked(deleteConversationMessage)
 const mockedHideConversationMessage = vi.mocked(hideConversationMessage)
+const mockedEnableDistilbertOptIn = vi.mocked(enableDistilbertOptIn)
+const mockedClassify = vi.mocked(classifyVerifiedPlaintext)
 
 const conversationId = '00000000-0000-4000-8000-000000000001'
 const aliceId = '00000000-0000-4000-8000-000000000002'
@@ -185,6 +188,15 @@ afterEach(() => {
   window.localStorage.clear()
   document.documentElement.removeAttribute('data-theme')
   vi.clearAllMocks()
+  mockedClassify.mockReset()
+  mockedClassify.mockResolvedValue({
+    pScam: 0.01,
+    warned: false,
+    checkpointId: 'tfidf_best',
+    inferenceMs: 1,
+  })
+  mockedEnableDistilbertOptIn.mockReset()
+  mockedEnableDistilbertOptIn.mockResolvedValue(undefined)
 })
 
 // Render ChatScreen inside AuthProvider after injecting Alice's in-memory session.
@@ -329,6 +341,123 @@ describe('ChatScreen', () => {
     await screen.findByRole('heading', { name: 'Secure Chat' })
     expect(screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' })).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: 'Use Word BiLSTM Best' })).toBeInTheDocument()
+  })
+
+  it('clears a scam banner when DistilBERT loads and no longer warns', async () => {
+    mockedClassify.mockResolvedValue({
+      pScam: 0.95,
+      warned: true,
+      checkpointId: 'tfidf_best',
+      inferenceMs: 2,
+    })
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    capturedHandlers?.onEnvelope({
+      id: 'msg-scam',
+      conversationId,
+      senderId: bobId,
+      ciphertext: new Uint8Array(32).fill(1),
+      nonce: new Uint8Array(24).fill(2),
+      keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
+    })
+    expect(await screen.findByText('This message shows signs of a scam')).toBeInTheDocument()
+    mockedClassify.mockResolvedValue({
+      pScam: 0.01,
+      warned: false,
+      checkpointId: 'distilbert_default',
+      inferenceMs: 2,
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' }))
+    await waitFor(() => {
+      expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
+    })
+    expect(window.localStorage.getItem('secure-chat-classifier:alice')).toBe('distilbert')
+  })
+
+  it('does not score with TF-IDF while DistilBERT is still loading', async () => {
+    let resolveLoad: () => void = () => {}
+    mockedEnableDistilbertOptIn.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveLoad = resolve
+      }),
+    )
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    mockedClassify.mockClear()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' }))
+    capturedHandlers?.onEnvelope({
+      id: 'msg-hold',
+      conversationId,
+      senderId: bobId,
+      ciphertext: new Uint8Array(32).fill(1),
+      nonce: new Uint8Array(24).fill(2),
+      keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
+    })
+    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
+    expect(mockedClassify).not.toHaveBeenCalled()
+    mockedClassify.mockResolvedValue({
+      pScam: 0.95,
+      warned: true,
+      checkpointId: 'distilbert_default',
+      inferenceMs: 2,
+    })
+    resolveLoad()
+    expect(await screen.findByText('This message shows signs of a scam')).toBeInTheDocument()
+    expect(mockedClassify.mock.calls.some((call) => call[1] === 'distilbert')).toBe(true)
+  })
+
+  it('restores DistilBERT from localStorage after a reload', async () => {
+    window.localStorage.setItem('secure-chat-classifier:alice', 'distilbert')
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await waitFor(() => {
+      expect(
+        screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' }),
+      ).toBeChecked()
+    })
+    expect(mockedEnableDistilbertOptIn).toHaveBeenCalled()
+  })
+
+  it('paints a cached DistilBERT banner before the graph loads', async () => {
+    window.localStorage.setItem('secure-chat-classifier:alice', 'distilbert')
+    writeCachedBanner('alice', 'msg-cached', 0, 'distilbert_default', true)
+    mockedEnableDistilbertOptIn.mockReturnValue(new Promise(() => {}))
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await waitFor(() => {
+      expect(
+        screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' }),
+      ).toBeChecked()
+    })
+    mockedClassify.mockClear()
+    await startChatWithBob([
+      {
+        id: 'msg-cached',
+        conversationId,
+        senderId: bobId,
+        ciphertext: new Uint8Array(32).fill(1),
+        nonce: new Uint8Array(24).fill(2),
+        keyEpoch: 0,
+        adVersion: 1,
+        messageId: null,
+        revision: 0,
+        editedAt: null,
+      },
+    ])
+    expect(await screen.findByText('hello from bob')).toBeInTheDocument()
+    expect(screen.getByText('This message shows signs of a scam')).toBeInTheDocument()
+    expect(mockedClassify).not.toHaveBeenCalled()
   })
 
   it('shows a non-blocking scam banner on verified plaintext when the classifier warns', async () => {
