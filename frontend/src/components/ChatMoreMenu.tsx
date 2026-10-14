@@ -1,6 +1,6 @@
 // Header "more options" menu with vrati dropdown chrome. Export warns that it
 // writes plaintext to disk; report is metadata-only; block is server-enforced;
-// "clear chat" is local-only and says so. Each item only fires its action.
+// "Clear chat for me" hides the conversation for this account only. Each item only fires its action.
 
 // Describe the handlers ChatScreen wires into this menu.
 export interface ChatMoreMenuProps {
@@ -12,7 +12,7 @@ export interface ChatMoreMenuProps {
   onSearch: () => void
   // Open the export-warning confirmation before writing a .txt file.
   onExport: () => void
-  // Drop this tab's in-memory transcript without touching the server.
+  // Ask before hiding every message in this conversation for this account only.
   onClearLocal: () => void
   // Block the open peer server-side, then close the conversation.
   onBlock: () => void
@@ -85,7 +85,7 @@ export function ChatMoreMenu({
             onClick={onClearLocal}
             disabled={!hasActiveChat}
           >
-            Clear local transcript
+            Clear chat for me
           </button>
           <button
             type="button"

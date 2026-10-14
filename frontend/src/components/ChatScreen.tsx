@@ -1,7 +1,7 @@
 // Import React's state/callback hooks used by the small amount of state this
 // presentational shell still owns directly (shared status/error banners, the
 // add-contact input, overlays, and conversation-start in-flight flag).
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 // Import the form-event type separately; verbatimModuleSyntax requires type-only imports.
 import type { FormEvent } from 'react'
 
@@ -18,7 +18,7 @@ import { clearTheme } from '../theme'
 import type { ThemePreference } from '../theme'
 // Import the plaintext-export helpers; the UI always warns before writing to disk.
 import { downloadTranscriptFile, formatTranscriptExport } from '../chat/exportTranscript'
-import { formatMessageClock } from '../chat/messageClock'
+import { formatLocalDateSeparator, formatMessageClock, localCalendarDayKey } from '../chat/messageClock'
 import { previewTextForMessage, readAllLastMessagePreviews } from '../chat/lastMessagePreview'
 import type { LastMessagePreview } from '../chat/lastMessagePreview'
 import {
@@ -28,6 +28,7 @@ import {
   writeConversationWallpaper,
 } from '../chat/wallpaper'
 import {
+  deleteMyAvatar,
   fetchMyProfile,
   fetchUserProfile,
   patchMyProfile,
@@ -57,6 +58,7 @@ import { SettingsPanel } from './SettingsPanel'
 import { IconGear, IconImage, IconMore, IconSearch, IconSend, IconVideo } from '../icons'
 import { Avatar } from './Avatar'
 import { ContactProfilePanel } from './ContactProfilePanel'
+import { ImageLightbox } from './ImageLightbox'
 
 // Name the mutually exclusive overlays so only one dialog is open at a time.
 type ChatOverlay =
@@ -122,6 +124,25 @@ export function ChatScreen() {
   const [myDisplayName, setMyDisplayName] = useState('')
   const [myBio, setMyBio] = useState('')
   const [myHasAvatar, setMyHasAvatar] = useState(false)
+  // Bumped after an avatar upload or remove so every avatar image refetches.
+  const [avatarRevision, setAvatarRevision] = useState(0)
+  // Open photo. messageId is null for a public avatar (no forward, no decrypt).
+  const [lightbox, setLightbox] = useState<{
+    src: string
+    title: string
+    allowForward: boolean
+    messageId: string | null
+  } | null>(null)
+  // Contact chosen in the forward picker, before the confirm step.
+  const [forwardPeer, setForwardPeer] = useState<string | null>(null)
+  // True while the forward contact picker is open.
+  const [forwardPickerOpen, setForwardPickerOpen] = useState(false)
+  // True while the clear-chat confirmation is open. Cancel does not call the API.
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
+  // True when the user has scrolled away from the newest bubble.
+  const [awayFromLatest, setAwayFromLatest] = useState(false)
+  // True when a new message arrived while the user was reading older history.
+  const [newBelow, setNewBelow] = useState(false)
   // Hold last-message snippets keyed by peer username (IndexedDB, this device only).
   const [previews, setPreviews] = useState<Map<string, LastMessagePreview>>(new Map())
   // Hold the open peer's public profile for the contact-info panel.
@@ -132,6 +153,16 @@ export function ChatScreen() {
   const imageInputRef = useRef<HTMLInputElement>(null)
   // Point at the hidden wallpaper input so Chat wallpaper can open it.
   const wallpaperInputRef = useRef<HTMLInputElement>(null)
+  // The scrolling transcript. Older pages adjust scrollTop against this element.
+  const threadRef = useRef<HTMLUListElement>(null)
+  // True when the user is near the newest bubble, so a new message may scroll them down.
+  const stickToBottomRef = useRef(true)
+  // Snapshot taken just before an older page is prepended.
+  const pendingPrependRef = useRef<{ height: number; top: number } | null>(null)
+  // Last bubble id from the previous render, used to notice a newly appended message.
+  const prevLastIdRef = useRef<string | null>(null)
+  // Stops a second older-page request while the first is in flight.
+  const olderLockRef = useRef(false)
 
   // Publish a rotated token pair into AuthContext; every wrapped call in the hooks
   // below reads the latest pair back out on its very next attempt. Memoized (like
@@ -177,7 +208,13 @@ export function ChatScreen() {
     handleEditMessage,
     handleDeleteMessage,
     handleHideMessage,
-    handleClearLocalTranscript,
+    handleClearChatForMe,
+    loadOlderMessages,
+    requestImageHydrate,
+    retryImage,
+    releaseDistantImage,
+    pinImage,
+    forwardImageToContact,
     closeConversation,
   } = useEncryptedConversation(
     session,
@@ -282,6 +319,58 @@ export function ChatScreen() {
     }
   }, [reloadContacts])
 
+  // Keep the viewport still when an older page is prepended, and do not yank the
+  // user down when a new message arrives while they are reading history.
+  useLayoutEffect(() => {
+    const thread = threadRef.current
+    if (!thread) {
+      return
+    }
+    const pending = pendingPrependRef.current
+    if (pending) {
+      thread.scrollTop = pending.top + (thread.scrollHeight - pending.height)
+      pendingPrependRef.current = null
+      prevLastIdRef.current = messages[messages.length - 1]?.id ?? null
+      return
+    }
+    const lastId = messages[messages.length - 1]?.id ?? null
+    if (stickToBottomRef.current) {
+      thread.scrollTop = thread.scrollHeight
+      setNewBelow(false)
+    } else if (lastId && lastId !== prevLastIdRef.current) {
+      setNewBelow(true)
+    }
+    prevLastIdRef.current = lastId
+  }, [messages])
+
+  // Hydrate images that are near the transcript and release ones that scroll away.
+  useEffect(() => {
+    const thread = threadRef.current
+    if (!thread || typeof IntersectionObserver === 'undefined') {
+      return
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const messageId = (entry.target as HTMLElement).dataset.messageId
+          if (!messageId) {
+            continue
+          }
+          if (entry.isIntersecting) {
+            requestImageHydrate(messageId)
+          } else {
+            releaseDistantImage(messageId)
+          }
+        }
+      },
+      { root: thread, rootMargin: '240px 0px' },
+    )
+    thread.querySelectorAll('[data-message-id]').forEach((node) => observer.observe(node))
+    return () => {
+      observer.disconnect()
+    }
+  }, [messages, requestImageHydrate, releaseDistantImage])
+
   // This screen is only ever rendered while a session exists (see App.tsx routing);
   // this guard covers the one intermediate render described above.
   if (!session) {
@@ -379,6 +468,7 @@ export function ChatScreen() {
       setMyDisplayName(saved.displayName ?? myDisplayName)
       setMyBio(saved.bio ?? myBio)
       setMyHasAvatar(saved.hasAvatar)
+      setAvatarRevision((current) => current + 1)
     } catch (caught: unknown) {
       const message =
         caught instanceof UsersApiError
@@ -386,6 +476,42 @@ export function ChatScreen() {
           : 'Could not upload that photo. Please try again shortly.'
       setErrorMessage(message)
     }
+  }
+
+  async function handleRemoveAvatar() {
+    try {
+      const saved = await authorizedRequest.request((accessToken) => deleteMyAvatar(accessToken))
+      setMyHasAvatar(saved.hasAvatar)
+      setAvatarRevision((current) => current + 1)
+      void reloadContacts().catch(() => {
+        // The local flag already dropped. A contact refresh can retry later.
+      })
+    } catch (caught: unknown) {
+      const message =
+        caught instanceof UsersApiError
+          ? caught.message
+          : 'Could not remove that photo. Please try again shortly.'
+      setErrorMessage(message)
+    }
+  }
+
+  function openLightbox(next: {
+    src: string
+    title: string
+    allowForward: boolean
+    messageId: string | null
+  }) {
+    if (next.messageId) {
+      pinImage(next.messageId)
+    }
+    setLightbox(next)
+  }
+
+  function closeLightbox() {
+    pinImage(null)
+    setLightbox(null)
+    setForwardPeer(null)
+    setForwardPickerOpen(false)
   }
 
   function handleWallpaperFile(file: File) {
@@ -506,7 +632,46 @@ export function ChatScreen() {
 
   // Count in-chat search hits so the header chip can show how many rows remain.
   const searchMatchCount = visibleMessages.length
-  // Label sent bubbles with Sending until the server ack, then Sent.
+
+  function onTranscriptScroll() {
+    const thread = threadRef.current
+    if (!thread) {
+      return
+    }
+    const distanceFromBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight
+    const atBottom = distanceFromBottom < 80
+    stickToBottomRef.current = atBottom
+    const canScroll = thread.scrollHeight > thread.clientHeight + 8
+    setAwayFromLatest(!atBottom && canScroll)
+    if (atBottom) {
+      setNewBelow(false)
+    }
+    if (!canScroll || thread.scrollTop >= 48 || olderLockRef.current) {
+      return
+    }
+    olderLockRef.current = true
+    pendingPrependRef.current = { height: thread.scrollHeight, top: thread.scrollTop }
+    void loadOlderMessages()
+      .then((loaded) => {
+        if (!loaded) {
+          pendingPrependRef.current = null
+        }
+      })
+      .finally(() => {
+        olderLockRef.current = false
+      })
+  }
+
+  function scrollToLatest() {
+    const thread = threadRef.current
+    stickToBottomRef.current = true
+    setAwayFromLatest(false)
+    setNewBelow(false)
+    if (thread) {
+      thread.scrollTop = thread.scrollHeight
+    }
+  }
+
   function pendingLabel(message: ChatMessage): string {
     return formatMessageClock(message.createdAt)
   }
@@ -549,6 +714,7 @@ export function ChatScreen() {
             accessToken={currentSession.accessToken}
             className="user-avatar"
             initials={initialsFromUsername(currentSession.username)}
+            reloadKey={avatarRevision}
           />
           <div className="user-info">
             <div className="user-name">{myDisplayName.trim() || currentSession.username}</div>
@@ -672,26 +838,6 @@ export function ChatScreen() {
           </ul>
         )}
 
-        <div className="sidebar-footer">
-          <div className="chat-model-toggles">
-            <label className="chat-model-toggle">
-              <input
-                type="checkbox"
-                checked={classifier.useDistilbert}
-                onChange={(event) => classifier.toggleDistilbert(event.target.checked)}
-              />
-              Use DistilBERT (large download)
-            </label>
-            <label className="chat-model-toggle">
-              <input
-                type="checkbox"
-                checked={classifier.useLstm}
-                onChange={(event) => classifier.toggleLstm(event.target.checked)}
-              />
-              Use Word BiLSTM Best
-            </label>
-          </div>
-        </div>
       </aside>
 
       <main
@@ -778,8 +924,7 @@ export function ChatScreen() {
             }}
             onExport={() => setOverlay({ kind: 'export' })}
             onClearLocal={() => {
-              handleClearLocalTranscript()
-              setStatusMessage('Local transcript cleared. The server copy is unchanged.')
+              setClearConfirmOpen(true)
               setOverlay({ kind: 'none' })
             }}
             onBlock={() => {
@@ -891,8 +1036,17 @@ export function ChatScreen() {
             </p>
           </div>
         ) : (
-          <ul className="messages" aria-label="Encrypted messages">
-            {visibleMessages.map((message) => {
+          <ul
+            ref={threadRef}
+            className="messages"
+            aria-label="Encrypted messages"
+            onScroll={onTranscriptScroll}
+          >
+            {visibleMessages.map((message, index) => {
+                  const dayKey = localCalendarDayKey(message.createdAt)
+                  const previousKey =
+                    index > 0 ? localCalendarDayKey(visibleMessages[index - 1]?.createdAt) : null
+                  const showDate = dayKey !== null && dayKey !== previousKey
                   const bubbleClass = message.verificationFailed
                     ? 'message failed'
                     : message.direction === 'sent'
@@ -905,64 +1059,111 @@ export function ChatScreen() {
                       : (message.plaintext ?? undefined)
                   const tickClass = deliveryTickClass(message)
                   const tick = deliveryTick(message)
+                  const dateLabel =
+                    showDate && message.createdAt ? formatLocalDateSeparator(message.createdAt) : null
                   return (
-                    <li key={message.id} className="message-wrapper">
-                      <button
-                        type="button"
-                        className={bubbleClass}
-                        data-pending={message.pending ? 'true' : 'false'}
-                        aria-label={accessibleName}
-                        onClick={() => setOverlay({ kind: 'message', id: message.id })}
-                      >
-                        {message.verificationFailed ? (
-                          <span role="alert">message failed verification</span>
-                        ) : (
-                          <>
-                            {message.scamWarning ? (
-                              <p className="scam-banner" role="status">
-                                This message shows signs of a scam
-                              </p>
-                            ) : null}
-                            {message.attachment ? (
-                              <span className="message-attachment">
-                                {message.attachment.objectUrl ? (
-                                  <img
-                                    src={message.attachment.objectUrl}
-                                    alt=""
-                                    className="message-image"
-                                  />
-                                ) : (
-                                  <span className="message-image-placeholder">
-                                    {message.attachment.failed
-                                      ? 'Photo failed to load'
-                                      : 'Loading photo…'}
-                                  </span>
-                                )}
+                    <li
+                      key={message.id}
+                      className="message-wrapper"
+                      data-message-id={message.attachment ? message.id : undefined}
+                    >
+                      {dateLabel ? <div className="date-separator">{dateLabel}</div> : null}
+                      {message.attachment && !message.verificationFailed ? (
+                        <div className={bubbleClass} data-pending={message.pending ? 'true' : 'false'}>
+                          {message.scamWarning ? (
+                            <p className="scam-banner" role="status">
+                              This message shows signs of a scam
+                            </p>
+                          ) : null}
+                          {message.attachment.objectUrl ? (
+                            <button
+                              type="button"
+                              className="message-image-button"
+                              aria-label={message.attachment.name}
+                              onClick={() =>
+                                openLightbox({
+                                  src: message.attachment?.objectUrl ?? '',
+                                  title: message.attachment?.name ?? 'Photo',
+                                  allowForward: true,
+                                  messageId: message.id,
+                                })
+                              }
+                            >
+                              <img
+                                src={message.attachment.objectUrl}
+                                alt=""
+                                className="message-image"
+                              />
+                            </button>
+                          ) : (
+                            <span className="message-image-placeholder">
+                              {message.attachment.failed ? 'Photo failed to load' : 'Loading photo…'}
+                              {message.attachment.failed ? (
+                                <button type="button" onClick={() => retryImage(message.id)}>
+                                  Retry
+                                </button>
+                              ) : null}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            className="message-time message-time-button"
+                            onClick={() => setOverlay({ kind: 'message', id: message.id })}
+                          >
+                            {pendingLabel(message)}
+                            {tick ? (
+                              <span className={tickClass} aria-hidden="true">
+                                {tick}
                               </span>
-                            ) : (
+                            ) : null}
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className={bubbleClass}
+                          data-pending={message.pending ? 'true' : 'false'}
+                          aria-label={accessibleName}
+                          onClick={() => setOverlay({ kind: 'message', id: message.id })}
+                        >
+                          {message.verificationFailed ? (
+                            <span role="alert">message failed verification</span>
+                          ) : (
+                            <>
+                              {message.scamWarning ? (
+                                <p className="scam-banner" role="status">
+                                  This message shows signs of a scam
+                                </p>
+                              ) : null}
                               <span className="message-text">
                                 {message.plaintext}
                                 {message.revision > 0 ? (
                                   <span className="edited-indicator"> (edited)</span>
                                 ) : null}
                               </span>
-                            )}
-                            <span className="message-time">
-                              {pendingLabel(message)}
-                              {tick ? (
-                                <span className={tickClass} aria-hidden="true">
-                                  {tick}
-                                </span>
-                              ) : null}
-                            </span>
-                          </>
-                        )}
-                      </button>
+                              <span className="message-time">
+                                {pendingLabel(message)}
+                                {tick ? (
+                                  <span className={tickClass} aria-hidden="true">
+                                    {tick}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </>
+                          )}
+                        </button>
+                      )}
                     </li>
                   )
                 })}
           </ul>
         )}
+
+        {awayFromLatest && activeChat ? (
+          <button type="button" className="jump-latest" onClick={scrollToLatest}>
+            {newBelow ? 'New message' : 'Latest messages'}
+          </button>
+        ) : null}
 
         {peerBlocked && activeChat ? (
           <div className="blocked-input-banner">
@@ -1043,8 +1244,18 @@ export function ChatScreen() {
           profileDisplayName={myDisplayName}
           profileBio={myBio}
           profileHasAvatar={myHasAvatar}
+          avatarRevision={avatarRevision}
           onSaveProfile={handleSaveProfile}
           onUploadAvatar={handleUploadAvatar}
+          onRemoveAvatar={handleRemoveAvatar}
+          onViewAvatar={(src) =>
+            openLightbox({
+              src,
+              title: `${currentSession.username} photo`,
+              allowForward: false,
+              messageId: null,
+            })
+          }
         />
       ) : null}
 
@@ -1056,6 +1267,99 @@ export function ChatScreen() {
           onHideForMe={handleHideMessage}
           onClose={() => setOverlay({ kind: 'none' })}
         />
+      ) : null}
+
+      {clearConfirmOpen ? (
+        <Modal title="Clear chat for me" onClose={() => setClearConfirmOpen(false)}>
+          <p>
+            This permanently removes the conversation from your account. The other person keeps
+            their copy. You cannot undo it. Messages that failed to decrypt are included.
+          </p>
+          <div className="chat-modal-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                setClearConfirmOpen(false)
+                void handleClearChatForMe()
+                  .then(() => {
+                    setStatusMessage('Cleared for you. The other person still has their copy.')
+                  })
+                  .catch(() => {
+                    setErrorMessage('Could not clear this chat. Please try again shortly.')
+                  })
+              }}
+            >
+              Clear chat for me
+            </button>
+            <button type="button" className="text-button" onClick={() => setClearConfirmOpen(false)}>
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {lightbox ? (
+        <ImageLightbox
+          src={lightbox.src}
+          title={lightbox.title}
+          allowForward={lightbox.allowForward}
+          onClose={closeLightbox}
+          onForward={lightbox.allowForward ? () => setForwardPickerOpen(true) : undefined}
+        />
+      ) : null}
+
+      {forwardPickerOpen && lightbox?.messageId ? (
+        <Modal
+          title="Forward photo"
+          onClose={() => {
+            setForwardPickerOpen(false)
+            setForwardPeer(null)
+          }}
+        >
+          <p>Choose a contact. The photo is sealed again for that conversation.</p>
+          {contacts.filter((contact) => contact.username !== activeChat?.peerUsername).length === 0 ? (
+            <p>Add another contact before forwarding.</p>
+          ) : (
+            contacts
+              .filter((contact) => contact.username !== activeChat?.peerUsername)
+              .map((contact) => (
+                <button
+                  key={contact.username}
+                  type="button"
+                  className="text-button"
+                  onClick={() => setForwardPeer(contact.username)}
+                >
+                  {contact.displayName?.trim() || contact.username}
+                </button>
+              ))
+          )}
+          {forwardPeer ? (
+            <>
+              <p>Forward this photo to {forwardPeer}?</p>
+              <div className="chat-modal-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => {
+                    const messageId = lightbox.messageId
+                    const peer = forwardPeer
+                    setForwardPickerOpen(false)
+                    setForwardPeer(null)
+                    if (messageId) {
+                      void forwardImageToContact(messageId, peer)
+                    }
+                  }}
+                >
+                  Forward
+                </button>
+                <button type="button" className="text-button" onClick={() => setForwardPeer(null)}>
+                  Back
+                </button>
+              </div>
+            </>
+          ) : null}
+        </Modal>
       ) : null}
 
       {overlay.kind === 'export' ? (
@@ -1134,6 +1438,14 @@ export function ChatScreen() {
             void handleUnblockPeer()
           }}
           onReport={() => setOverlay({ kind: 'report' })}
+          onViewAvatar={(src) =>
+            openLightbox({
+              src,
+              title: `${activeChat.peerUsername} photo`,
+              allowForward: false,
+              messageId: null,
+            })
+          }
         />
       ) : null}
 

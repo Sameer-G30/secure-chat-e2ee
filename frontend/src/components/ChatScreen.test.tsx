@@ -21,17 +21,13 @@ import type { ChatSocketHandlers, RelayedEnvelope } from '../api/chatSocket'
 
 // Mock on-device classification so ChatScreen tests never load ORT Web.
 vi.mock('../ml/scamClassifier', () => ({
-  ensureChatDefaultClassifier: vi.fn(async () => {}),
+  ensureDistilbertDefault: vi.fn(async () => {}),
   classifyVerifiedPlaintext: vi.fn(async () => ({
     pScam: 0.01,
     warned: false,
-    checkpointId: 'tfidf_best',
+    checkpointId: 'distilbert_default',
     inferenceMs: 1,
   })),
-  enableDistilbertOptIn: vi.fn(async () => {}),
-  disableDistilbertOptIn: vi.fn(async () => {}),
-  enableLstmOptIn: vi.fn(async () => {}),
-  disableLstmOptIn: vi.fn(async () => {}),
 }))
 
 // Mock the public-key lookup so tests never perform a real HTTP request.
@@ -54,6 +50,7 @@ vi.mock('../api/conversationsClient', async () => {
     fetchConversationMessages: vi.fn(),
     deleteConversationMessage: vi.fn(async () => {}),
     hideConversationMessage: vi.fn(async () => {}),
+    hideAllConversationMessages: vi.fn(async () => {}),
     markConversationRead: vi.fn(async () => {}),
     uploadEncryptedBlob: vi.fn(),
     fetchEncryptedBlob: vi.fn(),
@@ -151,6 +148,7 @@ import {
   deleteConversationMessage,
   fetchConversationEpoch,
   fetchConversationMessages,
+  hideAllConversationMessages,
   hideConversationMessage,
   startOrFetchConversation,
   uploadEncryptedBlob,
@@ -160,7 +158,7 @@ import { addContact, deleteContact, listContacts } from '../api/contactsClient'
 import { searchUsers } from '../api/usersClient'
 import { blockUser, listBlocks } from '../api/blocksClient'
 import { reportUser } from '../api/reportsClient'
-import { classifyVerifiedPlaintext, enableDistilbertOptIn } from '../ml/scamClassifier'
+import { classifyVerifiedPlaintext, ensureDistilbertDefault } from '../ml/scamClassifier'
 import { writeCachedBanner } from '../ml/scamBannerCache'
 import { decryptMessage } from '../crypto/keyExchange'
 
@@ -178,8 +176,9 @@ const mockedBlockUser = vi.mocked(blockUser)
 const mockedReportUser = vi.mocked(reportUser)
 const mockedDeleteConversationMessage = vi.mocked(deleteConversationMessage)
 const mockedHideConversationMessage = vi.mocked(hideConversationMessage)
+const mockedHideAllConversationMessages = vi.mocked(hideAllConversationMessages)
 const mockedUploadEncryptedBlob = vi.mocked(uploadEncryptedBlob)
-const mockedEnableDistilbertOptIn = vi.mocked(enableDistilbertOptIn)
+const mockedEnsureDistilbertDefault = vi.mocked(ensureDistilbertDefault)
 const mockedClassify = vi.mocked(classifyVerifiedPlaintext)
 
 const conversationId = '00000000-0000-4000-8000-000000000001'
@@ -215,11 +214,11 @@ afterEach(() => {
   mockedClassify.mockResolvedValue({
     pScam: 0.01,
     warned: false,
-    checkpointId: 'tfidf_best',
+    checkpointId: 'distilbert_default',
     inferenceMs: 1,
   })
-  mockedEnableDistilbertOptIn.mockReset()
-  mockedEnableDistilbertOptIn.mockResolvedValue(undefined)
+  mockedEnsureDistilbertDefault.mockReset()
+  mockedEnsureDistilbertDefault.mockResolvedValue(undefined)
 })
 
 // Render ChatScreen inside AuthProvider after injecting Alice's in-memory session.
@@ -265,7 +264,7 @@ async function startChatWithBob(
     conversationId,
     currentEpoch,
   })
-  mockedFetchConversationMessages.mockResolvedValue(history)
+  mockedFetchConversationMessages.mockResolvedValue({ messages: history, nextCursor: null })
   mockedListContacts.mockResolvedValue([])
   mockedAddContact.mockResolvedValue({
     id: bobId,
@@ -278,7 +277,13 @@ async function startChatWithBob(
   capturedHandlers = null
   mockedConnectChatSocket.mockImplementation((_id, _token, handlers) => {
     capturedHandlers = handlers
-    return { sendEnvelope, sendTyping, sendReceipt, close: closeSocket }
+    return {
+      sendEnvelope,
+      sendTyping,
+      sendReceipt,
+      close: closeSocket,
+      whenOpen: () => Promise.resolve(),
+    }
   })
 
   fireEvent.change(screen.getByLabelText('Add contact'), { target: { value: 'bob' } })
@@ -398,52 +403,27 @@ describe('ChatScreen', () => {
     expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
   })
 
-  it('shows DistilBERT and Word BiLSTM Best opt-in checkboxes', async () => {
+  it('has no model checkboxes and loads DistilBERT default only', async () => {
+    window.localStorage.setItem('secure-chat-classifier:alice', 'tfidf')
     renderChatScreen()
     await screen.findByRole('heading', { name: 'Secure Chat' })
-    expect(screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' })).toBeInTheDocument()
-    expect(screen.getByRole('checkbox', { name: 'Use Word BiLSTM Best' })).toBeInTheDocument()
-  })
-
-  it('clears a scam banner when DistilBERT loads and no longer warns', async () => {
-    mockedClassify.mockResolvedValue({
-      pScam: 0.95,
-      warned: true,
-      checkpointId: 'tfidf_best',
-      inferenceMs: 2,
-    })
-    renderChatScreen()
-    await screen.findByRole('heading', { name: 'Secure Chat' })
-    await startChatWithBob()
-    capturedHandlers?.onEnvelope({
-      id: 'msg-scam',
-      conversationId,
-      senderId: bobId,
-      ciphertext: new Uint8Array(32).fill(1),
-      nonce: new Uint8Array(24).fill(2),
-      keyEpoch: 0,
-      adVersion: 1,
-      messageId: null,
-      revision: 0,
-      editedAt: null,
-    })
-    expect(await screen.findByText('This message shows signs of a scam')).toBeInTheDocument()
-    mockedClassify.mockResolvedValue({
-      pScam: 0.01,
-      warned: false,
-      checkpointId: 'distilbert_default',
-      inferenceMs: 2,
-    })
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' }))
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Use DistilBERT/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Word BiLSTM/)).not.toBeInTheDocument()
     await waitFor(() => {
-      expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
+      expect(mockedEnsureDistilbertDefault).toHaveBeenCalled()
     })
-    expect(window.localStorage.getItem('secure-chat-classifier:alice')).toBe('distilbert')
+    expect(window.localStorage.getItem('secure-chat-classifier:alice')).toBeNull()
+    await waitFor(() => {
+      expect(
+        screen.getByText('Scam detection is running on this device (not sent to the server).'),
+      ).toBeInTheDocument()
+    })
   })
 
-  it('does not score with TF-IDF while DistilBERT is still loading', async () => {
+  it('does not score until DistilBERT default has loaded', async () => {
     let resolveLoad: () => void = () => {}
-    mockedEnableDistilbertOptIn.mockReturnValue(
+    mockedEnsureDistilbertDefault.mockReturnValue(
       new Promise<void>((resolve) => {
         resolveLoad = resolve
       }),
@@ -452,7 +432,6 @@ describe('ChatScreen', () => {
     await screen.findByRole('heading', { name: 'Secure Chat' })
     await startChatWithBob()
     mockedClassify.mockClear()
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' }))
     capturedHandlers?.onEnvelope({
       id: 'msg-hold',
       conversationId,
@@ -476,32 +455,14 @@ describe('ChatScreen', () => {
     })
     resolveLoad()
     expect(await screen.findByText('This message shows signs of a scam')).toBeInTheDocument()
-    expect(mockedClassify.mock.calls.some((call) => call[1] === 'distilbert')).toBe(true)
-  })
-
-  it('restores DistilBERT from localStorage after a reload', async () => {
-    window.localStorage.setItem('secure-chat-classifier:alice', 'distilbert')
-    renderChatScreen()
-    await screen.findByRole('heading', { name: 'Secure Chat' })
-    await waitFor(() => {
-      expect(
-        screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' }),
-      ).toBeChecked()
-    })
-    expect(mockedEnableDistilbertOptIn).toHaveBeenCalled()
+    expect(mockedClassify).toHaveBeenCalled()
   })
 
   it('paints a cached DistilBERT banner before the graph loads', async () => {
-    window.localStorage.setItem('secure-chat-classifier:alice', 'distilbert')
     writeCachedBanner('alice', 'msg-cached', 0, 'distilbert_default', true)
-    mockedEnableDistilbertOptIn.mockReturnValue(new Promise(() => {}))
+    mockedEnsureDistilbertDefault.mockReturnValue(new Promise(() => {}))
     renderChatScreen()
     await screen.findByRole('heading', { name: 'Secure Chat' })
-    await waitFor(() => {
-      expect(
-        screen.getByRole('checkbox', { name: 'Use DistilBERT (large download)' }),
-      ).toBeChecked()
-    })
     mockedClassify.mockClear()
     await startChatWithBob([
       {
@@ -527,7 +488,7 @@ describe('ChatScreen', () => {
     mockedClassify.mockResolvedValue({
       pScam: 0.95,
       warned: true,
-      checkpointId: 'tfidf_best',
+      checkpointId: 'distilbert_default',
       inferenceMs: 2,
     })
     renderChatScreen()
@@ -555,7 +516,7 @@ describe('ChatScreen', () => {
     mockedClassify.mockResolvedValue({
       pScam: 0.99,
       warned: true,
-      checkpointId: 'tfidf_best',
+      checkpointId: 'distilbert_default',
       inferenceMs: 2,
     })
     renderChatScreen()
@@ -572,7 +533,7 @@ describe('ChatScreen', () => {
     mockedClassify.mockResolvedValue({
       pScam: 0.01,
       warned: false,
-      checkpointId: 'tfidf_best',
+      checkpointId: 'distilbert_default',
       inferenceMs: 2,
     })
     renderChatScreen()
@@ -627,7 +588,9 @@ describe('ChatScreen', () => {
       },
     ])
     expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
-    expect(mockedFetchConversationMessages).toHaveBeenCalledWith('access-token', conversationId)
+    expect(mockedFetchConversationMessages).toHaveBeenCalledWith('access-token', conversationId, {
+      limit: 50,
+    })
   })
 
   it('shows message failed verification for a history envelope that does not verify', async () => {
@@ -785,6 +748,9 @@ describe('ChatScreen', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'secret handshake' }))
     fireEvent.click(screen.getByRole('button', { name: 'Delete for everyone' }))
+    expect(mockedDeleteConversationMessage).not.toHaveBeenCalled()
+    expect(screen.getByText('This removes the message for both people.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete for everyone' }))
     await waitFor(() => {
       expect(mockedDeleteConversationMessage).toHaveBeenCalledWith(
         'access-token',
@@ -913,5 +879,31 @@ describe('ChatScreen', () => {
     })
     expect(await screen.findByRole('button', { name: 'photo.png' })).toBeInTheDocument()
     createObjectURL.mockRestore()
+  })
+
+  it('does not call clear-chat when the confirmation is cancelled', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    capturedHandlers?.onEnvelope({
+      id: 'msg-keep',
+      conversationId,
+      senderId: bobId,
+      ciphertext: new Uint8Array(32).fill(1),
+      nonce: new Uint8Array(24).fill(2),
+      keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
+    })
+    expect(await screen.findByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'More' }))
+    expect(screen.queryByRole('menuitem', { name: 'Clear local transcript' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Clear chat for me' }))
+    expect(screen.getByText(/The other person keeps their copy/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(mockedHideAllConversationMessages).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
   })
 })

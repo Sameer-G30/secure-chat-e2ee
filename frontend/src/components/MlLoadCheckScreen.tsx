@@ -1,4 +1,5 @@
-// Sequential six-way ONNX Runtime Web load-check UI (open with ?mlLoadCheck=1).
+// DistilBERT-default load check (open with ?mlLoadCheck=1).
+// TF-IDF and the word BiLSTM are not loaded. The six-row table on disk is historical.
 
 // Import React state for incremental table rows.
 import { useEffect, useState } from 'react'
@@ -115,11 +116,11 @@ export function MlLoadCheckScreen() {
 
   return (
     <main className="load-check-screen">
-      <h1>Slice 6 ONNX Runtime Web load check</h1>
+      <h1>DistilBERT default load check</h1>
       <p>
-        Loads DistilBERT 512 → DistilBERT 256 → BiLSTM 8ep → BiLSTM 4ep → TF-IDF 10k → TF-IDF 50k,
-        one at a time, then unloads. This is not TEST accuracy. Classification stays on-device after
-        decrypt.
+        Loads distilbert_default only, then unloads. TF-IDF and the word BiLSTM are not requested.
+        This is not TEST accuracy. The six-row browser table in ml/reports stays a historical
+        measurement.
       </p>
       {running ? <p role="status">Running sequential check…</p> : <p role="status">Sequence finished.</p>}
       {error ? (

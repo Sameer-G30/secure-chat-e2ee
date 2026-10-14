@@ -111,17 +111,17 @@ export interface LoadCheckRow {
   offline: CheckpointManifest['offline'] | null
 }
 
-// Which heavy graph ChatScreen should score with; TF-IDF Best stays the eager fallback.
+// Historical preference names. The chat shell no longer loads tfidf or lstm.
 export type ChatHeavyPreference = 'tfidf' | 'distilbert' | 'lstm'
 
-// ChatScreen eager default: TF-IDF Best (10k terms, C=1.0, sidecar threshold 0.20).
+// The only graph ChatScreen loads: DistilBERT default (256-token int8, threshold 0.30).
 // The live banner also requires P(scam) >= 0.35 (see conversationContext.ts).
-export const CHATSCREEN_DEFAULT_ID: CheckpointId = 'tfidf_best'
+export const CHATSCREEN_DEFAULT_ID: CheckpointId = 'distilbert_default'
 
-// DistilBERT opt-in loads Slice 5 default (256-token int8, threshold 0.30), not the 512-token sweep winner.
+// Same id as the chat default. distilbert_best (512 / 0.20) is not loaded in the browser.
 export const DISTILBERT_OPT_IN_ID: CheckpointId = 'distilbert_default'
 
-// Word BiLSTM opt-in loads the 8-epoch sweep winner, not the published 4-epoch default.
+// Offline catalog id for the 8-epoch word BiLSTM. The chat app does not fetch it.
 export const LSTM_OPT_IN_ID: CheckpointId = 'lstm_best'
 
 // Fixed sequential order; skip to the next row if this one OOMs.

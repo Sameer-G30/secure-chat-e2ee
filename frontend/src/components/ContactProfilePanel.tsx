@@ -28,6 +28,8 @@ export interface ContactProfilePanelProps {
   onUnblock: () => void
   // Open the metadata-only report form.
   onReport: () => void
+  // Open the public avatar in the lightbox. Avatars are not forwarded.
+  onViewAvatar: (objectUrl: string) => void
 }
 
 // Render public profile metadata the server is allowed to store (not E2EE).
@@ -42,6 +44,7 @@ export function ContactProfilePanel({
   onBlock,
   onUnblock,
   onReport,
+  onViewAvatar,
 }: ContactProfilePanelProps) {
   const displayName = profile?.displayName?.trim() || username
   const initials = username.trim().slice(0, 1).toUpperCase() || '?'
@@ -74,6 +77,7 @@ export function ContactProfilePanel({
             accessToken={accessToken}
             className="contact-profile-avatar"
             initials={initials}
+            onView={onViewAvatar}
           />
           <div className="contact-profile-name">{displayName}</div>
           <div className="contact-profile-handle">@{username}</div>

@@ -16,10 +16,12 @@ import { fetchPublicKey, KeysApiError } from '../api/keysClient'
 // delete-for-everyone / hide-for-me REST calls.
 import {
   ConversationsApiError,
+  HISTORY_PAGE_SIZE,
   deleteConversationMessage,
   fetchConversationEpoch,
   fetchConversationMessages,
   fetchEncryptedBlob,
+  hideAllConversationMessages,
   hideConversationMessage,
   markConversationRead,
   startOrFetchConversation,
@@ -41,7 +43,7 @@ import {
 } from '../crypto/keyExchange'
 import type { DirectionalSessionKeys } from '../crypto/keyExchange'
 import type { CheckpointId, ClassifyResult } from '../ml/types'
-import { CHATSCREEN_DEFAULT_ID } from '../ml/types'
+import { DISTILBERT_OPT_IN_ID } from '../ml/types'
 import {
   buildConversationScoringText,
   isTrivialShortNoUrl,
@@ -61,6 +63,11 @@ import {
   sealImageBytes,
   serializeImageAttachmentPayload,
 } from '../chat/imageAttachment'
+import {
+  displayBlobForVerifiedImage,
+  imageHeaderMatchesDeclaredType,
+  readQrPayload,
+} from '../chat/imageHygiene'
 import { previewTextForMessage, writeLastMessagePreview } from '../chat/lastMessagePreview'
 
 // Describe delivery ticks the sender's bubble shows after the peer acks metadata.
@@ -151,9 +158,20 @@ export interface EncryptedConversationApi {
   handleHideMessage: (id: string) => Promise<void>
   // Encrypt and send a picked JPEG/PNG/WebP/GIF; video stays a UI placeholder.
   handleSendImage: (file: File) => Promise<void>
-  // Drop this tab's in-memory transcript without touching the server (legacy "clear
-  // chat" was a Firebase wipe; here it is local-only and documented as such).
-  handleClearLocalTranscript: () => void
+  // Hide every server row for this account, then drop the in-memory transcript.
+  handleClearChatForMe: () => Promise<void>
+  // Prepend the next older page. Returns false when there is nothing older or a load is in flight.
+  loadOlderMessages: () => Promise<boolean>
+  // Download and decrypt one image when its bubble is near the viewport.
+  requestImageHydrate: (messageId: string) => void
+  // Try a failed image again.
+  retryImage: (messageId: string) => void
+  // Revoke an object URL that scrolled far away so it can be hydrated again later.
+  releaseDistantImage: (messageId: string) => void
+  // Keep the lightbox image from being revoked while it is open.
+  pinImage: (messageId: string | null) => void
+  // Re-seal a decrypted image for another contact's conversation and send a new envelope.
+  forwardImageToContact: (messageId: string, peerUsername: string) => Promise<void>
   // Tear down the live socket and forget this conversation locally (used after a
   // server-side block, or after removing the currently open contact).
   closeConversation: () => void
@@ -190,7 +208,7 @@ export function useEncryptedConversation(
   // Bump when the ready scam model changes so cache misses are re-scored (banners can clear).
   classifierGeneration: number = 0,
   // Catalog id for cache hits (DistilBERT default while the graph is still loading).
-  scoringCheckpointId: CheckpointId = CHATSCREEN_DEFAULT_ID,
+  scoringCheckpointId: CheckpointId = DISTILBERT_OPT_IN_ID,
 ): EncryptedConversationApi {
   const [isConnecting, setIsConnecting] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -223,15 +241,41 @@ export function useEncryptedConversation(
   const classifySeqRef = useRef(0)
   // Latest handle for banner-cache keys (socket callbacks must not close over a stale session).
   const usernameRef = useRef(session?.username)
-  // Latest catalog id so hydrate can paint DistilBERT banners before WASM is ready.
+  // Latest catalog id so cache hits require distilbert_default.
   const scoringCheckpointRef = useRef(scoringCheckpointId)
+  // Latest session so a forward can derive keys without closing over a logged-out render.
+  const sessionRef = useRef(session)
+  // True when an older page still exists on the server for this open conversation.
+  const hasOlderRef = useRef(false)
+  // True while an older page request is in flight.
+  const loadingOlderRef = useRef(false)
+  // Bumped when the open conversation changes so a late image download cannot paint on the next chat.
+  const hydrateGenerationRef = useRef(0)
+  // Message ids waiting for a blob GET. Capped at three in flight.
+  const hydrateWaitersRef = useRef<string[]>([])
+  // Ids already queued or downloading so a second observer event does not double-fetch.
+  const hydrateQueuedRef = useRef<Set<string>>(new Set())
+  // How many blob GETs are in flight.
+  const hydrateInflightRef = useRef(0)
+  // Object URL of the image currently open in the lightbox, which must not be revoked.
+  const pinnedImageIdRef = useRef<string | null>(null)
+  // Finished image patches applied in one setMessages when they land in the same turn.
+  const pendingAttachmentPatchesRef = useRef<Map<string, { objectUrl?: string | null; failed?: boolean }>>(
+    new Map(),
+  )
+  // True when a microtask is already scheduled to flush those patches.
+  const attachmentFlushScheduledRef = useRef(false)
+  // QR payloads waiting for DistilBERT default. The text never leaves this tab.
+  const pendingQrRef = useRef<Map<string, { text: string; revision: number }>>(new Map())
 
   // Keep classifyRef current every render so hydrate/socket paths do not close over TF-IDF forever.
   classifyRef.current = classify
   // Keep the cache username in lockstep with the signed-in handle.
   usernameRef.current = session?.username
-  // Keep the cache checkpoint in lockstep with the checkbox (not the WASM-ready flag).
+  // Cache hits require distilbert_default even while that graph is still downloading.
   scoringCheckpointRef.current = scoringCheckpointId
+  // Keep the session ref current for forward, which runs after awaits.
+  sessionRef.current = session
 
   // Mirror active chat into the ref whenever React state changes.
   useEffect(() => {
@@ -404,13 +448,28 @@ export function useEncryptedConversation(
     classifySeqRef.current += 1
     // Apply cached banners for the new checkpoint (reload / toggle) without WASM.
     setMessages((existing) => existing.map((row) => applyCachedBanner(row)))
-    // Walk the live transcript (may be empty before a conversation is opened).
+    // Walk the loaded page only. Do not fetch older pages just to score them.
     for (const row of messagesRef.current) {
-      // Skip rows whose last DistilBERT/TF-IDF decision is already on disk.
+      // Skip rows whose distilbert_default decision is already cached.
       if (needsClassify(row) && row.plaintext) {
-        // Score with the model that is ready now, using the live transcript as context.
+        // Score with DistilBERT when it is ready. classify() returns null while it downloads.
         classifyAndFlag(row.id, row.plaintext, row.revision, row.direction, messagesRef.current)
       }
+    }
+    // Score QR payloads that were decoded before the graph finished loading.
+    for (const [messageId, job] of pendingQrRef.current) {
+      // Capture the generation so a later bump can ignore this result.
+      const seq = classifySeqRef.current
+      void classifyRef.current(job.text).then((result) => {
+        // A newer generation owns the banners now.
+        if (seq !== classifySeqRef.current || result === null) {
+          // Leave the job queued when the graph is still downloading.
+          return
+        }
+        // This payload has been scored. Reopening uses the cache and skips jsQR.
+        pendingQrRef.current.delete(messageId)
+        persistBannerDecision(messageId, job.revision, result.checkpointId, result.warned)
+      })
     }
     // classifierGeneration / scoringCheckpointId are the triggers; classifyAndFlag reads refs.
   }, [classifierGeneration, scoringCheckpointId])
@@ -511,49 +570,177 @@ export function useEncryptedConversation(
     }
   }
 
-  // Open a sealed image blob and attach a blob: URL to the matching bubble.
-  function hydrateImageAttachment(messageId: string, conversationId: string, plaintext: string) {
-    const payload = parseImageAttachmentPayload(plaintext)
-    if (payload === null) {
-      return
-    }
-    void authorizedRequest
-      .request((accessToken) => fetchEncryptedBlob(accessToken, conversationId, payload.blobId))
-      .then(async (blob) => {
-        const bytes = await openImageBytes(
-          blob.ciphertext,
-          blob.nonce,
-          payload.fileKey,
-          conversationId,
-          payload.blobId,
-        )
-        const copy = new ArrayBuffer(bytes.byteLength)
-        new Uint8Array(copy).set(bytes)
-        const objectUrl = URL.createObjectURL(new Blob([copy], { type: payload.mime }))
+  // Apply several finished image URLs in one setMessages when they complete together.
+  function queueAttachmentPatch(
+    messageId: string,
+    patch: { objectUrl?: string | null; failed?: boolean },
+  ) {
+    // Merge with a patch that landed earlier in this turn.
+    const previous = pendingAttachmentPatchesRef.current.get(messageId) ?? {}
+    pendingAttachmentPatchesRef.current.set(messageId, { ...previous, ...patch })
+    // One microtask flushes every patch queued before it runs.
+    if (!attachmentFlushScheduledRef.current) {
+      attachmentFlushScheduledRef.current = true
+      queueMicrotask(() => {
+        attachmentFlushScheduledRef.current = false
+        const batch = pendingAttachmentPatchesRef.current
+        pendingAttachmentPatchesRef.current = new Map()
+        if (batch.size === 0) {
+          return
+        }
         setMessages((existing) =>
           existing.map((message) => {
-            if (message.id !== messageId || message.attachment === null) {
+            const next = batch.get(message.id)
+            if (!next || message.attachment === null) {
               return message
             }
-            if (message.attachment.objectUrl) {
+            if (
+              next.objectUrl &&
+              message.attachment.objectUrl &&
+              message.attachment.objectUrl !== next.objectUrl
+            ) {
               URL.revokeObjectURL(message.attachment.objectUrl)
             }
             return {
               ...message,
-              attachment: { ...message.attachment, objectUrl, failed: false },
+              attachment: { ...message.attachment, ...next },
             }
           }),
         )
       })
-      .catch(() => {
-        setMessages((existing) =>
-          existing.map((message) =>
-            message.id === messageId && message.attachment
-              ? { ...message, attachment: { ...message.attachment, failed: true } }
-              : message,
-          ),
-        )
+    }
+  }
+
+  // Score a QR payload with DistilBERT default once that graph is ready.
+  function scheduleQrScore(messageId: string) {
+    const job = pendingQrRef.current.get(messageId)
+    if (!job) {
+      return
+    }
+    const seq = classifySeqRef.current
+    void classifyRef.current(job.text).then((result) => {
+      if (seq !== classifySeqRef.current || result === null) {
+        return
+      }
+      pendingQrRef.current.delete(messageId)
+      persistBannerDecision(messageId, job.revision, result.checkpointId, result.warned)
+    })
+  }
+
+  // Download, decrypt, check, and display one image. Called from the concurrency pump.
+  async function hydrateOne(messageId: string, generation: number) {
+    const current = activeChatRef.current
+    const row = messagesRef.current.find((message) => message.id === messageId)
+    if (!current || !row?.attachment || !row.plaintext) {
+      return
+    }
+    const payload = parseImageAttachmentPayload(row.plaintext)
+    if (payload === null) {
+      return
+    }
+    try {
+      const blob = await authorizedRequest.request((accessToken) =>
+        fetchEncryptedBlob(accessToken, current.conversationId, payload.blobId),
+      )
+      if (generation !== hydrateGenerationRef.current) {
+        return
+      }
+      const bytes = await openImageBytes(
+        blob.ciphertext,
+        blob.nonce,
+        payload.fileKey,
+        current.conversationId,
+        payload.blobId,
+      )
+      if (generation !== hydrateGenerationRef.current) {
+        return
+      }
+      if (!imageHeaderMatchesDeclaredType(bytes, payload.mime)) {
+        queueAttachmentPatch(messageId, { failed: true, objectUrl: null })
+        return
+      }
+      const cached = cachedWarning(messageId, row.revision)
+      if (cached === null) {
+        const qrText = await readQrPayload(bytes, payload.mime)
+        if (qrText) {
+          pendingQrRef.current.set(messageId, { text: qrText, revision: row.revision })
+          scheduleQrScore(messageId)
+        }
+      }
+      const display = await displayBlobForVerifiedImage(bytes, payload.mime)
+      if (generation !== hydrateGenerationRef.current) {
+        return
+      }
+      const objectUrl = URL.createObjectURL(display)
+      queueAttachmentPatch(messageId, { objectUrl, failed: false })
+    } catch {
+      if (generation !== hydrateGenerationRef.current) {
+        return
+      }
+      queueAttachmentPatch(messageId, { failed: true, objectUrl: null })
+    }
+  }
+
+  // Start queued blob downloads, at most three at a time.
+  function pumpImageHydration() {
+    const generation = hydrateGenerationRef.current
+    while (hydrateInflightRef.current < 3 && hydrateWaitersRef.current.length > 0) {
+      const messageId = hydrateWaitersRef.current.shift()
+      if (!messageId) {
+        return
+      }
+      hydrateInflightRef.current += 1
+      void hydrateOne(messageId, generation).finally(() => {
+        hydrateInflightRef.current -= 1
+        hydrateQueuedRef.current.delete(messageId)
+        pumpImageHydration()
       })
+    }
+  }
+
+  // Queue one image download when its bubble is near the viewport.
+  function requestImageHydrate(messageId: string) {
+    const row = messagesRef.current.find((message) => message.id === messageId)
+    if (!row?.attachment || !row.plaintext || row.attachment.objectUrl || row.attachment.failed) {
+      return
+    }
+    if (hydrateQueuedRef.current.has(messageId)) {
+      return
+    }
+    hydrateQueuedRef.current.add(messageId)
+    hydrateWaitersRef.current.push(messageId)
+    pumpImageHydration()
+  }
+
+  // Clear the failed flag and download that image again.
+  function retryImage(messageId: string) {
+    const next = messagesRef.current.map((message) =>
+      message.id === messageId && message.attachment
+        ? { ...message, attachment: { ...message.attachment, failed: false, objectUrl: null } }
+        : message,
+    )
+    messagesRef.current = next
+    setMessages(next)
+    hydrateQueuedRef.current.delete(messageId)
+    requestImageHydrate(messageId)
+  }
+
+  // Drop a decoded image that left the viewport so a long transcript does not keep every bitmap.
+  function releaseDistantImage(messageId: string) {
+    if (pinnedImageIdRef.current === messageId) {
+      return
+    }
+    const row = messagesRef.current.find((message) => message.id === messageId)
+    if (!row?.attachment?.objectUrl) {
+      return
+    }
+    URL.revokeObjectURL(row.attachment.objectUrl)
+    queueAttachmentPatch(messageId, { objectUrl: null })
+  }
+
+  // Remember which image the lightbox is showing.
+  function pinImage(messageId: string | null) {
+    pinnedImageIdRef.current = messageId
   }
 
   // Remember a sidebar snippet after a verified send or receive.
@@ -609,9 +796,7 @@ export function useEncryptedConversation(
       return updated
     })
     persistPreview(row, current.peerUsername)
-    if (row.attachment && row.plaintext) {
-      hydrateImageAttachment(row.id, current.conversationId, row.plaintext)
-    }
+    // The image bytes wait until the bubble is near the viewport.
     // Ciphertext reached this device: tick delivered even if the tab is in the background.
     socketRef.current?.sendReceipt('delivered', [row.id])
     if (chatDocumentIsVisible()) {
@@ -799,15 +984,21 @@ export function useEncryptedConversation(
     revokeAllAttachments(messagesRef.current)
     setMessages([])
     setActiveChat(null)
+    // Drop image work from the conversation we are leaving.
+    hydrateGenerationRef.current += 1
+    hydrateWaitersRef.current = []
+    hydrateQueuedRef.current = new Set()
+    pendingQrRef.current = new Map()
+    hasOlderRef.current = false
+    loadingOlderRef.current = false
 
     try {
       await initializeSodium()
-      const peerKey = await authorizedRequest.request((accessToken) =>
-        fetchPublicKey(accessToken, peerUsername),
-      )
-      const conversation = await authorizedRequest.request((accessToken) =>
-        startOrFetchConversation(accessToken, peerUsername),
-      )
+      // Overlap the public-key lookup with conversation create. Epoch needs the conversation id.
+      const [peerKey, conversation] = await Promise.all([
+        authorizedRequest.request((accessToken) => fetchPublicKey(accessToken, peerUsername)),
+        authorizedRequest.request((accessToken) => startOrFetchConversation(accessToken, peerUsername)),
+      ])
       const epoch = await authorizedRequest.request((accessToken) =>
         fetchConversationEpoch(accessToken, conversation.id),
       )
@@ -826,15 +1017,15 @@ export function useEncryptedConversation(
       activeChatRef.current = nextChat
       setActiveChat(nextChat)
       const history = await authorizedRequest.request((accessToken) =>
-        fetchConversationMessages(accessToken, conversation.id),
+        fetchConversationMessages(accessToken, conversation.id, { limit: HISTORY_PAGE_SIZE }),
       )
-      const hydrated: ChatMessage[] = history.map((envelope) => decryptEnvelope(envelope, nextChat))
+      const hydrated: ChatMessage[] = history.messages.map((envelope) =>
+        decryptEnvelope(envelope, nextChat),
+      )
+      hasOlderRef.current = history.nextCursor !== null
       setMessages(hydrated)
       for (const row of hydrated) {
         persistPreview(row, nextChat.peerUsername)
-        if (row.attachment && row.plaintext) {
-          hydrateImageAttachment(row.id, nextChat.conversationId, row.plaintext)
-        }
         if (needsClassify(row) && row.plaintext) {
           classifyAndFlag(row.id, row.plaintext, row.revision, row.direction, hydrated)
         }
@@ -1139,12 +1330,181 @@ export function useEncryptedConversation(
     handleEditMessage,
     handleDeleteMessage,
     handleHideMessage,
-    handleClearLocalTranscript() {
-      // Forget pending send ids so a later "accepted" ack cannot rename a gone row.
+    requestImageHydrate,
+    retryImage,
+    releaseDistantImage,
+    pinImage,
+    async loadOlderMessages() {
+      const current = activeChatRef.current
+      const beforeId = messagesRef.current[0]?.id
+      if (!current || !beforeId || !hasOlderRef.current || loadingOlderRef.current) {
+        return false
+      }
+      loadingOlderRef.current = true
+      try {
+        const page = await authorizedRequest.request((accessToken) =>
+          fetchConversationMessages(accessToken, current.conversationId, {
+            limit: HISTORY_PAGE_SIZE,
+            before: beforeId,
+          }),
+        )
+        if (activeChatRef.current?.conversationId !== current.conversationId) {
+          return false
+        }
+        const older = page.messages.map((envelope) => decryptEnvelope(envelope, current))
+        setMessages((existing) => {
+          const known = new Set(existing.map((message) => message.id))
+          const prepend = older.filter((message) => !known.has(message.id))
+          return [...prepend, ...existing]
+        })
+        hasOlderRef.current = page.nextCursor !== null
+        for (const row of older) {
+          if (needsClassify(row) && row.plaintext) {
+            classifyAndFlag(row.id, row.plaintext, row.revision, row.direction, [
+              ...older,
+              ...messagesRef.current,
+            ])
+          }
+        }
+        const receivedIds = older
+          .filter((row) => row.direction === 'received')
+          .map((row) => row.id)
+        socketRef.current?.sendReceipt('delivered', receivedIds)
+        if (chatDocumentIsVisible()) {
+          socketRef.current?.sendReceipt('read', receivedIds)
+        }
+        return older.length > 0
+      } catch {
+        return false
+      } finally {
+        loadingOlderRef.current = false
+      }
+    },
+    async forwardImageToContact(messageId: string, peerUsername: string) {
+      const source = activeChatRef.current
+      const currentSession = sessionRef.current
+      const row = messagesRef.current.find((message) => message.id === messageId)
+      if (!source || !currentSession || !row?.attachment || !row.plaintext || row.attachment.failed) {
+        return
+      }
+      if (row.verificationFailed) {
+        return
+      }
+      const payload = parseImageAttachmentPayload(row.plaintext)
+      if (payload === null) {
+        return
+      }
+      try {
+        const peerKey = await authorizedRequest.request((accessToken) =>
+          fetchPublicKey(accessToken, peerUsername),
+        )
+        const destination = await authorizedRequest.request((accessToken) =>
+          startOrFetchConversation(accessToken, peerUsername),
+        )
+        const epoch = await authorizedRequest.request((accessToken) =>
+          fetchConversationEpoch(accessToken, destination.id),
+        )
+        const sealedSource = await authorizedRequest.request((accessToken) =>
+          fetchEncryptedBlob(accessToken, source.conversationId, payload.blobId),
+        )
+        const opened = await openImageBytes(
+          sealedSource.ciphertext,
+          sealedSource.nonce,
+          payload.fileKey,
+          source.conversationId,
+          payload.blobId,
+        )
+        if (!imageHeaderMatchesDeclaredType(opened, payload.mime)) {
+          throw new Error('That photo failed verification on this device.')
+        }
+        const blobId = crypto.randomUUID()
+        const sealed = await sealImageBytes(opened, destination.id, blobId)
+        await authorizedRequest.request((accessToken) =>
+          uploadEncryptedBlob(accessToken, destination.id, {
+            id: blobId,
+            ciphertext: sealed.ciphertext,
+            nonce: sealed.nonce,
+          }),
+        )
+        const sessionKeys = deriveSessionKeys(
+          { keys: currentSession.identityKeyPair, username: currentSession.username },
+          { publicKey: decodeBase64(peerKey.publicKey), username: peerKey.username },
+        )
+        const plaintext = serializeImageAttachmentPayload({
+          blobId,
+          fileKey: encodeBase64(sealed.fileKey),
+          mime: payload.mime,
+          name: payload.name,
+        })
+        const clientMessageId = crypto.randomUUID()
+        const envelope = encryptMessage(plaintext, sessionKeys.transmitKey, epoch.currentEpoch, {
+          conversationId: destination.id,
+          senderId: destination.self.id,
+          messageId: clientMessageId,
+          revision: 0,
+        })
+        await new Promise<void>((resolve, reject) => {
+          let settled = false
+          let timer = 0
+          let forwardSocket: ChatSocket | null = null
+          const finish = (error?: Error) => {
+            if (settled) {
+              return
+            }
+            settled = true
+            window.clearTimeout(timer)
+            forwardSocket?.close()
+            if (error) {
+              reject(error)
+              return
+            }
+            resolve()
+          }
+          timer = window.setTimeout(() => {
+            finish(new Error('Could not forward that photo.'))
+          }, 15000)
+          forwardSocket = connectChatSocket(destination.id, currentSession.accessToken, {
+            onEnvelope: () => {
+              // A forward socket does not render the destination transcript.
+            },
+            onAccepted: () => {
+              finish()
+            },
+            onProtocolError: (detail) => {
+              finish(new Error(detail))
+            },
+            onClose: () => {
+              finish(new Error('Could not forward that photo.'))
+            },
+          })
+          void forwardSocket.whenOpen().then(() => {
+            forwardSocket.sendEnvelope(
+              envelope,
+              { conversationId: destination.id, senderId: destination.self.id },
+              { messageId: clientMessageId, revision: 0 },
+            )
+          }).catch((error: unknown) => {
+            finish(error instanceof Error ? error : new Error('Could not forward that photo.'))
+          })
+        })
+        setStatusMessage('Photo forwarded.')
+      } catch {
+        setErrorMessage('Could not forward that photo.')
+      }
+    },
+    async handleClearChatForMe() {
+      const current = activeChatRef.current
+      if (!current) {
+        return
+      }
+      await authorizedRequest.request((accessToken) =>
+        hideAllConversationMessages(accessToken, current.conversationId),
+      )
       pendingSendQueueRef.current = []
-      // Drop optimistic-id mappings for the conversation we are leaving.
       acceptedIdsRef.current = new Map()
       revokeAllAttachments(messagesRef.current)
+      pendingQrRef.current = new Map()
+      hasOlderRef.current = false
       setMessages([])
     },
     closeConversation() {

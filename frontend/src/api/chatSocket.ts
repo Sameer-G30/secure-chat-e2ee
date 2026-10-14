@@ -98,6 +98,8 @@ export interface ChatSocket {
   sendReceipt: (kind: 'delivered' | 'read', messageIds: string[]) => void
   // Close the socket when the user leaves the conversation or logs out.
   close: () => void
+  // Resolves when the socket is open so a one-shot forward can send after connect.
+  whenOpen: () => Promise<void>
 }
 
 // Narrow an unknown JSON value into a relayed envelope, or return null if it is not one.
@@ -307,6 +309,21 @@ export function connectChatSocket(
   handlers: ChatSocketHandlers,
 ): ChatSocket {
   const socket = new WebSocket(conversationWebSocketUrl(conversationId, accessToken))
+  // Forwarding opens a second socket and must not send before the handshake finishes.
+  let opened = false
+  const whenOpen = new Promise<void>((resolve, reject) => {
+    // The handshake succeeded.
+    socket.addEventListener('open', () => {
+      opened = true
+      resolve()
+    })
+    // A close before open means the forward cannot send.
+    socket.addEventListener('close', () => {
+      if (!opened) {
+        reject(new Error('The encrypted connection closed before it opened.'))
+      }
+    })
+  })
 
   socket.addEventListener('message', (event: MessageEvent<string>) => {
     let parsed: unknown
@@ -363,6 +380,9 @@ export function connectChatSocket(
       if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
         socket.close()
       }
+    },
+    whenOpen() {
+      return whenOpen
     },
   }
 }

@@ -133,6 +133,22 @@ export async function uploadMyAvatar(accessToken: string, file: File): Promise<M
   return parseMeProfile(body)
 }
 
+// Remove the signed-in account's public avatar. No stored photo is a successful no-op.
+export async function deleteMyAvatar(accessToken: string): Promise<MeProfile> {
+  const response = await fetch(`${API_BASE_URL}/users/me/avatar`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  const body: unknown = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new UsersApiError(
+      extractErrorDetail(body, 'Could not remove that photo. Please try again shortly.'),
+      response.status,
+    )
+  }
+  return parseMeProfile(body)
+}
+
 // Load another account's public profile for the contact panel.
 export async function fetchUserProfile(
   accessToken: string,

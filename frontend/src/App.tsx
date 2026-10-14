@@ -15,11 +15,11 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 function AppRoutes() {
   // Call useAuth on every render so the hook order stays stable (load-check included).
   const { session } = useAuth()
-  // Slice 6 measurement page is opted into via query string, not the chat shell.
+  // Optional DistilBERT-default load check. It does not load TF-IDF or the word BiLSTM.
   const isLoadCheck = new URLSearchParams(window.location.search).get('mlLoadCheck') === '1'
   // Keep the load-check unauthenticated so WASM measurement does not need two accounts.
   if (isLoadCheck) {
-    // Render the six-way table instead of AuthScreen/ChatScreen.
+    // Render the one-model page instead of AuthScreen/ChatScreen.
     return <MlLoadCheckScreen />
   }
   // ChatScreen requires an in-memory session; AuthScreen is shown otherwise.

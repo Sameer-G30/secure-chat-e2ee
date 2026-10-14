@@ -5,6 +5,7 @@
 
 // Import state so the panel can switch between the main list and stub pages.
 import { useState } from 'react'
+import { Modal } from './Modal'
 // Import the stored preference type the theme hook already understands.
 import type { ThemePreference } from '../theme'
 // Import the avatar glyph used on the working profile form.
@@ -38,8 +39,13 @@ export interface SettingsPanelProps {
   profileDisplayName: string
   profileBio: string
   profileHasAvatar: boolean
+  // Bumped after upload or remove so the avatar image refetches.
+  avatarRevision: number
   onSaveProfile: (displayName: string, bio: string) => Promise<void>
   onUploadAvatar: (file: File) => Promise<void>
+  onRemoveAvatar: () => Promise<void>
+  // Open the public photo in the shared lightbox. There is no forward action.
+  onViewAvatar: (objectUrl: string) => void
 }
 
 // Name the three theme choices with labels the Settings panel displays.
@@ -88,8 +94,11 @@ export function SettingsPanel({
   profileDisplayName,
   profileBio,
   profileHasAvatar,
+  avatarRevision,
   onSaveProfile,
   onUploadAvatar,
+  onRemoveAvatar,
+  onViewAvatar,
 }: SettingsPanelProps) {
   // Hold which slide is visible: the main list, or one nested page.
   const [view, setView] = useState<'main' | string>('main')
@@ -99,6 +108,8 @@ export function SettingsPanel({
   const [bio, setBio] = useState(profileBio)
   // Hold a profile-form status line distinct from the chat status.
   const [profileStatus, setProfileStatus] = useState<string | null>(null)
+  // True while the remove-photo confirmation is open.
+  const [confirmRemovePhoto, setConfirmRemovePhoto] = useState(false)
   // Look up the open stub so the nested header can reuse its title.
   const stub = STUB_ROWS.find((row) => row.id === view) ?? null
 
@@ -232,12 +243,23 @@ export function SettingsPanel({
                     accessToken={profileAccessToken}
                     className="contact-profile-avatar"
                     initials={profileUsername.slice(0, 1).toUpperCase()}
+                    reloadKey={avatarRevision}
+                    onView={onViewAvatar}
                   />
                   {profileHasAvatar ? (
                     <p className="settings-stub">A public photo is on this account.</p>
                   ) : (
                     <p className="settings-stub">No photo yet. JPEG, PNG, or WebP up to 200KB.</p>
                   )}
+                  {profileHasAvatar ? (
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => setConfirmRemovePhoto(true)}
+                    >
+                      Remove photo
+                    </button>
+                  ) : null}
                   <label className="profile-file-label">
                     Change photo
                     <input
@@ -287,6 +309,30 @@ export function SettingsPanel({
           </>
         )}
       </div>
+      {confirmRemovePhoto ? (
+        <Modal title="Remove photo" onClose={() => setConfirmRemovePhoto(false)}>
+          <p>
+            This photo is public. Removing it takes it off the account for everyone.
+          </p>
+          <div className="chat-modal-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                setConfirmRemovePhoto(false)
+                void onRemoveAvatar().then(() => {
+                  setProfileStatus('Photo removed.')
+                })
+              }}
+            >
+              Remove photo
+            </button>
+            <button type="button" className="text-button" onClick={() => setConfirmRemovePhoto(false)}>
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   )
 }

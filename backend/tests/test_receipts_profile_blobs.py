@@ -216,6 +216,39 @@ async def test_avatar_upload_and_authenticated_fetch(client: AsyncClient) -> Non
     assert fetched.content == tiny
     anonymous = await client.get("/users/alice/avatar")
     assert anonymous.status_code == 401
+    # A non-image upload is rejected the same way as any other bad media type.
+    rejected = await client.post(
+        "/users/me/avatar",
+        files={"file": ("notes.txt", b"not an image", "text/plain")},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert rejected.status_code == 400
+    # Remove the public photo. This does not touch chat envelopes.
+    deleted = await client.delete(
+        "/users/me/avatar",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["has_avatar"] is False
+    # The bytes are gone for every authenticated viewer.
+    missing = await client.get(
+        "/users/alice/avatar",
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+    assert missing.status_code == 404
+    # Bob's profile view follows the flag, not a cached image.
+    public = await client.get(
+        "/users/alice/profile",
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+    assert public.json()["has_avatar"] is False
+    # Deleting when nothing is stored is a successful no-op.
+    again = await client.delete(
+        "/users/me/avatar",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert again.status_code == 200
+    assert again.json()["has_avatar"] is False
 
 
 # Confirm sealed blobs are membership-gated and never opened by the server.

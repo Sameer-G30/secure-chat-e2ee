@@ -500,12 +500,12 @@ async def test_list_conversations_returns_only_callers_memberships(
     assert len(bob_listed.json()["conversations"]) == 1
 
 
-# Confirm optional cursor pagination returns next_cursor and the remaining page.
+# Confirm newest-page history, the older `before` page, and the existing `after` walk.
 async def test_message_history_cursor_pagination(
     client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    """Require limit=1 to return the oldest envelope and a cursor to the next."""
+    """Require limit without a cursor to return the newest page, oldest-first."""
 
     # Alice sends; Bob only needs a public key so the conversation can be created.
     alice_token = await _register_login(client, _ALICE, key_fill=0x01)
@@ -551,29 +551,117 @@ async def test_message_history_cursor_pagination(
     second.created_at = later
     # Commit the stamped timestamps so GET history sees the order.
     await db_session.commit()
-    # Ask for a single oldest envelope and a cursor to the remainder.
+    # Ask for the newest single envelope. `before` omitted means the latest page.
     page = await client.get(
         f"/conversations/{conversation_id}/messages?limit=1",
         headers={"Authorization": f"Bearer {alice_token}"},
     )
-    # Parse the first page once.
+    # Parse the newest page once.
     body = page.json()
     # The page size must be honored.
     assert len(body["messages"]) == 1
-    # Oldest-first: the earlier envelope is page one.
-    assert body["messages"][0]["id"] == str(first.id)
-    # next_cursor is the last id of this page so the client can request after=.
-    assert body["next_cursor"] == str(first.id)
-    # Fetch the remaining page using the cursor from page one.
-    rest = await client.get(
-        f"/conversations/{conversation_id}/messages?limit=1&after={body['next_cursor']}",
+    # The only row is the later persist, not the start of the chat.
+    assert body["messages"][0]["id"] == str(second.id)
+    # Older rows remain, so next_cursor is the oldest id in this page.
+    assert body["next_cursor"] == str(second.id)
+    # Ciphertext-only: no plaintext, body, or score column on the page.
+    assert "ciphertext" in body["messages"][0]
+    assert "plaintext" not in body["messages"][0]
+    assert "score" not in body["messages"][0]
+    # The next older page is exclusive of that newest id.
+    older = await client.get(
+        f"/conversations/{conversation_id}/messages?limit=1&before={body['next_cursor']}",
         headers={"Authorization": f"Bearer {alice_token}"},
     )
-    # Parse the second page once.
-    rest_body = rest.json()
-    # One remaining envelope fills the second page.
-    assert len(rest_body["messages"]) == 1
-    # That envelope is the later persist.
-    assert rest_body["messages"][0]["id"] == str(second.id)
-    # No third page exists, so next_cursor is null.
-    assert rest_body["next_cursor"] is None
+    # Parse the older page once.
+    older_body = older.json()
+    # One remaining envelope fills the older page.
+    assert len(older_body["messages"]) == 1
+    # That envelope is the earlier persist.
+    assert older_body["messages"][0]["id"] == str(first.id)
+    # Nothing is older than the first row.
+    assert older_body["next_cursor"] is None
+    # `after` still walks forward from the oldest id toward newer rows.
+    forward = await client.get(
+        f"/conversations/{conversation_id}/messages?limit=1&after={first.id}",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # Parse the forward page once.
+    forward_body = forward.json()
+    # The row newer than the first persist is the second envelope.
+    assert forward_body["messages"][0]["id"] == str(second.id)
+    # No third row exists, so the forward cursor is null.
+    assert forward_body["next_cursor"] is None
+
+
+# Confirm bulk hide removes the caller's history only and leaves the peer's copy.
+async def test_hide_all_hides_for_caller_only(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Require hide-all to omit rows for Alice and still return them for Bob."""
+
+    # Alice sends; Bob needs a public key so the conversation can be created.
+    alice_token = await _register_login(client, _ALICE, key_fill=0x01)
+    # Bob's token is what proves the peer copy survives.
+    bob_token = await _register_login(client, _BOB, key_fill=0x02)
+    # Start the canonical Alice-Bob conversation used as the history scope.
+    created = await client.post(
+        "/conversations",
+        json={"peer_username": "bob"},
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # History is conversation-scoped; never a flat /messages collection.
+    conversation_id = UUID(created.json()["id"])
+    # Resolve Alice's user id for persist_envelope's sender_id argument.
+    alice = await db_session.scalar(select(User).where(User.username == "alice"))
+    # Registration must have produced a users row.
+    assert alice is not None
+    # Persist one envelope both sides can see before the clear.
+    stored = await persist_envelope(
+        db_session,
+        conversation_id=conversation_id,
+        sender_id=alice.id,
+        ciphertext=b"hide-all-ciphertext-blob",
+        nonce=b"n" * 24,
+        key_epoch=0,
+    )
+    # Commit so both GETs see the row.
+    await db_session.commit()
+    # Clear the conversation for Alice only.
+    cleared = await client.post(
+        f"/conversations/{conversation_id}/hide-all",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # The endpoint returns no body, so it cannot echo ciphertext.
+    assert cleared.status_code == 204
+    assert cleared.content == b""
+    # Alice's history omits the hidden row.
+    alice_history = await client.get(
+        f"/conversations/{conversation_id}/messages",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # The clear is permanent for this account's GET.
+    assert alice_history.json()["messages"] == []
+    # Bob's history still returns the same envelope.
+    bob_history = await client.get(
+        f"/conversations/{conversation_id}/messages",
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+    # The peer copy includes the original ciphertext.
+    bob_ids = [row["id"] for row in bob_history.json()["messages"]]
+    assert bob_ids == [str(stored.id)]
+    assert bob_history.json()["messages"][0]["ciphertext"]
+    # A second clear is idempotent and still does not delete the row.
+    again = await client.post(
+        f"/conversations/{conversation_id}/hide-all",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # The repeat is also an empty 204.
+    assert again.status_code == 204
+    # Bob can still read the envelope after Alice's second clear.
+    bob_again = await client.get(
+        f"/conversations/{conversation_id}/messages",
+        headers={"Authorization": f"Bearer {bob_token}"},
+    )
+    assert [row["id"] for row in bob_again.json()["messages"]] == [str(stored.id)]

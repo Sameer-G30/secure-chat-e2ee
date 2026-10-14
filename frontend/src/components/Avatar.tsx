@@ -15,10 +15,21 @@ export interface AvatarProps {
   className: string
   // Provide initials while the image loads or when none is stored.
   initials: string
+  // Change this after an upload or remove so the image is fetched again.
+  reloadKey?: number
+  // Called with the object URL when a large avatar is clicked. Omitted on small glyphs.
+  onView?: (objectUrl: string) => void
 }
 
 // Show a public avatar image when the account has one, otherwise a letter glyph.
-export function Avatar({ username, accessToken, className, initials }: AvatarProps) {
+export function Avatar({
+  username,
+  accessToken,
+  className,
+  initials,
+  reloadKey = 0,
+  onView,
+}: AvatarProps) {
   // Hold the blob: URL created from the authenticated avatar response.
   const [objectUrl, setObjectUrl] = useState<string | null>(null)
 
@@ -47,7 +58,20 @@ export function Avatar({ username, accessToken, className, initials }: AvatarPro
         URL.revokeObjectURL(createdUrl)
       }
     }
-  }, [username, accessToken])
+  }, [username, accessToken, reloadKey])
+
+  if (objectUrl && onView) {
+    return (
+      <button
+        type="button"
+        className={className}
+        aria-label={`View photo for ${username}`}
+        onClick={() => onView(objectUrl)}
+      >
+        <img src={objectUrl} alt="" className="avatar-image" />
+      </button>
+    )
+  }
 
   return (
     <div className={className} aria-hidden="true">

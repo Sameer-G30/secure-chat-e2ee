@@ -165,6 +165,7 @@ class MessageHistoryResponse(BaseModel):
 
     # Carry envelopes oldest-first so the chat transcript can render top-to-bottom.
     messages: list[RelayEnvelopeOut]
-    # Opaque id of the last envelope in this page when more history remains; null
-    # means this response is complete. Omitted pagination (no limit) always null.
+    # On an `after` page this is the newest id when newer rows remain. On a
+    # newest-page / `before` page this is the oldest id when older rows remain.
+    # Null means this direction has no further page. An unpaged read is null.
     next_cursor: UUID | None = None

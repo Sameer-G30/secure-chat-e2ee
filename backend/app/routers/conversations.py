@@ -48,8 +48,10 @@ from app.services.relay import (
     connection_hub,
     delete_message_for_everyone,
     get_message_for_sender,
+    hide_all_messages_for_owner,
     hide_message_for_owner,
     list_envelopes_page,
+    list_newest_envelopes_page,
     serialize_envelope,
 )
 
@@ -131,29 +133,69 @@ async def fetch_conversation_messages(
     current_user: Annotated[User, Depends(get_current_user)],
     # Inject a request-scoped async database session.
     db: Annotated[AsyncSession, Depends(get_db)],
-    # Optional page size; omitted means return the full conversation (legacy clients).
+    # Optional page size. With `before` (or alone), this selects a newest-page window.
+    # Omitted with neither cursor still returns the full conversation, oldest first.
     limit: Annotated[int | None, Query(ge=1, le=200)] = None,
-    # Exclusive cursor: the id of the last envelope from the previous oldest-first page.
+    # Exclusive forward cursor: rows newer than this id, oldest-first (existing clients).
     after: Annotated[UUID | None, Query()] = None,
+    # Exclusive backward cursor. Omitted with `limit` means the newest page.
+    before: Annotated[UUID | None, Query()] = None,
 ) -> MessageHistoryResponse:
-    """Return envelopes scoped by conversation_id, oldest first.
+    """Return envelopes scoped by conversation_id, oldest first inside the page.
 
     Membership is required (non-members 404). The payload is ciphertext,
     nonce, key_epoch, sender_id, created_at, and id only — never a body
     and never a classification score. Spec §11 forbids a flat all-messages
     query with a client-side filter.
+
+    `after` still walks forward from an older id. `before` (or `limit` with
+    no cursor) returns a newest-page window. `next_cursor` on that window is
+    the oldest id when older rows remain.
     """
 
+    # The two cursors page in opposite directions; one request cannot use both.
+    if after is not None and before is not None:
+        # Tell the client to pick a direction instead of guessing.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="pass only one of after or before",
+        )
     # 404 if the conversation is missing or the caller is not a member.
     conversation = await get_conversation_for_participant(db, conversation_id, current_user)
-    stored, next_cursor = await list_envelopes_page(
-        db,
-        conversation_id,
-        newest_first=False,
-        exclude_hidden_for=current_user.id,
-        limit=limit,
-        after_id=after,
-    )
+    # Forward pages keep the original oldest-first `after` walk.
+    if after is not None:
+        # Existing callers pass `after` to continue toward newer envelopes.
+        stored, next_cursor = await list_envelopes_page(
+            db,
+            conversation_id,
+            newest_first=False,
+            exclude_hidden_for=current_user.id,
+            limit=limit,
+            after_id=after,
+        )
+    # A limit, or an explicit `before`, means a newest-page window.
+    elif limit is not None or before is not None:
+        # `before` without a limit still has to be bounded; the hard cap is 200.
+        page_limit = limit if limit is not None else 200
+        # Newest page when `before` is omitted; the next older page when it is set.
+        stored, next_cursor = await list_newest_envelopes_page(
+            db,
+            conversation_id,
+            exclude_hidden_for=current_user.id,
+            limit=page_limit,
+            before_id=before,
+        )
+    # No cursor and no limit: the legacy full transcript, oldest first.
+    else:
+        # Unpaged reads stay complete so older scripts do not silently lose history.
+        stored, next_cursor = await list_envelopes_page(
+            db,
+            conversation_id,
+            newest_first=False,
+            exclude_hidden_for=current_user.id,
+            limit=None,
+            after_id=None,
+        )
     # Attach the peer's delivered/read ticks onto the viewer's own sent envelopes only.
     peer_id = other_user_id(conversation, current_user.id)
     sent_ids = [row.id for row in stored if row.sender_id == current_user.id]
@@ -240,6 +282,31 @@ async def hide_conversation_message(
     if message_row is None or message_row.conversation_id != conversation_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="message not found")
     await hide_message_for_owner(db, message_row, current_user.id)
+
+
+# Hide every envelope in this conversation from the caller's own history only.
+@router.post(
+    "/conversations/{conversation_id}/hide-all",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def hide_all_conversation_messages(
+    # Identify which conversation to clear from the caller's own view.
+    conversation_id: UUID,
+    # Require a valid access token.
+    current_user: Annotated[User, Depends(get_current_user)],
+    # Inject a request-scoped async database session.
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """Hide every message in this conversation for the caller only.
+
+    Does not delete message rows, blobs, or the conversation. Does not
+    broadcast message_deleted. The response body is empty (no ciphertext).
+    """
+
+    # 404 if the conversation is missing or the caller is not a member.
+    await get_conversation_for_participant(db, conversation_id, current_user)
+    # Insert message_hides for this owner. The peer's GET is unchanged.
+    await hide_all_messages_for_owner(db, conversation_id, current_user.id)
 
 
 # Mark this conversation read for the caller and ack inbound envelopes as read.

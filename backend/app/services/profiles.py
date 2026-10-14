@@ -94,3 +94,19 @@ async def replace_avatar(
     await db.commit()
     await db.refresh(user)
     return serialize_me(user)
+
+
+# Remove the caller's public avatar. Already-empty storage is a successful no-op.
+async def clear_avatar(db: AsyncSession, user: User) -> MeProfileResponse:
+    """Null avatar bytes and media type. This is public profile data, not a chat envelope."""
+
+    # Drop the stored image. A second delete stays successful and still returns has_avatar false.
+    user.avatar_bytes = None
+    # Drop the media type so GET /users/{username}/avatar can 404 on either null.
+    user.avatar_media_type = None
+    # Persist the clear. No chat ciphertext is involved.
+    await db.commit()
+    # Reload so the response reflects the null columns.
+    await db.refresh(user)
+    # Same profile shape as the other /users/me routes.
+    return serialize_me(user)

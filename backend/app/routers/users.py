@@ -35,6 +35,7 @@ from app.security.dependencies import get_current_user
 
 # Import profile load/update helpers so the router stays thin.
 from app.services.profiles import (
+    clear_avatar,
     get_public_profile,
     get_user_by_username,
     patch_me,
@@ -123,6 +124,19 @@ async def upload_my_avatar(
     return await replace_avatar(
         db, current_user, image_bytes=image_bytes, media_type=media_type
     )
+
+
+# Remove the signed-in account's public avatar.
+@router.delete("/users/me/avatar", response_model=MeProfileResponse)
+async def delete_my_avatar(
+    # Require a valid access token.
+    current_user: Annotated[User, Depends(get_current_user)],
+    # Inject a request-scoped async database session.
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> MeProfileResponse:
+    """Null avatar_bytes and avatar_media_type. No stored avatar is a successful no-op."""
+
+    return await clear_avatar(db, current_user)
 
 
 # Return another account's public profile (no email, hash, or key).

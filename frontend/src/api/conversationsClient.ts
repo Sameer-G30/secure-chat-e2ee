@@ -175,13 +175,52 @@ export async function listConversations(accessToken: string): Promise<Conversati
   )
 }
 
-// Fetch ciphertext-only envelopes for one conversation the caller belongs to.
+// Default page size for the newest-page open and each older page.
+export const HISTORY_PAGE_SIZE = 50
+
+// One page of ciphertext history. Rows inside the page are oldest-first.
+export interface MessageHistoryPage {
+  // Envelopes in this page, oldest first.
+  messages: RelayedEnvelope[]
+  // On a newest-page or `before` read, the oldest id when older rows remain.
+  nextCursor: string | null
+}
+
+// Query for one history page. Omit `before` with `limit` to ask for the newest page.
+export interface MessageHistoryQuery {
+  // Page size. The server caps this at 200.
+  limit?: number
+  // Exclusive older-page cursor (the oldest id the client already has).
+  before?: string
+  // Exclusive forward cursor. Kept for callers that already walk with `after`.
+  after?: string
+}
+
+// Fetch one page of ciphertext-only envelopes for a conversation the caller belongs to.
 export async function fetchConversationMessages(
   accessToken: string,
   conversationId: string,
-): Promise<RelayedEnvelope[]> {
+  query: MessageHistoryQuery = {},
+): Promise<MessageHistoryPage> {
+  // Build the newest-page or older-page query. An empty query still hits the route.
+  const params = new URLSearchParams()
+  // Send limit when the caller asked for a page.
+  if (query.limit !== undefined) {
+    params.set('limit', String(query.limit))
+  }
+  // `before` asks for the next older page. Omit it for the newest page.
+  if (query.before) {
+    params.set('before', query.before)
+  }
+  // `after` remains the forward cursor.
+  if (query.after) {
+    params.set('after', query.after)
+  }
+  // Append the query string only when there is something to send.
+  const queryString = params.toString()
+  const search = queryString.length > 0 ? `?${queryString}` : ''
   const response = await fetch(
-    `${API_BASE_URL}/conversations/${encodeURIComponent(conversationId)}/messages`,
+    `${API_BASE_URL}/conversations/${encodeURIComponent(conversationId)}/messages${search}`,
     {
       method: 'GET',
       headers: authHeaders(accessToken),
@@ -194,18 +233,19 @@ export async function fetchConversationMessages(
       response.status,
     )
   }
-  const payload = body as { messages?: unknown }
-  if (!Array.isArray(payload.messages)) {
-    return []
-  }
+  const payload = body as { messages?: unknown; next_cursor?: unknown }
+  // A missing array is an empty page, not a throw, so a malformed body cannot crash open.
+  const rawMessages = Array.isArray(payload.messages) ? payload.messages : []
   const envelopes: RelayedEnvelope[] = []
-  for (const item of payload.messages) {
+  for (const item of rawMessages) {
     const parsed = parseHistoryEnvelope(item)
     if (parsed !== null) {
       envelopes.push(parsed)
     }
   }
-  return envelopes
+  // The newest-page cursor is the oldest id when older rows remain.
+  const nextCursor = typeof payload.next_cursor === 'string' ? payload.next_cursor : null
+  return { messages: envelopes, nextCursor }
 }
 
 // Narrow one history JSON object into a relayed envelope, or skip it if it is not one.
@@ -299,6 +339,25 @@ export async function hideConversationMessage(
     const body: unknown = await response.json().catch(() => null)
     throw new ConversationsApiError(
       extractErrorDetail(body, 'Could not hide that message. Please try again shortly.'),
+      response.status,
+    )
+  }
+}
+
+// Hide every message in this conversation from the caller's own future history.
+// Does not delete rows, blobs, or the conversation, and does not notify the peer.
+export async function hideAllConversationMessages(
+  accessToken: string,
+  conversationId: string,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/conversations/${encodeURIComponent(conversationId)}/hide-all`,
+    { method: 'POST', headers: authHeaders(accessToken) },
+  )
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null)
+    throw new ConversationsApiError(
+      extractErrorDetail(body, 'Could not clear this chat. Please try again shortly.'),
       response.status,
     )
   }

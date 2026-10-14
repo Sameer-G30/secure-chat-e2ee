@@ -4,6 +4,7 @@
 
 // Import React's state hook used by the inline edit field.
 import { useState } from 'react'
+import { Modal } from './Modal'
 // Import the in-memory bubble shape this modal inspects.
 import type { ChatMessage } from '../hooks/useEncryptedConversation'
 // Import the dismiss glyph used on the modal header.
@@ -35,6 +36,8 @@ export function MessageActionsModal({
   const [editDraft, setEditDraft] = useState(message.plaintext ?? '')
   // Hold whether the inline editor is open (own, v2, not pending only).
   const [isEditing, setIsEditing] = useState(false)
+  // True after the user asks to delete for everyone, before the API is called.
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   // Own, already-accepted, v2 messages can be edited.
   const canEdit =
@@ -134,24 +137,51 @@ export function MessageActionsModal({
                 <button
                   type="button"
                   className="message-action-btn"
-                  onClick={() => void onDeleteForEveryone(message.id).then(onClose)}
+                  onClick={() => setConfirmDelete(true)}
                 >
                   Delete for everyone
                 </button>
               ) : null}
               {canHide ? (
-                <button
-                  type="button"
-                  className="message-action-btn"
-                  onClick={() => void onHideForMe(message.id).then(onClose)}
-                >
-                  Hide for me
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="message-action-btn"
+                    onClick={() => void onHideForMe(message.id).then(onClose)}
+                  >
+                    Hide for me
+                  </button>
+                  <p id="hide-for-me-note" className="message-action-note">
+                    The other person still has it.
+                  </p>
+                </>
               ) : null}
             </>
           )}
         </div>
       </div>
+      {confirmDelete ? (
+        <Modal title="Delete for everyone" onClose={() => setConfirmDelete(false)}>
+          <p>This removes the message for both people.</p>
+          <div className="chat-modal-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                void onDeleteForEveryone(message.id).then(() => {
+                  setConfirmDelete(false)
+                  onClose()
+                })
+              }}
+            >
+              Confirm delete for everyone
+            </button>
+            <button type="button" className="text-button" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   )
 }

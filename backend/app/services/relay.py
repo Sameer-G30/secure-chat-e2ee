@@ -426,6 +426,111 @@ async def list_envelopes_page(
     return rows, next_cursor
 
 
+# Read the newest page, or the next older page, and hand it back oldest-first.
+async def list_newest_envelopes_page(
+    db: AsyncSession,
+    conversation_id: UUID,
+    *,
+    exclude_hidden_for: UUID | None,
+    limit: int,
+    before_id: UUID | None = None,
+) -> tuple[list[Message], UUID | None]:
+    """Return a newest-page slice, oldest-first, plus a cursor when older rows remain.
+
+    Omit `before_id` to mean the newest `limit` envelopes. Set `before_id` to an
+    exclusive message id to mean the next older page. `next_cursor` is the oldest
+    id in the returned page when still-older rows exist, otherwise null. This does
+    not replace `after`, which still walks forward from an older row.
+    """
+
+    # Newest-first so LIMIT keeps the latest rows, not the start of the chat.
+    created_order = Message.created_at.desc()
+    # Break timestamp ties with id so two rows in the same second stay stable.
+    id_order = Message.id.desc()
+    # Stay inside one conversation; never scan the whole messages table.
+    query = select(Message).where(Message.conversation_id == conversation_id)
+    # Drop envelopes this caller already hid. The peer passes a different owner id.
+    if exclude_hidden_for is not None:
+        # Subquery of message ids hidden by this owner only.
+        hidden_ids = select(MessageHide.message_id).where(
+            MessageHide.owner_id == exclude_hidden_for
+        )
+        # Exclude those ids from this page.
+        query = query.where(Message.id.not_in(hidden_ids))
+    # `before` is exclusive: rows strictly older than that envelope.
+    if before_id is not None:
+        # Load the cursor row so the comparison uses its timestamp and id.
+        cursor = await db.get(Message, before_id)
+        # A missing cursor, or one from another conversation, is an empty page.
+        if cursor is None or cursor.conversation_id != conversation_id:
+            # Do not leak whether a foreign id exists.
+            return [], None
+        # Keep rows older than the cursor, matching the newest-first tie break.
+        query = query.where(
+            or_(
+                Message.created_at < cursor.created_at,
+                and_(Message.created_at == cursor.created_at, Message.id < cursor.id),
+            )
+        )
+    # Fetch one extra row so we know whether an older page exists.
+    result = await db.scalars(query.order_by(created_order, id_order).limit(limit + 1))
+    # Materialize the newest-first window.
+    rows = list(result.all())
+    # The extra row means something older than this page is still stored.
+    has_older = len(rows) > limit
+    # Drop the probe row so the caller sees at most `limit` envelopes.
+    if has_older:
+        # The probe is the oldest of the fetched set because the query is newest-first.
+        rows = rows[:limit]
+    # The transcript paints top-to-bottom, so reverse this window to oldest-first.
+    rows.reverse()
+    # The next older page starts strictly before the oldest id we just returned.
+    next_cursor = rows[0].id if has_older and rows else None
+    # Return the page and the cursor (null when this page reached the start).
+    return rows, next_cursor
+
+
+# Hide every envelope in one conversation from exactly one owner's history.
+async def hide_all_messages_for_owner(
+    db: AsyncSession,
+    conversation_id: UUID,
+    owner_id: UUID,
+) -> None:
+    """Insert message_hides for each row in this conversation for this owner.
+
+    Idempotent when some rows are already hidden. Does not delete messages,
+    blobs, or the conversation, and does not broadcast a deletion frame.
+    """
+
+    # Every message id in this conversation, including ones the caller cannot decrypt.
+    message_ids = list(
+        await db.scalars(select(Message.id).where(Message.conversation_id == conversation_id))
+    )
+    # An empty conversation is a successful no-op.
+    if not message_ids:
+        # Nothing to hide and nothing to delete.
+        return
+    # Ids this owner has already hidden, so a second clear does not violate the unique key.
+    already_hidden = set(
+        await db.scalars(
+            select(MessageHide.message_id).where(
+                MessageHide.owner_id == owner_id,
+                MessageHide.message_id.in_(message_ids),
+            )
+        )
+    )
+    # Insert one hide marker per not-yet-hidden envelope.
+    for message_id in message_ids:
+        # Skip rows that already have a marker for this owner.
+        if message_id in already_hidden:
+            # The peer's copy is untouched either way.
+            continue
+        # Record the hide. The message row itself stays in the table.
+        db.add(MessageHide(owner_id=owner_id, message_id=message_id))
+    # One commit covers the whole clear. No ciphertext is returned to the caller.
+    await db.commit()
+
+
 # Serialize a stored envelope for the WebSocket without adding plaintext fields.
 def serialize_envelope(
     message: Message,

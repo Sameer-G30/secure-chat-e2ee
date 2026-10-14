@@ -1,21 +1,19 @@
-// Sequential ONNX Runtime Web load-and-check of all six Slice-6 checkpoints.
+// On-device load check for DistilBERT default only.
+// TF-IDF and the word BiLSTM are not loaded here. The six-row table in
+// ml/reports/onnx_web_load_check.md stays a historical measurement.
 
-// Import the family loaders and fixture scorer.
+// Import the DistilBERT loader and fixture scorer. This file does not import tfidf or lstm.
 import {
   classifyDistilbert,
-  classifyLstm,
-  classifyTfidf,
   fetchFixtureScores,
   fetchManifest,
   loadDistilbertCheckpoint,
-  loadLstmCheckpoint,
-  loadTfidfCheckpoint,
   resetAllClassifiers,
 } from './scamClassifier'
 import { readJsHeapBytes } from './ortRuntime'
 import { percentile } from './percentiles'
-import type { CheckpointId, LoadCheckRow } from './types'
-import { CHECKPOINT_LOAD_ORDER } from './types'
+import type { LoadCheckRow } from './types'
+import { DISTILBERT_OPT_IN_ID } from './types'
 
 // React StrictMode mounts this page twice; share one WASM sequence across remounts.
 let sharedRun: Promise<LoadCheckRow[]> | null = null
@@ -24,62 +22,47 @@ const completedRows: LoadCheckRow[] = []
 // Live UI listeners; remount replaces the cancelled StrictMode callback.
 const rowListeners = new Set<(row: LoadCheckRow, index: number) => void>()
 
-// Load one checkpoint, score fixtures, then unload before the next id.
-async function checkOne(id: CheckpointId, loadOrder: number): Promise<LoadCheckRow> {
-  // Read the manifest first so a missing export is recorded as load failure.
+// Load DistilBERT default, score its fixtures, then unload.
+async function checkDistilbertDefault(): Promise<LoadCheckRow> {
   // Human-readable label starts as the catalog id until the manifest loads.
-  let manifestLabel: string = id
+  let manifestLabel: string = DISTILBERT_OPT_IN_ID
   // Offline citation is filled when the manifest fetch succeeds.
   let offline: LoadCheckRow['offline'] = null
   // ONNX byte size from the manifest.
   let onnxBytes: number | null = null
   try {
     // Fetch catalog metadata without creating a WASM session yet.
-    const manifest = await fetchManifest(id)
+    const manifest = await fetchManifest(DISTILBERT_OPT_IN_ID)
     // Copy the human-readable label into the table row.
     manifestLabel = manifest.label
     // Copy offline TEST/chat-eval numbers (not browser accuracy).
     offline = manifest.offline
     // Copy serving graph size.
     onnxBytes = manifest.onnx_bytes
-    // Time InferenceSession.create + sidecar JSON parses.
+    // Time InferenceSession.create + sidecar reads.
     const initStarted = performance.now()
-    // Dispatch to the family loader (each unloads the previous heavy graph).
-    if (manifest.family === 'distilbert') {
-      // DistilBERT winner (512) or Slice 5 default (256).
-      await loadDistilbertCheckpoint(id)
-    } else if (manifest.family === 'lstm') {
-      // Word BiLSTM winner (8 ep) or published default (4 ep).
-      await loadLstmCheckpoint(id)
-    } else {
-      // TF-IDF winner (10k) or published default (50k).
-      await loadTfidfCheckpoint(id)
-    }
-    // Session create latency (load succeeded even if a later fixture throws).
+    // Load the only browser graph.
+    await loadDistilbertCheckpoint(DISTILBERT_OPT_IN_ID)
+    // Session create latency.
     const initMs = performance.now() - initStarted
     // Approximate JS heap after load (Chrome only).
     const jsHeapBytes = readJsHeapBytes()
     try {
       // Load Python/PyTorch fixture expectations written at export time.
-      const fixtures = await fetchFixtureScores(id, manifest.sidecars.fixtures)
+      const fixtures = await fetchFixtureScores(DISTILBERT_OPT_IN_ID, manifest.sidecars.fixtures)
       // Accumulate per-message inference times.
       const inferenceSamples: number[] = []
       // Record whether the browser banner matches the Python banner.
       const bannerMatch: boolean[] = []
-      // Score each short DM with the live ORT session.
+      // Score each short DM with the live ORT session, one at a time.
       for (const fixture of fixtures) {
         // Time this one message.
         const messageStarted = performance.now()
-        // Dispatch to the family classifier.
-        const result =
-          manifest.family === 'distilbert'
-            ? await classifyDistilbert(fixture.text)
-            : manifest.family === 'lstm'
-              ? await classifyLstm(fixture.text)
-              : await classifyTfidf(fixture.text)
+        // DistilBERT only. The sidecar threshold is used here, not the ChatScreen 0.35 overlay.
+        const result = await classifyDistilbert(fixture.text)
         // Add wall-clock inference (includes tokenize in JS).
         inferenceSamples.push(performance.now() - messageStarted)
-        // Compare banner on/off only; int8 DistilBERT may drift in P(scam).
+        // Compare banner on/off only.
         bannerMatch.push(result.warned === fixture.warned)
       }
       // Mean milliseconds per fixture DM.
@@ -87,15 +70,16 @@ async function checkOne(id: CheckpointId, loadOrder: number): Promise<LoadCheckR
         inferenceSamples.length > 0
           ? inferenceSamples.reduce((sum, value) => sum + value, 0) / inferenceSamples.length
           : null
+      // Percentiles over the same fixtures.
       const inferenceMsP50 = percentile(inferenceSamples, 50)
       const inferenceMsP95 = percentile(inferenceSamples, 95)
       const inferenceMsP99 = percentile(inferenceSamples, 99)
-      // Unload this graph before the next checkpoint (one heavy session at a time).
+      // Unload so a later chat mount starts from a known heap.
       await resetAllClassifiers()
       // Return a successful row.
       return {
-        id,
-        loadOrder,
+        id: DISTILBERT_OPT_IN_ID,
+        loadOrder: 1,
         label: manifestLabel,
         loadSuccess: true,
         error: null,
@@ -110,14 +94,14 @@ async function checkOne(id: CheckpointId, loadOrder: number): Promise<LoadCheckR
         offline,
       }
     } catch (inferError) {
-      // Session.create worked; record inference separately so a classify bug is not an OOM.
+      // Session.create worked; record inference separately.
       const inferMessage = inferError instanceof Error ? inferError.message : String(inferError)
-      // Drop the session so the next catalog id starts clean.
+      // Drop the session.
       await resetAllClassifiers().catch(() => undefined)
       // loadSuccess stays true: the graph entered WASM.
       return {
-        id,
-        loadOrder,
+        id: DISTILBERT_OPT_IN_ID,
+        loadOrder: 1,
         label: manifestLabel,
         loadSuccess: true,
         error: `inference: ${inferMessage}`,
@@ -133,14 +117,14 @@ async function checkOne(id: CheckpointId, loadOrder: number): Promise<LoadCheckR
       }
     }
   } catch (error) {
-    // Record the failure and continue the six-way sequence.
+    // Record the failure. Do not try another family.
     const message = error instanceof Error ? error.message : String(error)
-    // Make sure a crashed session does not leak into the next step.
+    // Make sure a crashed session does not leak.
     await resetAllClassifiers().catch(() => undefined)
-    // Return a failed row; the caller still proceeds to the next id.
+    // Return a failed row.
     return {
-      id,
-      loadOrder,
+      id: DISTILBERT_OPT_IN_ID,
+      loadOrder: 1,
       label: manifestLabel,
       loadSuccess: false,
       error: message,
@@ -157,43 +141,31 @@ async function checkOne(id: CheckpointId, loadOrder: number): Promise<LoadCheckR
   }
 }
 
-// Walk checkpoints 1..6 once; StrictMode remounts subscribe instead of starting a second WASM run.
-async function runSequentialLoadCheckOnce(
-  emit: (row: LoadCheckRow, index: number) => void,
-): Promise<LoadCheckRow[]> {
+// Run DistilBERT default once; StrictMode remounts subscribe instead of starting a second load.
+async function runOnce(emit: (row: LoadCheckRow, index: number) => void): Promise<LoadCheckRow[]> {
   // Start from a clean WASM heap.
   await resetAllClassifiers()
-  // Walk the documented order (DistilBERT 512 first).
-  for (let index = 0; index < CHECKPOINT_LOAD_ORDER.length; index += 1) {
-    // Catalog id for this step.
-    const id = CHECKPOINT_LOAD_ORDER[index]
-    // Skip holes (should never happen).
-    if (!id) {
-      // Continue so a typo cannot abort the remaining checks.
-      continue
-    }
-    // Load, score fixtures, unload.
-    const row = await checkOne(id, index + 1)
-    // Remember the row so a remounted UI can replay it.
-    completedRows.push(row)
-    // Notify every live subscriber (current Chat-less measurement page).
-    emit(row, index)
-  }
-  // Return the completed six-row log.
+  // One graph. TF-IDF and LSTM URLs are not requested.
+  const row = await checkDistilbertDefault()
+  // Remember the row so a remounted UI can replay it.
+  completedRows.push(row)
+  // Notify every live subscriber.
+  emit(row, 0)
+  // Return the one-row log.
   return completedRows
 }
 
-// Run checkpoints 1..6 in order; a failure skips to the next id.
+// Run the DistilBERT-only check.
 export async function runSequentialLoadCheck(
   onRow?: (row: LoadCheckRow, index: number) => void,
 ): Promise<LoadCheckRow[]> {
-  // Replay rows that finished before this subscriber attached (StrictMode remount).
+  // Replay rows that finished before this subscriber attached.
   if (onRow) {
     // Register before replay so a row finishing mid-replay cannot be dropped.
     rowListeners.add(onRow)
     // Replay already-completed rows into the new React tree.
     completedRows.forEach((row, index) => {
-      // Index matches loadOrder - 1 for the documented catalog.
+      // Index is 0 for the single DistilBERT default row.
       onRow(row, index)
     })
   }
@@ -208,15 +180,14 @@ export async function runSequentialLoadCheck(
   // Start the WASM sequence at most once per page lifetime.
   if (sharedRun === null) {
     // Assign immediately so a synchronous second call cannot start another loop.
-    sharedRun = runSequentialLoadCheckOnce(emit)
+    sharedRun = runOnce(emit)
   }
   try {
-    // Await the shared six-way sequence.
+    // Await the shared run.
     return await sharedRun
   } finally {
     // Drop this instance's callback so an unmounted tree cannot setState.
     if (onRow) {
-      // Unsubscribe after the promise settles or the caller unmounts via .finally below.
       rowListeners.delete(onRow)
     }
   }
