@@ -123,6 +123,25 @@ export function writeCachedBanner(
   saveBannerCache(username, entries)
 }
 
+// Remove every on-device scam-banner cache. Plaintext was never stored here.
+export function clearAllBannerCaches(): void {
+  // Collect keys first so removing them does not skip indexes.
+  const keys: string[] = []
+  // Walk localStorage for this cache's prefix only.
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    // Read one key.
+    const key = window.localStorage.key(index)
+    // Keep banner blobs. Theme and wallpaper use other prefixes.
+    if (key?.startsWith(BANNER_CACHE_PREFIX)) {
+      keys.push(key)
+    }
+  }
+  // Drop each blob. The next classify is a cache miss.
+  for (const key of keys) {
+    window.localStorage.removeItem(key)
+  }
+}
+
 // Follow the local-id → server-id rename from an "accepted" ack.
 export function renameCachedBanner(username: string, fromId: string, toId: string): void {
   // No-op when the server reused the same UUID.

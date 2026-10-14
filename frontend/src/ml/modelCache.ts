@@ -67,3 +67,20 @@ export async function readOrFetchBytes(
   // Hand the original buffer to the caller.
   return buffer
 }
+
+// Delete the DistilBERT Cache API entry on this device.
+//
+// The next chat load fetches the graph again. This does not delete messages,
+// blobs, or the key vault.
+export async function clearDistilbertCache(): Promise<void> {
+  // jsdom and locked-down browsers may not expose the Cache API.
+  if (typeof caches === 'undefined') {
+    return
+  }
+  try {
+    // Delete the whole cache name. A miss is still success.
+    await caches.delete(DISTILBERT_CACHE_NAME)
+  } catch {
+    // A cache delete failure must not block the rest of the device clear.
+  }
+}

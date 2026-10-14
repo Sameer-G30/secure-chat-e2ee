@@ -9,6 +9,7 @@ import type { FormEvent } from 'react'
 import { ContactsApiError } from '../api/contactsClient'
 // Import the server-side block client used by the more-options menu.
 import { BlocksApiError, blockUser, listBlocks, unblockUser } from '../api/blocksClient'
+import type { BlockedAccount } from '../api/blocksClient'
 // Import the metadata-only report client; message contents are never attached.
 import { ReportsApiError, reportUser } from '../api/reportsClient'
 // Import the session context so this screen can show identity and offer logout.
@@ -19,9 +20,15 @@ import type { ThemePreference } from '../theme'
 // Import the plaintext-export helpers; the UI always warns before writing to disk.
 import { downloadTranscriptFile, formatTranscriptExport } from '../chat/exportTranscript'
 import { formatLocalDateSeparator, formatMessageClock, localCalendarDayKey } from '../chat/messageClock'
-import { previewTextForMessage, readAllLastMessagePreviews } from '../chat/lastMessagePreview'
+import {
+  clearLastMessagePreviews,
+  deleteLastMessagePreview,
+  previewTextForMessage,
+  readAllLastMessagePreviews,
+} from '../chat/lastMessagePreview'
 import type { LastMessagePreview } from '../chat/lastMessagePreview'
 import {
+  clearAllConversationWallpapers,
   clearConversationWallpaper,
   MAX_WALLPAPER_BYTES,
   readConversationWallpaper,
@@ -48,12 +55,15 @@ import { useEncryptedConversation } from '../hooks/useEncryptedConversation'
 import { useScamClassifierPreference } from '../hooks/useScamClassifierPreference'
 import { useUserSearch } from '../hooks/useUserSearch'
 import type { ChatMessage } from '../hooks/useEncryptedConversation'
+import { clearAllBannerCaches } from '../ml/scamBannerCache'
+import { clearDistilbertCache } from '../ml/modelCache'
 
 // Import the Phase 1 overlays this shell now mounts on demand.
 import { ChatMoreMenu } from './ChatMoreMenu'
 import { MessageActionsModal } from './MessageActionsModal'
 import { Modal } from './Modal'
 import { SettingsPanel } from './SettingsPanel'
+import type { SettingsView } from './SettingsPanel'
 // Import the vrati icon set used on the sidebar, header, and circular send button.
 import { IconGear, IconImage, IconMore, IconSearch, IconSend, IconVideo } from '../icons'
 import { Avatar } from './Avatar'
@@ -63,7 +73,7 @@ import { ImageLightbox } from './ImageLightbox'
 // Name the mutually exclusive overlays so only one dialog is open at a time.
 type ChatOverlay =
   | { kind: 'none' }
-  | { kind: 'settings' }
+  | { kind: 'settings'; view: SettingsView }
   | { kind: 'more' }
   | { kind: 'message'; id: string }
   | { kind: 'export' }
@@ -123,6 +133,7 @@ export function ChatScreen() {
   // Hold the signed-in public profile used by the Settings form.
   const [myDisplayName, setMyDisplayName] = useState('')
   const [myBio, setMyBio] = useState('')
+  const [myEmail, setMyEmail] = useState('')
   const [myHasAvatar, setMyHasAvatar] = useState(false)
   // Bumped after an avatar upload or remove so every avatar image refetches.
   const [avatarRevision, setAvatarRevision] = useState(0)
@@ -189,6 +200,18 @@ export function ChatScreen() {
   const classifier = useScamClassifierPreference(session?.username)
   const userSearch = useUserSearch(peerInput, authorizedRequest, setErrorMessage)
 
+  // Drop one sidebar line in the same turn clear-chat empties the transcript.
+  const forgetPreview = useCallback((peerUsername: string) => {
+    setPreviews((existing) => {
+      if (!existing.has(peerUsername)) {
+        return existing
+      }
+      const next = new Map(existing)
+      next.delete(peerUsername)
+      return next
+    })
+  }, [])
+
   // Every hook must run unconditionally, on every render, per the Rules of Hooks —
   // including the one render where `session` flips back to null on logout, right
   // before AppRoutes swaps this screen back out for AuthScreen. useEncryptedConversation
@@ -224,6 +247,7 @@ export function ChatScreen() {
     setErrorMessage,
     classifier.generation,
     classifier.scoringCheckpointId,
+    forgetPreview,
   )
 
   useEffect(() => {
@@ -237,6 +261,7 @@ export function ChatScreen() {
         if (!cancelled) {
           setMyDisplayName(profile.displayName ?? '')
           setMyBio(profile.bio ?? '')
+          setMyEmail(profile.email)
           setMyHasAvatar(profile.hasAvatar)
         }
       })
@@ -279,13 +304,28 @@ export function ChatScreen() {
   }, [session?.username, activeChat?.conversationId, activeChat?.peerUsername, authorizedRequest.request])
 
   useEffect(() => {
-    if (!activeChat) {
+    // No open chat means the stored sidebar lines stay as they were loaded.
+    if (!session || !activeChat) {
       return
     }
+    const peer = activeChat.peerUsername
+    // The newest verified row is the sidebar snippet. An empty transcript is not.
     const last = [...messages].reverse().find(
       (row) => !row.verificationFailed && row.plaintext !== null,
     )
-    if (!last || last.plaintext === null) {
+    // While history is still loading, messages is empty on purpose. Do not wipe the line.
+    if (!last || last.plaintext === null || messages.length === 0) {
+      if (messages.length === 0 && !isConnecting) {
+        setPreviews((existing) => {
+          if (!existing.has(peer)) {
+            return existing
+          }
+          const next = new Map(existing)
+          next.delete(peer)
+          return next
+        })
+        void deleteLastMessagePreview(session.username, peer)
+      }
       return
     }
     const snippet = previewTextForMessage(
@@ -295,10 +335,10 @@ export function ChatScreen() {
     )
     setPreviews((existing) => {
       const next = new Map(existing)
-      next.set(activeChat.peerUsername, snippet)
+      next.set(peer, snippet)
       return next
     })
-  }, [messages, activeChat?.peerUsername])
+  }, [messages, activeChat, isConnecting, session])
 
   // Reload unread badges when this tab is focused or becomes visible again.
   useEffect(() => {
@@ -371,12 +411,50 @@ export function ChatScreen() {
     }
   }, [messages, requestImageHydrate, releaseDistantImage])
 
+  // Load this account's blocks for the Privacy page.
+  const loadBlocks = useCallback((): Promise<BlockedAccount[]> => {
+    return authorizedRequest.request((accessToken) => listBlocks(accessToken))
+  }, [authorizedRequest.request])
+
+  // Remove one block. The open chat's header updates when that peer is unblocked.
+  const unblockAccount = useCallback(
+    async (username: string) => {
+      await authorizedRequest.request((accessToken) => unblockUser(accessToken, username))
+      if (activeChat?.peerUsername === username) {
+        setPeerBlocked(false)
+      }
+    },
+    [authorizedRequest.request, activeChat?.peerUsername],
+  )
+
+  // Forget this device's previews, wallpapers, banner cache, and DistilBERT cache.
+  const clearDeviceData = useCallback(async () => {
+    await clearLastMessagePreviews()
+    clearAllConversationWallpapers()
+    clearAllBannerCaches()
+    await clearDistilbertCache()
+    setPreviews(new Map())
+    setWallpaperUrl(null)
+  }, [])
+
   // This screen is only ever rendered while a session exists (see App.tsx routing);
   // this guard covers the one intermediate render described above.
   if (!session) {
     return null
   }
   const currentSession = session
+  // The forward picker uses the same address book the sidebar renders.
+  const forwardTargets = contacts.filter((contact) => {
+    // Never offer to forward a photo to the signed-in account.
+    if (contact.username === currentSession.username) {
+      return false
+    }
+    // The open chat already has this photo.
+    if (activeChat && contact.username === activeChat.peerUsername) {
+      return false
+    }
+    return true
+  })
 
   // Save a handle on the server-side address book, then open that conversation.
   async function handleAddContact(event: FormEvent<HTMLFormElement>) {
@@ -715,6 +793,8 @@ export function ChatScreen() {
             className="user-avatar"
             initials={initialsFromUsername(currentSession.username)}
             reloadKey={avatarRevision}
+            pressLabel="Your profile"
+            onPress={() => setOverlay({ kind: 'settings', view: 'profile' })}
           />
           <div className="user-info">
             <div className="user-name">{myDisplayName.trim() || currentSession.username}</div>
@@ -733,7 +813,7 @@ export function ChatScreen() {
               type="button"
               className="icon-btn"
               aria-label="Settings"
-              onClick={() => setOverlay({ kind: 'settings' })}
+              onClick={() => setOverlay({ kind: 'settings', view: 'main' })}
             >
               <IconGear />
             </button>
@@ -1084,7 +1164,8 @@ export function ChatScreen() {
                                 openLightbox({
                                   src: message.attachment?.objectUrl ?? '',
                                   title: message.attachment?.name ?? 'Photo',
-                                  allowForward: true,
+                                  allowForward:
+                                    !message.pending && message.attachment?.failed !== true,
                                   messageId: message.id,
                                 })
                               }
@@ -1235,11 +1316,13 @@ export function ChatScreen() {
 
       {overlay.kind === 'settings' ? (
         <SettingsPanel
+          initialView={overlay.view}
           themePreference={themePreference}
           onThemePreferenceChange={handleThemePreferenceChange}
           onClose={() => setOverlay({ kind: 'none' })}
           onLogout={handleLogout}
           profileUsername={currentSession.username}
+          profileEmail={myEmail}
           profileAccessToken={currentSession.accessToken}
           profileDisplayName={myDisplayName}
           profileBio={myBio}
@@ -1248,6 +1331,9 @@ export function ChatScreen() {
           onSaveProfile={handleSaveProfile}
           onUploadAvatar={handleUploadAvatar}
           onRemoveAvatar={handleRemoveAvatar}
+          onLoadBlocks={loadBlocks}
+          onUnblock={unblockAccount}
+          onClearDeviceData={clearDeviceData}
           onViewAvatar={(src) =>
             openLightbox({
               src,
@@ -1299,7 +1385,8 @@ export function ChatScreen() {
         </Modal>
       ) : null}
 
-      {lightbox ? (
+      {/* Hide the full-screen photo while forwarding so the contact list is in front. */}
+      {lightbox && !forwardPickerOpen ? (
         <ImageLightbox
           src={lightbox.src}
           title={lightbox.title}
@@ -1317,22 +1404,29 @@ export function ChatScreen() {
             setForwardPeer(null)
           }}
         >
+          <img src={lightbox.src} alt="" className="forward-preview-image" />
           <p>Choose a contact. The photo is sealed again for that conversation.</p>
-          {contacts.filter((contact) => contact.username !== activeChat?.peerUsername).length === 0 ? (
+          {forwardTargets.length === 0 ? (
             <p>Add another contact before forwarding.</p>
           ) : (
-            contacts
-              .filter((contact) => contact.username !== activeChat?.peerUsername)
-              .map((contact) => (
-                <button
-                  key={contact.username}
-                  type="button"
-                  className="text-button"
-                  onClick={() => setForwardPeer(contact.username)}
-                >
-                  {contact.displayName?.trim() || contact.username}
-                </button>
-              ))
+            <ul className="forward-contact-list">
+              {forwardTargets.map((contact) => {
+                const displayName = contact.displayName?.trim() || contact.username
+                return (
+                  <li key={contact.username}>
+                    <button
+                      type="button"
+                      className="forward-contact"
+                      aria-label={`Forward to ${contact.username}`}
+                      onClick={() => setForwardPeer(contact.username)}
+                    >
+                      <span className="forward-contact-name">{displayName}</span>
+                      <span className="forward-contact-username">{contact.username}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
           )}
           {forwardPeer ? (
             <>

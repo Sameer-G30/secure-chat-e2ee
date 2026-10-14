@@ -19,6 +19,10 @@ export interface AvatarProps {
   reloadKey?: number
   // Called with the object URL when a large avatar is clicked. Omitted on small glyphs.
   onView?: (objectUrl: string) => void
+  // Called when this glyph is clicked, even if no photo is stored. Not a lightbox.
+  onPress?: () => void
+  // Accessible name for onPress. Defaults to a profile label.
+  pressLabel?: string
 }
 
 // Show a public avatar image when the account has one, otherwise a letter glyph.
@@ -29,6 +33,8 @@ export function Avatar({
   initials,
   reloadKey = 0,
   onView,
+  onPress,
+  pressLabel,
 }: AvatarProps) {
   // Hold the blob: URL created from the authenticated avatar response.
   const [objectUrl, setObjectUrl] = useState<string | null>(null)
@@ -59,6 +65,19 @@ export function Avatar({
       }
     }
   }, [username, accessToken, reloadKey])
+
+  if (onPress) {
+    return (
+      <button
+        type="button"
+        className={className}
+        aria-label={pressLabel ?? `Profile for ${username}`}
+        onClick={onPress}
+      >
+        {objectUrl ? <img src={objectUrl} alt="" className="avatar-image" /> : initials}
+      </button>
+    )
+  }
 
   if (objectUrl && onView) {
     return (

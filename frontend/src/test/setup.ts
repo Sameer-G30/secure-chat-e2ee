@@ -5,6 +5,8 @@ import '@testing-library/jest-dom/vitest'
 import 'fake-indexeddb/auto'
 // Import cleanup so each component test starts with an empty document.
 import { cleanup } from '@testing-library/react'
+// Import the session claim reset so one test's setSession cannot skip the next restore.
+import { resetInMemorySessionClaim } from '../context/sessionClaim'
 // Import Vitest's post-test lifecycle hook and module mock helper.
 import { afterEach, vi } from 'vitest'
 
@@ -52,10 +54,31 @@ vi.mock('onnxruntime-web/wasm', () => {
   }
 })
 
+// Delete one IndexedDB database and wait until the request settles.
+function deleteDatabase(name: string): Promise<void> {
+  // Resolve even on error so a missing database cannot hang the suite.
+  return new Promise((resolve) => {
+    const request = indexedDB.deleteDatabase(name)
+    request.onsuccess = () => {
+      resolve()
+    }
+    request.onerror = () => {
+      resolve()
+    }
+    request.onblocked = () => {
+      resolve()
+    }
+  })
+}
+
 // Remove rendered React trees after each independent test case.
-afterEach(() => {
+afterEach(async () => {
   // Unmount components and clear Testing Library's document containers.
   cleanup()
   // Drop last-message previews so ChatScreen tests cannot leak snippets across cases.
-  indexedDB.deleteDatabase('secure-chat-previews')
+  await deleteDatabase('secure-chat-previews')
+  // Drop a restorable session so the next test does not rotate a leftover refresh token.
+  await deleteDatabase('secure-chat-session')
+  // Let the next AuthProvider mount try restore instead of seeing a stale claim.
+  resetInMemorySessionClaim()
 })

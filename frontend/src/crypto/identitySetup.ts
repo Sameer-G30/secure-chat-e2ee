@@ -4,7 +4,7 @@ import { uploadMyPublicKey } from '../api/keysClient'
 import { decodeBase64, encodeBase64, generateIdentityKeyPair, initializeSodium } from './keyExchange'
 import type { IdentityKeyPair } from './keyExchange'
 // Import the local password-sealed vault this module reads and writes.
-import { hasSealedIdentity, sealIdentityKeyPair, unsealIdentityKeyPair } from './keyVault'
+import { hasSealedIdentity, readSealedPublicKey, sealIdentityKeyPair, unsealIdentityKeyPair } from './keyVault'
 
 // Describe the outcome of ensuring a usable local identity exists after login.
 export interface IdentitySetupResult {
@@ -77,6 +77,62 @@ export async function ensureIdentityKeys(
   const publicKeyBase64 = encodeBase64(keyPair.publicKey)
   await uploadMyPublicKey(accessToken, publicKeyBase64)
   return { publicKeyBase64, keyPair, generatedNewKeyPair: true }
+}
+
+// Compare two key byte strings without stopping at the first difference.
+function sameKeyBytes(left: Uint8Array, right: Uint8Array): boolean {
+  // Different lengths cannot be the same X25519 key.
+  if (left.length !== right.length) {
+    return false
+  }
+  // Accumulate mismatches so the loop does not leak a prefix length.
+  let diff = 0
+  // Walk every byte.
+  for (let index = 0; index < left.length; index += 1) {
+    // XOR is zero only when the bytes match.
+    diff |= left[index] ^ right[index]
+  }
+  // A zero accumulator means the keys are identical.
+  return diff === 0
+}
+
+// Decide whether a persisted unsealed keypair may be used without the password.
+//
+// This is the reload path. It does not unseal the vault (that needs the
+// password) and it does not generate a new identity. The same cases that
+// make ensureIdentityKeys throw IdentitySetupError clear the saved session.
+export async function assertSessionIdentity(
+  username: string,
+  keyPair: IdentityKeyPair,
+  accessToken: string,
+  hasPublicKeyOnServer: boolean,
+): Promise<void> {
+  // X25519 public and private keys are 32 bytes. Anything else is unusable.
+  if (keyPair.publicKey.length !== 32 || keyPair.privateKey.length !== 32) {
+    throw new IdentitySetupError(
+      `The saved identity for "${username}" is unusable. Log in again on this device.`,
+    )
+  }
+  // Read the vault's public half. Null means this browser has no sealed key.
+  const sealedPublic = await readSealedPublicKey(username)
+  // The server already has a public key and this browser has no matching vault.
+  if (hasPublicKeyOnServer && sealedPublic === null) {
+    throw new IdentitySetupError(
+      `No local key vault was found for "${username}" on this device. ` +
+        'Multi-device key recovery is not supported yet, so this browser cannot send or ' +
+        'receive end-to-end encrypted messages for this account until that ships.',
+    )
+  }
+  // The vault and the saved session disagree. Do not encrypt with the wrong key.
+  if (sealedPublic !== null && !sameKeyBytes(sealedPublic, keyPair.publicKey)) {
+    throw new IdentitySetupError(
+      `The saved identity for "${username}" does not match this device's key vault. Log in again.`,
+    )
+  }
+  // The server has no public key yet. Publish the saved public half.
+  if (!hasPublicKeyOnServer) {
+    await uploadMyPublicKey(accessToken, encodeBase64(keyPair.publicKey))
+  }
 }
 
 // Re-export decodeBase64 for callers that need to compare/parse a fetched peer key.

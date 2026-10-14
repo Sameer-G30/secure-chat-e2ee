@@ -132,6 +132,59 @@ export async function readAllLastMessagePreviews(
   return result
 }
 
+// Delete one peer's preview so a cleared chat does not keep the old sidebar line.
+export async function deleteLastMessagePreview(
+  username: string,
+  peerUsername: string,
+): Promise<void> {
+  // Skip storage when this tab is in the logout render.
+  if (!username || !peerUsername) {
+    return
+  }
+  // Open the preview database for this one delete.
+  const db = await openPreviewDb()
+  // Wait until the delete transaction commits.
+  await new Promise<void>((resolve, reject) => {
+    // Delete inside a readwrite transaction.
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    // Resolve after the transaction commits.
+    tx.oncomplete = () => {
+      resolve()
+    }
+    // Surface a delete failure so the caller can still clear the in-memory map.
+    tx.onerror = () => {
+      reject(tx.error ?? new Error('Could not delete preview.'))
+    }
+    // Remove the composite key for this owner and peer.
+    tx.objectStore(STORE_NAME).delete(previewStorageKey(username, peerUsername))
+  })
+  // Close the connection.
+  db.close()
+}
+
+// Erase every preview row on this device. Does not touch the key vault or messages.
+export async function clearLastMessagePreviews(): Promise<void> {
+  // Open the preview database.
+  const db = await openPreviewDb()
+  // Wait until the clear transaction commits.
+  await new Promise<void>((resolve, reject) => {
+    // Clear the whole store. Other accounts on this browser lose previews too.
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    // Resolve after the transaction commits.
+    tx.oncomplete = () => {
+      resolve()
+    }
+    // Surface a clear failure so Settings can show a short error.
+    tx.onerror = () => {
+      reject(tx.error ?? new Error('Could not clear previews.'))
+    }
+    // Drop every sidebar snippet stored on this device.
+    tx.objectStore(STORE_NAME).clear()
+  })
+  // Close the connection.
+  db.close()
+}
+
 // Build the sidebar snippet for a verified message, hiding image JSON from the list.
 export function previewTextForMessage(
   plaintext: string,

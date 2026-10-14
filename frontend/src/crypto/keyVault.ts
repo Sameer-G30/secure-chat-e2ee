@@ -29,10 +29,9 @@ async function loadSodium(): Promise<typeof SodiumSumo> {
 // Name the IndexedDB database and object store holding sealed identity keys.
 //
 // Only the *sealed* (password-encrypted) private key ever touches disk here.
-// The plaintext private key exists solely in JS memory for the lifetime of
-// one unlocked session and is never sent anywhere, matching the spec's
-// "private key must never be transmitted to, or stored on, the server —
-// in any form, temporarily or otherwise" requirement.
+// A separate IndexedDB database, secure-chat-session, keeps an unsealed copy
+// so a reload can skip the password. Logout deletes that copy. The server
+// still never receives the private key.
 const DATABASE_NAME = 'secure-chat-key-vault'
 const DATABASE_VERSION = 1
 const STORE_NAME = 'sealed-identity-keys'
@@ -200,6 +199,23 @@ export async function hasSealedIdentity(username: string): Promise<boolean> {
     store.get(username),
   )
   return record !== undefined
+}
+
+// Read the sealed record's public key without the password.
+//
+// Reload compares this to the unsealed session key. A mismatch means this
+// browser's vault and the restorable session are not the same identity.
+export async function readSealedPublicKey(username: string): Promise<Uint8Array | null> {
+  // Look up the sealed row. The private half stays encrypted.
+  const record = await withStore<SealedIdentityRecord | undefined>('readonly', (store) =>
+    store.get(username),
+  )
+  // No vault row means this device cannot prove it owns the server key.
+  if (!record) {
+    return null
+  }
+  // Copy the bytes so the caller cannot mutate the IndexedDB view.
+  return new Uint8Array(record.publicKey)
 }
 
 // Remove a locally sealed identity, e.g. on explicit "forget this device" actions.

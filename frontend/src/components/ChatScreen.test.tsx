@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 // Import React Testing Library's user-facing render, query, and async helpers.
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 // Import Vitest's grouping, assertion, and mocking helpers.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -148,6 +148,7 @@ import {
   deleteConversationMessage,
   fetchConversationEpoch,
   fetchConversationMessages,
+  fetchEncryptedBlob,
   hideAllConversationMessages,
   hideConversationMessage,
   startOrFetchConversation,
@@ -156,10 +157,11 @@ import {
 import { connectChatSocket } from '../api/chatSocket'
 import { addContact, deleteContact, listContacts } from '../api/contactsClient'
 import { searchUsers } from '../api/usersClient'
-import { blockUser, listBlocks } from '../api/blocksClient'
+import { blockUser, listBlocks, unblockUser } from '../api/blocksClient'
 import { reportUser } from '../api/reportsClient'
 import { classifyVerifiedPlaintext, ensureDistilbertDefault } from '../ml/scamClassifier'
 import { writeCachedBanner } from '../ml/scamBannerCache'
+import { readLastMessagePreview } from '../chat/lastMessagePreview'
 import { decryptMessage } from '../crypto/keyExchange'
 
 const mockedFetchPublicKey = vi.mocked(fetchPublicKey)
@@ -178,6 +180,8 @@ const mockedDeleteConversationMessage = vi.mocked(deleteConversationMessage)
 const mockedHideConversationMessage = vi.mocked(hideConversationMessage)
 const mockedHideAllConversationMessages = vi.mocked(hideAllConversationMessages)
 const mockedUploadEncryptedBlob = vi.mocked(uploadEncryptedBlob)
+const mockedFetchEncryptedBlob = vi.mocked(fetchEncryptedBlob)
+const mockedUnblockUser = vi.mocked(unblockUser)
 const mockedEnsureDistilbertDefault = vi.mocked(ensureDistilbertDefault)
 const mockedClassify = vi.mocked(classifyVerifiedPlaintext)
 
@@ -905,5 +909,213 @@ describe('ChatScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(mockedHideAllConversationMessages).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'hello from bob' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(contactPreview('bob')).toContain('hello from bob')
+    })
+    expect(await readLastMessagePreview('alice', 'bob')).not.toBeNull()
+  })
+
+  it('clears the sidebar preview after clear-chat is confirmed', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    capturedHandlers?.onEnvelope({
+      id: 'msg-clear',
+      conversationId,
+      senderId: bobId,
+      ciphertext: new Uint8Array(32).fill(1),
+      nonce: new Uint8Array(24).fill(2),
+      keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
+    })
+    await waitFor(() => {
+      expect(contactPreview('bob')).toContain('hello from bob')
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'More' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Clear chat for me' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear chat for me' }))
+    await waitFor(() => {
+      expect(mockedHideAllConversationMessages).toHaveBeenCalledWith(
+        'access-token',
+        conversationId,
+      )
+    })
+    await waitFor(() => {
+      expect(contactPreview('bob')).not.toContain('hello from bob')
+    })
+    expect(screen.queryByRole('button', { name: 'hello from bob' })).not.toBeInTheDocument()
+    expect(await readLastMessagePreview('alice', 'bob')).toBeNull()
+    expect(mockedDeleteConversationMessage).not.toHaveBeenCalled()
+  })
+
+  it('opens profile settings from the sidebar photo', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    fireEvent.click(screen.getByRole('button', { name: 'Your profile' }))
+    expect(screen.getByRole('heading', { name: 'Profile' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Display name')).toBeInTheDocument()
+    expect(screen.getByLabelText('Bio')).toBeInTheDocument()
+    expect(screen.getByText('Change photo')).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'System' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: /photo/i })).not.toBeInTheDocument()
+  })
+
+  it('shows privacy, account, storage, and help without a stub', async () => {
+    mockedListBlocks.mockResolvedValue([
+      { id: 'block-1', username: 'mallory', createdAt: '2026-08-14T00:00:00Z' },
+    ])
+    mockedUnblockUser.mockResolvedValue(undefined)
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    fireEvent.click(screen.getByRole('button', { name: /Presence, typing, blocks/ }))
+    expect(await screen.findByText(/presence, typing indicators, and profile photos/i)).toBeInTheDocument()
+    expect(screen.queryByText(/not implemented/i)).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: 'Unblock mallory' }))
+    await waitFor(() => {
+      expect(mockedUnblockUser).toHaveBeenCalledWith('access-token', 'mallory')
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Back to settings' }))
+    fireEvent.click(screen.getByRole('button', { name: /Username, email, logout/ }))
+    expect(await screen.findByText('Email: alice@example.com')).toBeInTheDocument()
+    expect(screen.getByText('Username: alice')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to settings' }))
+    fireEvent.click(screen.getByRole('button', { name: /Clear data on this device/ }))
+    expect(screen.getByText(/Chat photos stay sealed/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear data on this device' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to settings' }))
+    fireEvent.click(screen.getByRole('button', { name: /How encryption and clear-chat work/ }))
+    expect(screen.getByText(/stays signed in across a reload/)).toBeInTheDocument()
+    expect(screen.queryByText(/not implemented/i)).not.toBeInTheDocument()
+  })
+
+  it('forwards a photo to another listed contact and ignores the socket close', async () => {
+    const carolId = '00000000-0000-4000-8000-000000000004'
+    const carolConversationId = '00000000-0000-4000-8000-000000000099'
+    mockedListContacts.mockResolvedValue([
+      {
+        id: bobId,
+        username: 'bob',
+        createdAt: '2026-08-14T00:00:00Z',
+        displayName: 'Bob',
+        hasAvatar: false,
+        unreadCount: 0,
+      },
+      {
+        id: carolId,
+        username: 'carol',
+        createdAt: '2026-08-14T00:00:00Z',
+        displayName: 'Carol',
+        hasAvatar: false,
+        unreadCount: 0,
+      },
+    ])
+    renderChatScreen()
+    await screen.findByRole('button', { name: 'carol' })
+    await startChatWithBob()
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:photo')
+    let sourceBlob: { id: string; ciphertext: Uint8Array; nonce: Uint8Array } | null = null
+    mockedUploadEncryptedBlob.mockImplementation(async (_token, id, payload) => {
+      if (sourceBlob === null) {
+        sourceBlob = {
+          id: payload.id,
+          ciphertext: payload.ciphertext,
+          nonce: payload.nonce,
+        }
+      }
+      return {
+        id: payload.id,
+        conversationId: id,
+        ciphertext: payload.ciphertext,
+        nonce: payload.nonce,
+      }
+    })
+    const input = document.querySelector(
+      'input[accept="image/jpeg,image/png,image/webp,image/gif"]',
+    )
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [new File([png], 'photo.png', { type: 'image/png' })] },
+    })
+    await waitFor(() => {
+      expect(mockedUploadEncryptedBlob).toHaveBeenCalled()
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'photo.png' }))
+    expect(screen.queryByRole('button', { name: 'Forward' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close photo' }))
+    capturedHandlers?.onAccepted?.('server-img')
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'photo.png' }).closest('[data-pending]')).toHaveAttribute(
+        'data-pending',
+        'false',
+      )
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'photo.png' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Forward' }))
+    expect(screen.queryByRole('button', { name: 'Close photo' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Forward to carol' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Forward to bob' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Forward to alice' })).not.toBeInTheDocument()
+    const picker = screen.getByRole('dialog', { name: 'Forward photo' })
+    expect(within(picker).getByText('Carol')).toBeInTheDocument()
+    expect(within(picker).getByText('carol')).toBeInTheDocument()
+    mockedFetchEncryptedBlob.mockImplementation(async () => {
+      if (sourceBlob === null) {
+        throw new Error('missing source blob')
+      }
+      return {
+        id: sourceBlob.id,
+        conversationId,
+        ciphertext: sourceBlob.ciphertext,
+        nonce: sourceBlob.nonce,
+      }
+    })
+    mockedStartOrFetchConversation.mockImplementation(async (_token, username: string) => ({
+      id: username === 'carol' ? carolConversationId : conversationId,
+      currentEpoch: 0,
+      createdAt: '2026-08-14T00:00:00Z',
+      self: { id: aliceId, username: 'alice', publicKey: encodeBase64(aliceKeys.publicKey) },
+      peer: {
+        id: username === 'carol' ? carolId : bobId,
+        username,
+        publicKey: encodeBase64(bobKeys.publicKey),
+      },
+    }))
+    mockedConnectChatSocket.mockImplementation((_id, _token, handlers) => {
+      return {
+        sendEnvelope: (...args: unknown[]) => {
+          sendEnvelope(...args)
+          handlers.onAccepted?.('forwarded-row')
+        },
+        sendTyping,
+        sendReceipt,
+        close: () => {
+          closeSocket()
+          handlers.onClose(1000)
+        },
+        whenOpen: () => Promise.resolve(),
+      }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Forward to carol' }))
+    fireEvent.click(within(picker).getByRole('button', { name: 'Forward' }))
+    await waitFor(() => {
+      expect(screen.getByText('Photo forwarded.')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Could not forward that photo.')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'photo.png' })).toBeInTheDocument()
+    const uploads = mockedUploadEncryptedBlob.mock.calls
+    expect(uploads.length).toBeGreaterThanOrEqual(2)
+    expect(uploads[1]?.[1]).toBe(carolConversationId)
+    expect(uploads[1]?.[2].id).not.toBe(uploads[0]?.[2].id)
+    createObjectURL.mockRestore()
   })
 })
+
+function contactPreview(username: string): string {
+  const row = screen.getByRole('button', { name: username })
+  return row.querySelector('.contact-preview')?.textContent ?? ''
+}

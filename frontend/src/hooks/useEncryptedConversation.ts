@@ -68,7 +68,11 @@ import {
   imageHeaderMatchesDeclaredType,
   readQrPayload,
 } from '../chat/imageHygiene'
-import { previewTextForMessage, writeLastMessagePreview } from '../chat/lastMessagePreview'
+import {
+  deleteLastMessagePreview,
+  previewTextForMessage,
+  writeLastMessagePreview,
+} from '../chat/lastMessagePreview'
 
 // Describe delivery ticks the sender's bubble shows after the peer acks metadata.
 export type DeliveryStatus = 'pending' | 'sent' | 'delivered' | 'read'
@@ -209,6 +213,8 @@ export function useEncryptedConversation(
   classifierGeneration: number = 0,
   // Catalog id for cache hits (DistilBERT default while the graph is still loading).
   scoringCheckpointId: CheckpointId = DISTILBERT_OPT_IN_ID,
+  // Drop the sidebar preview in the same turn the transcript is cleared.
+  onLocalTranscriptCleared: (peerUsername: string) => void = () => {},
 ): EncryptedConversationApi {
   const [isConnecting, setIsConnecting] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -276,6 +282,9 @@ export function useEncryptedConversation(
   scoringCheckpointRef.current = scoringCheckpointId
   // Keep the session ref current for forward, which runs after awaits.
   sessionRef.current = session
+  // Keep the clear-chat callback current so the sidebar map updates with setMessages.
+  const onLocalTranscriptClearedRef = useRef(onLocalTranscriptCleared)
+  onLocalTranscriptClearedRef.current = onLocalTranscriptCleared
 
   // Mirror active chat into the ref whenever React state changes.
   useEffect(() => {
@@ -1384,10 +1393,17 @@ export function useEncryptedConversation(
       const source = activeChatRef.current
       const currentSession = sessionRef.current
       const row = messagesRef.current.find((message) => message.id === messageId)
-      if (!source || !currentSession || !row?.attachment || !row.plaintext || row.attachment.failed) {
-        return
-      }
-      if (row.verificationFailed) {
+      // Pending and failed bubbles are not forwardable. The photo needs an object URL.
+      if (
+        !source ||
+        !currentSession ||
+        !row?.attachment ||
+        !row.plaintext ||
+        row.verificationFailed ||
+        row.pending ||
+        row.attachment.failed ||
+        !row.attachment.objectUrl
+      ) {
         return
       }
       const payload = parseImageAttachmentPayload(row.plaintext)
@@ -1444,13 +1460,29 @@ export function useEncryptedConversation(
           revision: 0,
         })
         await new Promise<void>((resolve, reject) => {
+          // True after the promise has already resolved or rejected.
           let settled = false
+          // True once the server has accepted this new envelope.
+          let acceptedByServer = false
+          // Timer id for the send deadline.
           let timer = 0
+          // The second socket. It is not the open chat's socket.
           let forwardSocket: ChatSocket | null = null
+          // Finish the send. A close after accept must not reject.
           const finish = (error?: Error) => {
+            // Ignore a late close once the outcome is already chosen.
             if (settled) {
               return
             }
+            // The server already accepted. Closing this socket is success.
+            if (acceptedByServer) {
+              settled = true
+              window.clearTimeout(timer)
+              forwardSocket?.close()
+              resolve()
+              return
+            }
+            // Record the outcome before close() can re-enter this function.
             settled = true
             window.clearTimeout(timer)
             forwardSocket?.close()
@@ -1460,6 +1492,7 @@ export function useEncryptedConversation(
             }
             resolve()
           }
+          // Give up if the destination socket never acks.
           timer = window.setTimeout(() => {
             finish(new Error('Could not forward that photo.'))
           }, 15000)
@@ -1468,12 +1501,19 @@ export function useEncryptedConversation(
               // A forward socket does not render the destination transcript.
             },
             onAccepted: () => {
+              // Set this before close so the socket's own close is not a failure.
+              acceptedByServer = true
               finish()
             },
             onProtocolError: (detail) => {
               finish(new Error(detail))
             },
             onClose: () => {
+              // Normal close after accept resolves. Close before accept fails the send.
+              if (acceptedByServer) {
+                finish()
+                return
+              }
               finish(new Error('Could not forward that photo.'))
             },
           })
@@ -1497,9 +1537,21 @@ export function useEncryptedConversation(
       if (!current) {
         return
       }
+      // Hide every envelope for this account. The peer's copy stays on the server.
       await authorizedRequest.request((accessToken) =>
         hideAllConversationMessages(accessToken, current.conversationId),
       )
+      // Drop the sidebar snippet for this peer. A failed delete still clears the map.
+      const username = usernameRef.current
+      if (username) {
+        try {
+          await deleteLastMessagePreview(username, current.peerUsername)
+        } catch {
+          // The ChatScreen effect retries when the transcript is empty.
+        }
+      }
+      // Remove the in-memory preview in the same turn as the empty transcript.
+      onLocalTranscriptClearedRef.current(current.peerUsername)
       pendingSendQueueRef.current = []
       acceptedIdsRef.current = new Map()
       revokeAllAttachments(messagesRef.current)

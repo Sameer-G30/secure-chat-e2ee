@@ -2701,7 +2701,7 @@ button.search-result-item {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    padding: 16px 24px 32px;
+    padding: 20px 26px 32px;
 }
 
 .profile-form input,
@@ -2828,6 +2828,115 @@ button.contact-profile-avatar,
 button.user-avatar {
     border: 0;
     padding: 0;
+    cursor: pointer;
+    font: inherit;
+}
+
+button.contact-profile-avatar {
     background: none;
     cursor: zoom-in;
+}
+
+.settings-page {
+    padding: 18px 26px 32px;
+}
+
+.settings-page h3 {
+    margin: 18px 0 6px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.settings-page h3:first-child {
+    margin-top: 0;
+}
+
+.settings-page .settings-account-line,
+.settings-page .settings-block-list {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.settings-page .settings-item {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.settings-page .primary-button {
+    margin-top: 8px;
+}
+
+.settings-copy {
+    margin: 0 0 12px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.settings-block-list {
+    list-style: none;
+    margin: 0;
+    padding: 0 26px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-block-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.settings-account-line {
+    margin: 0 0 8px;
+    padding: 0 26px;
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.forward-preview-image {
+    display: block;
+    width: 100%;
+    max-height: 180px;
+    object-fit: contain;
+    margin: 0 0 14px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+}
+
+.forward-contact-list {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0;
+    max-height: 240px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.forward-contact {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+}
+
+.forward-contact-name {
+    font-weight: 600;
+}
+
+.forward-contact-username {
+    color: var(--text-muted);
+    font-size: 13px;
 }

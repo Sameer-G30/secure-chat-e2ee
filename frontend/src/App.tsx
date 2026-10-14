@@ -14,7 +14,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 // the live encrypted conversation UI rather than a placeholder.
 function AppRoutes() {
   // Call useAuth on every render so the hook order stays stable (load-check included).
-  const { session } = useAuth()
+  const { session, sessionReady } = useAuth()
   // Optional DistilBERT-default load check. It does not load TF-IDF or the word BiLSTM.
   const isLoadCheck = new URLSearchParams(window.location.search).get('mlLoadCheck') === '1'
   // Keep the load-check unauthenticated so WASM measurement does not need two accounts.
@@ -22,7 +22,17 @@ function AppRoutes() {
     // Render the one-model page instead of AuthScreen/ChatScreen.
     return <MlLoadCheckScreen />
   }
-  // ChatScreen requires an in-memory session; AuthScreen is shown otherwise.
+  // Do not flash AuthScreen while IndexedDB restore is still rotating the refresh token.
+  if (!sessionReady) {
+    return (
+      <main className="auth-screen">
+        <p className="chat-status" role="status">
+          Restoring session…
+        </p>
+      </main>
+    )
+  }
+  // A restored or fresh session opens ChatScreen. Logout is what returns to AuthScreen.
   return session ? <ChatScreen /> : <AuthScreen />
 }
 
