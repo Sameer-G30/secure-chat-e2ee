@@ -1610,6 +1610,13 @@ body {
     margin: 0;
 }
 
+.modal-body p.message-link-confirm-url {
+    margin-top: 12px;
+    word-break: break-all;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+}
+
 .modal-body label {
     display: block;
     font-size: 12px;
@@ -2340,6 +2347,24 @@ button.message.failed {
     border: 1px solid rgba(176, 65, 62, 0.25);
 }
 
+/* Link bubbles are a div so an anchor can sit in the same line as the surrounding words. */
+.message-with-links {
+    cursor: pointer;
+}
+
+/* The URL itself is the click target. Surrounding words still open message actions. */
+.message-link {
+    color: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    word-break: break-all;
+}
+
+.settings-model-heading {
+    padding: 8px 26px 0;
+}
+
 /* Let each transcript row stretch full width so sent bubbles can sit on the right. */
 .message-wrapper {
     display: flex;
@@ -2939,4 +2964,12 @@ button.contact-profile-avatar {
 .forward-contact-username {
     color: var(--text-muted);
     font-size: 13px;
+}
+
+/* Safety number: monospace digit groups that are easy to compare. */
+.safety-number {
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0.05em;
+    word-spacing: 0.4em;
+    word-break: break-word;
 }

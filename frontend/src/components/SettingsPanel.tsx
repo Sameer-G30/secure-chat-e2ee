@@ -7,6 +7,8 @@ import { useEffect, useState } from 'react'
 import { Modal } from './Modal'
 // Import the stored preference type the theme hook already understands.
 import type { ThemePreference } from '../theme'
+// Import the two on-device scam models Settings can keep resident.
+import type { BrowserScamModelId } from '../ml/types'
 // Import the block row the Privacy page lists and unblocks.
 import type { BlockedAccount } from '../api/blocksClient'
 // Import the avatar glyph used on the working profile form.
@@ -58,6 +60,10 @@ export interface SettingsPanelProps {
   onClearDeviceData: () => Promise<void>
   // Open the public photo in the shared lightbox. There is no forward action.
   onViewAvatar: (objectUrl: string) => void
+  // The on-device model this account has selected.
+  scamModel: BrowserScamModelId
+  // Unload the current graph and load this one.
+  onScamModelChange: (modelId: BrowserScamModelId) => void
 }
 
 // Name the three theme choices with labels the Settings panel displays.
@@ -65,6 +71,20 @@ const THEME_OPTIONS: Array<{ value: ThemePreference; label: string; preview: str
   { value: 'light', label: 'Light', preview: 'light-preview' },
   { value: 'dark', label: 'Dark', preview: 'dark-preview' },
   { value: 'system', label: 'System', preview: 'system-preview' },
+]
+
+// The two graphs the chat will load, one at a time.
+const SCAM_MODEL_OPTIONS: Array<{ id: BrowserScamModelId; label: string; desc: string }> = [
+  {
+    id: 'distilbert_student',
+    label: 'MiniLM student',
+    desc: 'Default. Smaller model, 128 tokens.',
+  },
+  {
+    id: 'distilbert_best',
+    label: 'DistilBERT best',
+    desc: 'Larger model, 512 tokens.',
+  },
 ]
 
 // Name the nested rows. Each one has a real page below.
@@ -120,6 +140,8 @@ export function SettingsPanel({
   onUnblock,
   onClearDeviceData,
   onViewAvatar,
+  scamModel,
+  onScamModelChange,
 }: SettingsPanelProps) {
   // Hold which slide is visible. The sidebar photo passes profile as the initial view.
   const [view, setView] = useState<SettingsView>(initialView)
@@ -232,6 +254,35 @@ export function SettingsPanel({
                         <div className="theme-preview-body" />
                       </div>
                       <div className="theme-option-label">{option.label}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div className="settings-divider" />
+              <div className="settings-model-heading">
+                <div className="settings-item-title">Scam detection</div>
+                <div className="settings-item-desc">
+                  On this device only. Switching unloads the current model.
+                </div>
+              </div>
+              <div className="chat-settings-theme" role="radiogroup" aria-label="Scam detection model">
+                {SCAM_MODEL_OPTIONS.map((option) => (
+                  <label
+                    key={option.id}
+                    className={scamModel === option.id ? 'theme-option active' : 'theme-option'}
+                  >
+                    <input
+                      type="radio"
+                      name="scam-model"
+                      value={option.id}
+                      checked={scamModel === option.id}
+                      aria-label={option.label}
+                      onChange={() => onScamModelChange(option.id)}
+                    />
+                    <div>
+                      <div className="theme-option-label">{option.label}</div>
+                      <div className="settings-item-desc">{option.desc}</div>
                     </div>
                   </label>
                 ))}
@@ -440,8 +491,10 @@ export function SettingsPanel({
                   </p>
                   <h3>On-device scam banner</h3>
                   <p className="settings-copy">
-                    After a message decrypts, this browser scores it with DistilBERT. The
-                    score stays on this device. A banner does not block or delete the message.
+                    After a message decrypts, this browser scores it with the model selected
+                    in Settings (MiniLM student by default, or DistilBERT best). Only one model
+                    is loaded. The score stays on this device. A banner does not block or delete
+                    the message. A link in a flagged message asks before it opens.
                   </p>
                   <h3>Clear chat and delete</h3>
                   <p className="settings-copy">

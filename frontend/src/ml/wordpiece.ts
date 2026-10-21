@@ -20,7 +20,7 @@ export interface WordpieceVocab {
   pad_id: number
   // DistilBERT-base is uncased.
   do_lower_case: boolean
-  // Truncation length for this checkpoint (256 or 512).
+  // Truncation length from the loaded sidecar (student 128, default 256, best 512).
   max_length: number
   // HuggingFace WordPiece limit; longer tokens become UNK.
   max_input_chars_per_word: number
@@ -280,6 +280,8 @@ export function encodeWordpiece(
   text: string,
   vocab: WordpieceVocab,
   tokenToId: Map<string, number>,
+  // Which end to keep when the text exceeds max_length (default: keep the tail).
+  truncate: 'head' | 'tail' = 'tail',
 ): WordpieceEncoding {
   // Run BasicTokenizer with the sidecar's lowercasing flag.
   const basic = basicTokenize(text, vocab.do_lower_case)
@@ -297,17 +299,18 @@ export function encodeWordpiece(
     // Append subwords before the final [SEP].
     pieces.push(...sub)
   }
-  // Append the separator token.
-  pieces.push(vocab.sep_token)
-  // Truncate to max_length, keeping [CLS] and forcing [SEP] at the end.
-  const maxLength = vocab.max_length
-  // HuggingFace truncates then ensures special tokens still fit.
-  if (pieces.length > maxLength) {
-    // Keep max_length - 1 tokens then force [SEP] as the last id.
-    pieces.length = maxLength - 1
-    // Restore the separator that truncation may have dropped.
-    pieces.push(vocab.sep_token)
-  }
+  // Body pieces exclude the leading [CLS]; [SEP] is appended after truncation.
+  const body = pieces.slice(1)
+  // Room for the body once [CLS] and [SEP] are reserved.
+  const room = Math.max(0, vocab.max_length - 2)
+  // Tail truncation keeps the END of the text. The scoring window puts the current
+  // message last, so head truncation would drop exactly the message being scored.
+  // 'head' reproduces the HuggingFace training-time behaviour for single messages.
+  const kept =
+    body.length <= room ? body : truncate === 'tail' ? body.slice(body.length - room) : body.slice(0, room)
+  // Rebuild as [CLS] + kept + [SEP].
+  pieces.length = 0
+  pieces.push(vocab.cls_token, ...kept, vocab.sep_token)
   // Map pieces to ids; unknown strings become unk_id.
   const inputIds = pieces.map((piece) => tokenToId.get(piece) ?? vocab.unk_id)
   // Attention mask is 1 for every real token; the ONNX graph has a dynamic sequence axis.

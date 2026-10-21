@@ -19,6 +19,7 @@ import {
   HISTORY_PAGE_SIZE,
   deleteConversationMessage,
   fetchConversationEpoch,
+  fetchWebSocketTicket,
   fetchConversationMessages,
   fetchEncryptedBlob,
   hideAllConversationMessages,
@@ -42,9 +43,12 @@ import {
   initializeSodium,
 } from '../crypto/keyExchange'
 import type { DirectionalSessionKeys } from '../crypto/keyExchange'
+// TOFU pinning and safety-number helpers.
+import { acceptPeerKey, checkPeerKey, computeSafetyNumber } from '../crypto/peerKeyPins'
 import type { CheckpointId, ClassifyResult } from '../ml/types'
 import { DISTILBERT_OPT_IN_ID } from '../ml/types'
 import {
+  applyBenignLinkBannerPolicy,
   buildConversationScoringText,
   isTrivialShortNoUrl,
 } from '../ml/conversationContext'
@@ -67,6 +71,7 @@ import {
   displayBlobForVerifiedImage,
   imageHeaderMatchesDeclaredType,
   readQrPayload,
+  sanitizeImageForSend,
 } from '../chat/imageHygiene'
 import {
   deleteLastMessagePreview,
@@ -141,6 +146,14 @@ export interface ActiveChat {
 
 // Describe what this hook hands back to ChatScreen.
 export interface EncryptedConversationApi {
+  // Safety number for the open chat (identical on both peers), or null when none is open.
+  safetyNumber: string | null
+  // Set when the directory served a different key than the pinned one; sending stays blocked.
+  peerKeyChange: { peerUsername: string; safetyNumber: string } | null
+  // Accept the new key, re-pin it, and open the chat.
+  trustPeerKeyChange: () => Promise<void>
+  // Dismiss the key-change warning without opening the chat.
+  dismissPeerKeyChange: () => void
   activeChat: ActiveChat | null
   messages: ChatMessage[]
   draft: string
@@ -215,6 +228,8 @@ export function useEncryptedConversation(
   scoringCheckpointId: CheckpointId = DISTILBERT_OPT_IN_ID,
   // Drop the sidebar preview in the same turn the transcript is cleared.
   onLocalTranscriptCleared: (peerUsername: string) => void = () => {},
+  // True when the chosen graph failed to load. Visible banners stay off.
+  classifierLoadFailed: boolean = false,
 ): EncryptedConversationApi {
   const [isConnecting, setIsConnecting] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -222,6 +237,17 @@ export function useEncryptedConversation(
   const [activeChat, setActiveChat] = useState<ActiveChat | null>(null)
   const [peerOnline, setPeerOnline] = useState(false)
   const [peerTyping, setPeerTyping] = useState(false)
+  // Safety number of the open chat for the contact-info panel.
+  const [safetyNumber, setSafetyNumber] = useState<string | null>(null)
+  // Pending key-change warning (chat is not opened until the user trusts the new key).
+  const [peerKeyChange, setPeerKeyChange] = useState<{
+    peerUsername: string
+    safetyNumber: string
+  } | null>(null)
+  // Count consecutive reconnect attempts for exponential backoff.
+  const reconnectAttemptRef = useRef(0)
+  // Remember the base64 key awaiting acceptance so trustPeerKeyChange can pin it.
+  const pendingKeyRef = useRef<string | null>(null)
 
   // Keep the live socket off React state so reconnects do not re-render on every frame.
   const socketRef = useRef<ChatSocket | null>(null)
@@ -360,12 +386,17 @@ export function useEncryptedConversation(
     }
     // Read last session's decision for this catalog id.
     const warned = cachedWarning(row.id, row.revision)
-    // Cache miss: keep whatever the caller set (usually false) until classify returns.
-    if (warned === null) {
-      // New or edited plaintext still needs the ready model.
-      return row
+    // Own sends never show a banner, including a warning cached before this rule.
+    if (row.direction !== 'received') {
+      // Clear a stale flag so a sent bubble stays plain.
+      return row.scamWarning ? { ...row, scamWarning: false } : row
     }
-    // Reload path: show the banner immediately.
+    // Cache miss: do not keep a banner produced by a different graph.
+    if (warned === null) {
+      // A fresh row is already unwarned. A switch clears the previous graph's banner.
+      return row.scamWarning ? { ...row, scamWarning: false } : row
+    }
+    // Reload path: show the banner immediately on a received bubble.
     return { ...row, scamWarning: warned }
   }
 
@@ -410,7 +441,7 @@ export function useEncryptedConversation(
     )
   }
 
-  // Classify verified plaintext locally, using the last 5–8 turns as context.
+  // Classify verified plaintext locally, using the last 3 turns as context.
   // Banners may turn on *or* off when the model changes.
   function classifyAndFlag(
     messageId: string,
@@ -443,8 +474,12 @@ export function useEncryptedConversation(
           // Cache misses are classified when classifierGeneration bumps after load.
           return
         }
+        // A lone well-known link does not banner unless the window around it is a scam pattern.
+        const adjusted = applyBenignLinkBannerPolicy(result, plaintext, scoringText)
+        // Banners are for messages the peer sent. This account's own bubbles stay clear.
+        const warned = direction === 'received' && adjusted.warned
         // Remember and paint the ready model's decision for this bubble.
-        persistBannerDecision(messageId, revision, result.checkpointId, result.warned)
+        persistBannerDecision(messageId, revision, adjusted.checkpointId, warned)
       })
       .catch(() => {
         // Classification is non-blocking; a thrown WASM error must not surface as an unhandled rejection.
@@ -455,6 +490,15 @@ export function useEncryptedConversation(
   useEffect(() => {
     // Invalidate in-flight scores from the previous model.
     classifySeqRef.current += 1
+    // A failed graph must not keep the previous model's banners on screen.
+    if (classifierLoadFailed) {
+      // Clear every visible banner. Chat itself stays usable.
+      setMessages((existing) =>
+        existing.map((row) => (row.scamWarning ? { ...row, scamWarning: false } : row)),
+      )
+      // Do not score until a later successful load.
+      return
+    }
     // Apply cached banners for the new checkpoint (reload / toggle) without WASM.
     setMessages((existing) => existing.map((row) => applyCachedBanner(row)))
     // Walk the loaded page only. Do not fetch older pages just to score them.
@@ -477,11 +521,18 @@ export function useEncryptedConversation(
         }
         // This payload has been scored. Reopening uses the cache and skips jsQR.
         pendingQrRef.current.delete(messageId)
-        persistBannerDecision(messageId, job.revision, result.checkpointId, result.warned)
+        // A QR inside a photo this account sent does not raise a banner.
+        const qrDirection = messagesRef.current.find((row) => row.id === messageId)?.direction
+        persistBannerDecision(
+          messageId,
+          job.revision,
+          result.checkpointId,
+          qrDirection === 'received' && result.warned,
+        )
       })
     }
-    // classifierGeneration / scoringCheckpointId are the triggers; classifyAndFlag reads refs.
-  }, [classifierGeneration, scoringCheckpointId])
+    // classifierGeneration / scoringCheckpointId / failure are the triggers; classifyAndFlag reads refs.
+  }, [classifierGeneration, scoringCheckpointId, classifierLoadFailed])
 
   // Decrypt one envelope with the matching directional key, or record a verification failure.
   function decryptEnvelope(envelope: RelayedEnvelope, current: ActiveChat): ChatMessage {
@@ -794,6 +845,21 @@ export function useEncryptedConversation(
       // A duplicate delivery, or an edit arriving out of order; keep what we have.
       return
     }
+    // Replay guard: a malicious relay could re-store the same ciphertext under a new row id.
+    // The (sender, clientMessageId, revision) triple is authenticated inside the AEAD tag,
+    // so a repeat of one we already hold is dropped regardless of the server-assigned id.
+    if (
+      envelope.messageId !== null &&
+      messagesRef.current.some(
+        (message) =>
+          message.direction === 'received' &&
+          message.clientMessageId === envelope.messageId &&
+          message.id !== envelope.id &&
+          message.revision >= envelope.revision,
+      )
+    ) {
+      return
+    }
     const row = decryptEnvelope(envelope, current)
     setMessages((existing) => {
       const index = existing.findIndex((message) => message.id === envelope.id)
@@ -908,8 +974,8 @@ export function useEncryptedConversation(
   // Open (or re-open) the ciphertext relay socket for one conversation, wiring every
   // callback this screen reacts to. Shared by the initial connect in openConversation
   // and by the auth-expiry reconnect in handleSocketClose so both paths stay identical.
-  function openSocketForConversation(conversationId: string, accessToken: string): ChatSocket {
-    return connectChatSocket(conversationId, accessToken, {
+  function openSocketForConversation(conversationId: string, ticket: string): ChatSocket {
+    return connectChatSocket(conversationId, ticket, {
       onEnvelope: handleIncomingEnvelope,
       onAccepted: handleAccepted,
       onReceipt: handleReceipt,
@@ -944,6 +1010,21 @@ export function useEncryptedConversation(
   // Recover by refreshing the token pair once and reopening the same conversation's
   // socket, so a long-lived chat tab does not silently go "disconnected" every time
   // the access token's 15-minute lifetime elapses.
+  // Fetch a fresh ticket and reopen the socket; a failure schedules the next backoff step.
+  async function reconnectSocket(conversationId: string) {
+    try {
+      const ticket = await authorizedRequest.request((accessToken) =>
+        fetchWebSocketTicket(accessToken, conversationId),
+      )
+      socketRef.current = openSocketForConversation(conversationId, ticket)
+      reconnectAttemptRef.current = 0
+      setStatusMessage('Reconnected to the encrypted relay.')
+    } catch {
+      // Re-enter the close path with a synthetic abnormal code to continue the backoff.
+      void handleSocketClose(conversationId, 1006)
+    }
+  }
+
   async function handleSocketClose(conversationId: string, code: number) {
     // A contact switch or logout may have already torn this socket down on purpose;
     // only reconnect if this is still the conversation the user is looking at.
@@ -954,11 +1035,25 @@ export function useEncryptedConversation(
       setStatusMessage('Disconnected from the encrypted relay.')
       setPeerOnline(false)
       setPeerTyping(false)
+      // Network drops and relay restarts: retry with exponential backoff (1s, 2s, 4s ... 30s).
+      // 4403 (forbidden) is a policy answer, not an outage, so it is never retried.
+      if (code !== 4403 && reconnectAttemptRef.current < 6) {
+        const delay = Math.min(30000, 1000 * 2 ** reconnectAttemptRef.current)
+        reconnectAttemptRef.current += 1
+        window.setTimeout(() => {
+          // Only reconnect if the user is still looking at this conversation.
+          if (activeChatRef.current?.conversationId !== conversationId) {
+            return
+          }
+          void reconnectSocket(conversationId)
+        }, delay)
+      }
       return
     }
     try {
       const rotated = await authorizedRequest.refreshAndRotate()
-      socketRef.current = openSocketForConversation(conversationId, rotated.accessToken)
+      const ticket = await fetchWebSocketTicket(rotated.accessToken, conversationId)
+      socketRef.current = openSocketForConversation(conversationId, ticket)
       setStatusMessage('Reconnected to the encrypted relay.')
     } catch {
       // A failed refresh here means the session is genuinely over; match the
@@ -970,6 +1065,26 @@ export function useEncryptedConversation(
   }
 
   // Look up the peer, derive session keys, load scoped history, and open the ciphertext relay.
+  // Accept a changed peer key: re-pin it and reopen the chat.
+  async function trustPeerKeyChange() {
+    const pending = pendingKeyRef.current
+    const change = peerKeyChange
+    const currentSession = session
+    if (!pending || !change || !currentSession) {
+      return
+    }
+    await acceptPeerKey(currentSession.username, change.peerUsername, pending)
+    pendingKeyRef.current = null
+    setPeerKeyChange(null)
+    await openConversation(change.peerUsername)
+  }
+
+  // Drop the warning and leave the chat closed.
+  function dismissPeerKeyChange() {
+    pendingKeyRef.current = null
+    setPeerKeyChange(null)
+  }
+
   async function openConversation(peerUsername: string) {
     if (!session) {
       // See the hook-level comment above: ChatScreen never actually calls this while
@@ -1011,9 +1126,31 @@ export function useEncryptedConversation(
       const epoch = await authorizedRequest.request((accessToken) =>
         fetchConversationEpoch(accessToken, conversation.id),
       )
+      // TOFU check: block the chat when the directory serves a different key than the pin.
+      const peerPublicKeyBytes = decodeBase64(peerKey.publicKey)
+      const computedSafetyNumber = computeSafetyNumber(
+        { username: currentSession.username, publicKey: currentSession.identityKeyPair.publicKey },
+        { username: peerKey.username, publicKey: peerPublicKeyBytes },
+      )
+      const pinStatus = await checkPeerKey(
+        currentSession.username,
+        peerKey.username,
+        peerKey.publicKey,
+      )
+      if (pinStatus === 'changed') {
+        // Hold the new key until the user explicitly accepts it.
+        pendingKeyRef.current = peerKey.publicKey
+        setPeerKeyChange({ peerUsername, safetyNumber: computedSafetyNumber })
+        setErrorMessage(
+          `${peerUsername}'s security key changed. Verify the new safety number before chatting.`,
+        )
+        setStatusMessage('Add a contact to start an encrypted chat.')
+        return
+      }
+      setSafetyNumber(computedSafetyNumber)
       const sessionKeys = deriveSessionKeys(
         { keys: currentSession.identityKeyPair, username: currentSession.username },
-        { publicKey: decodeBase64(peerKey.publicKey), username: peerKey.username },
+        { publicKey: peerPublicKeyBytes, username: peerKey.username },
       )
       const nextChat: ActiveChat = {
         conversationId: conversation.id,
@@ -1039,7 +1176,10 @@ export function useEncryptedConversation(
           classifyAndFlag(row.id, row.plaintext, row.revision, row.direction, hydrated)
         }
       }
-      socketRef.current = openSocketForConversation(conversation.id, currentSession.accessToken)
+      const wsTicket = await authorizedRequest.request((accessToken) =>
+        fetchWebSocketTicket(accessToken, conversation.id),
+      )
+      socketRef.current = openSocketForConversation(conversation.id, wsTicket)
       const receivedIds = hydrated
         .filter((row) => row.direction === 'received')
         .map((row) => row.id)
@@ -1137,7 +1277,12 @@ export function useEncryptedConversation(
     try {
       assertAttachableImage(file)
       const blobId = crypto.randomUUID()
-      const fileBytes = new Uint8Array(await file.arrayBuffer())
+      // Strip EXIF/GPS and container metadata BEFORE sealing so the peer never receives it.
+      const cleaned = await sanitizeImageForSend(
+        new Uint8Array(await file.arrayBuffer()),
+        file.type,
+      )
+      const fileBytes = cleaned.bytes
       const sealed = await sealImageBytes(fileBytes, current.conversationId, blobId)
       await authorizedRequest.request((accessToken) =>
         uploadEncryptedBlob(accessToken, current.conversationId, {
@@ -1149,7 +1294,7 @@ export function useEncryptedConversation(
       const plaintext = serializeImageAttachmentPayload({
         blobId,
         fileKey: encodeBase64(sealed.fileKey),
-        mime: file.type,
+        mime: cleaned.mime,
         name: file.name,
       })
       const clientMessageId = crypto.randomUUID()
@@ -1326,6 +1471,10 @@ export function useEncryptedConversation(
   }
 
   return {
+    safetyNumber,
+    peerKeyChange,
+    trustPeerKeyChange,
+    dismissPeerKeyChange,
     activeChat,
     messages,
     draft,
@@ -1459,6 +1608,10 @@ export function useEncryptedConversation(
           messageId: clientMessageId,
           revision: 0,
         })
+        // Single-use ticket for the destination socket (keeps the JWT out of the URL).
+        const forwardTicket = await authorizedRequest.request((accessToken) =>
+          fetchWebSocketTicket(accessToken, destination.id),
+        )
         await new Promise<void>((resolve, reject) => {
           // True after the promise has already resolved or rejected.
           let settled = false
@@ -1496,7 +1649,7 @@ export function useEncryptedConversation(
           timer = window.setTimeout(() => {
             finish(new Error('Could not forward that photo.'))
           }, 15000)
-          forwardSocket = connectChatSocket(destination.id, currentSession.accessToken, {
+          forwardSocket = connectChatSocket(destination.id, forwardTicket, {
             onEnvelope: () => {
               // A forward socket does not render the destination transcript.
             },

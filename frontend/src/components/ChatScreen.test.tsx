@@ -22,6 +22,7 @@ import type { ChatSocketHandlers, RelayedEnvelope } from '../api/chatSocket'
 // Mock on-device classification so ChatScreen tests never load ORT Web.
 vi.mock('../ml/scamClassifier', () => ({
   ensureDistilbertDefault: vi.fn(async () => {}),
+  ensureScamModel: vi.fn(async (id: string) => id),
   classifyVerifiedPlaintext: vi.fn(async () => ({
     pScam: 0.01,
     warned: false,
@@ -47,6 +48,7 @@ vi.mock('../api/conversationsClient', async () => {
     ...actual,
     startOrFetchConversation: vi.fn(),
     fetchConversationEpoch: vi.fn(),
+    fetchWebSocketTicket: vi.fn(async () => 'test-ticket'),
     fetchConversationMessages: vi.fn(),
     deleteConversationMessage: vi.fn(async () => {}),
     hideConversationMessage: vi.fn(async () => {}),
@@ -159,7 +161,7 @@ import { addContact, deleteContact, listContacts } from '../api/contactsClient'
 import { searchUsers } from '../api/usersClient'
 import { blockUser, listBlocks, unblockUser } from '../api/blocksClient'
 import { reportUser } from '../api/reportsClient'
-import { classifyVerifiedPlaintext, ensureDistilbertDefault } from '../ml/scamClassifier'
+import { classifyVerifiedPlaintext, ensureScamModel } from '../ml/scamClassifier'
 import { writeCachedBanner } from '../ml/scamBannerCache'
 import { readLastMessagePreview } from '../chat/lastMessagePreview'
 import { decryptMessage } from '../crypto/keyExchange'
@@ -182,7 +184,7 @@ const mockedHideAllConversationMessages = vi.mocked(hideAllConversationMessages)
 const mockedUploadEncryptedBlob = vi.mocked(uploadEncryptedBlob)
 const mockedFetchEncryptedBlob = vi.mocked(fetchEncryptedBlob)
 const mockedUnblockUser = vi.mocked(unblockUser)
-const mockedEnsureDistilbertDefault = vi.mocked(ensureDistilbertDefault)
+const mockedEnsureScamModel = vi.mocked(ensureScamModel)
 const mockedClassify = vi.mocked(classifyVerifiedPlaintext)
 
 const conversationId = '00000000-0000-4000-8000-000000000001'
@@ -221,8 +223,15 @@ afterEach(() => {
     checkpointId: 'distilbert_default',
     inferenceMs: 1,
   })
-  mockedEnsureDistilbertDefault.mockReset()
-  mockedEnsureDistilbertDefault.mockResolvedValue(undefined)
+  mockedEnsureScamModel.mockReset()
+  mockedEnsureScamModel.mockImplementation(async (id) => id)
+  vi.mocked(decryptMessage).mockReset()
+  vi.mocked(decryptMessage).mockImplementation((envelope: { ciphertext: Uint8Array }) => {
+    if (envelope.ciphertext[0] === 0xff) {
+      throw new Error('verification failed')
+    }
+    return 'hello from bob'
+  })
 })
 
 // Render ChatScreen inside AuthProvider after injecting Alice's in-memory session.
@@ -407,7 +416,7 @@ describe('ChatScreen', () => {
     expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
   })
 
-  it('has no model checkboxes and loads DistilBERT default only', async () => {
+  it('has no model checkboxes and loads the MiniLM student by default', async () => {
     window.localStorage.setItem('secure-chat-classifier:alice', 'tfidf')
     renderChatScreen()
     await screen.findByRole('heading', { name: 'Secure Chat' })
@@ -415,7 +424,7 @@ describe('ChatScreen', () => {
     expect(screen.queryByText(/Use DistilBERT/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Word BiLSTM/)).not.toBeInTheDocument()
     await waitFor(() => {
-      expect(mockedEnsureDistilbertDefault).toHaveBeenCalled()
+      expect(mockedEnsureScamModel).toHaveBeenCalledWith('distilbert_student')
     })
     expect(window.localStorage.getItem('secure-chat-classifier:alice')).toBeNull()
     await waitFor(() => {
@@ -425,11 +434,11 @@ describe('ChatScreen', () => {
     })
   })
 
-  it('does not score until DistilBERT default has loaded', async () => {
-    let resolveLoad: () => void = () => {}
-    mockedEnsureDistilbertDefault.mockReturnValue(
-      new Promise<void>((resolve) => {
-        resolveLoad = resolve
+  it('does not score until the selected scam model has loaded', async () => {
+    let resolveLoad = (_id: 'distilbert_student') => {}
+    mockedEnsureScamModel.mockReturnValue(
+      new Promise((resolve) => {
+        resolveLoad = () => resolve('distilbert_student')
       }),
     )
     renderChatScreen()
@@ -457,14 +466,14 @@ describe('ChatScreen', () => {
       checkpointId: 'distilbert_default',
       inferenceMs: 2,
     })
-    resolveLoad()
+    resolveLoad('distilbert_student')
     expect(await screen.findByText('This message shows signs of a scam')).toBeInTheDocument()
     expect(mockedClassify).toHaveBeenCalled()
   })
 
   it('paints a cached DistilBERT banner before the graph loads', async () => {
-    writeCachedBanner('alice', 'msg-cached', 0, 'distilbert_default', true)
-    mockedEnsureDistilbertDefault.mockReturnValue(new Promise(() => {}))
+    writeCachedBanner('alice', 'msg-cached', 0, 'distilbert_student', true)
+    mockedEnsureScamModel.mockReturnValue(new Promise(() => {}))
     renderChatScreen()
     await screen.findByRole('heading', { name: 'Secure Chat' })
     mockedClassify.mockClear()
@@ -1112,6 +1121,115 @@ describe('ChatScreen', () => {
     expect(uploads[1]?.[1]).toBe(carolConversationId)
     expect(uploads[1]?.[2].id).not.toBe(uploads[0]?.[2].id)
     createObjectURL.mockRestore()
+  })
+
+  it('opens a Google Docs link immediately and keeps the rest of the bubble as message actions', async () => {
+    mockedClassify.mockResolvedValue({
+      pScam: 0.91,
+      warned: true,
+      checkpointId: 'distilbert_student',
+      inferenceMs: 1,
+    })
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    const text = 'here is the shared doc https://docs.google.com/document/d/abc123 please'
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: text } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    const link = await screen.findByRole('link', { name: 'https://docs.google.com/document/d/abc123' })
+    expect(link).toHaveAttribute('href', 'https://docs.google.com/document/d/abc123')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    const bubble = link.closest('.message-with-links')
+    expect(bubble).not.toBeNull()
+    expect(within(bubble as HTMLElement).getByText('please')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(mockedClassify).toHaveBeenCalled()
+    })
+    expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
+    fireEvent.click(link)
+    expect(screen.queryByRole('dialog', { name: 'Message actions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Possible scam link' })).not.toBeInTheDocument()
+    fireEvent.click(within(bubble as HTMLElement).getByText('here is the shared doc'))
+    expect(screen.getByRole('dialog', { name: 'Message actions' })).toBeInTheDocument()
+  })
+
+  it('does not show a scam banner on a message this account sent', async () => {
+    mockedClassify.mockResolvedValue({
+      pScam: 0.95,
+      warned: true,
+      checkpointId: 'distilbert_student',
+      inferenceMs: 1,
+    })
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    const text = 'verify immediately https://bit.ly/phish'
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: text } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => {
+      expect(mockedClassify).toHaveBeenCalled()
+    })
+    expect(screen.queryByText('This message shows signs of a scam')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('link', { name: 'https://bit.ly/phish' }))
+    expect(screen.queryByRole('dialog', { name: 'Possible scam link' })).not.toBeInTheDocument()
+  })
+
+  it('asks before a flagged link on a received message and opens it only after Continue', async () => {
+    mockedClassify.mockResolvedValue({
+      pScam: 0.95,
+      warned: true,
+      checkpointId: 'distilbert_student',
+      inferenceMs: 1,
+    })
+    vi.mocked(decryptMessage).mockReturnValue('verify immediately https://bit.ly/phish')
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await startChatWithBob()
+    capturedHandlers?.onEnvelope({
+      id: 'msg-phish',
+      conversationId,
+      senderId: bobId,
+      ciphertext: new Uint8Array(32).fill(1),
+      nonce: new Uint8Array(24).fill(2),
+      keyEpoch: 0,
+      adVersion: 1,
+      messageId: null,
+      revision: 0,
+      editedAt: null,
+    })
+    expect(await screen.findByText('This message shows signs of a scam')).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: 'https://bit.ly/phish' })
+    fireEvent.click(link)
+    expect(screen.queryByRole('dialog', { name: 'Message actions' })).not.toBeInTheDocument()
+    const dialog = screen.getByRole('dialog', { name: 'Possible scam link' })
+    expect(within(dialog).getByText('https://bit.ly/phish')).toBeInTheDocument()
+    expect(open).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog', { name: 'Possible scam link' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'https://bit.ly/phish' })).toBeInTheDocument()
+    expect(open).not.toHaveBeenCalled()
+    fireEvent.click(link)
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(open).toHaveBeenCalledWith('https://bit.ly/phish', '_blank', 'noopener,noreferrer')
+    open.mockRestore()
+    vi.mocked(decryptMessage).mockReturnValue('hello from bob')
+  })
+
+  it('switches the scam model from Settings and remembers the choice', async () => {
+    renderChatScreen()
+    await screen.findByRole('heading', { name: 'Secure Chat' })
+    await waitFor(() => {
+      expect(mockedEnsureScamModel).toHaveBeenCalledWith('distilbert_student')
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'DistilBERT best' }))
+    await waitFor(() => {
+      expect(mockedEnsureScamModel).toHaveBeenCalledWith('distilbert_best')
+    })
+    expect(window.localStorage.getItem('secure-chat-scam-model:alice')).toBe('distilbert_best')
+    expect(window.localStorage.getItem('secure-chat-classifier:alice')).toBeNull()
   })
 })
 

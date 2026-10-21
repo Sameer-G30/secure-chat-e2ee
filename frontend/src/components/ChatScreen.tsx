@@ -53,6 +53,7 @@ import { useChatTheme } from '../hooks/useChatTheme'
 import { useContacts } from '../hooks/useContacts'
 import { useEncryptedConversation } from '../hooks/useEncryptedConversation'
 import { useScamClassifierPreference } from '../hooks/useScamClassifierPreference'
+import { messageHasHttpLink } from '../chat/messageLinks'
 import { useUserSearch } from '../hooks/useUserSearch'
 import type { ChatMessage } from '../hooks/useEncryptedConversation'
 import { clearAllBannerCaches } from '../ml/scamBannerCache'
@@ -62,6 +63,7 @@ import { clearDistilbertCache } from '../ml/modelCache'
 import { ChatMoreMenu } from './ChatMoreMenu'
 import { MessageActionsModal } from './MessageActionsModal'
 import { Modal } from './Modal'
+import { MessageBody } from './MessageBody'
 import { SettingsPanel } from './SettingsPanel'
 import type { SettingsView } from './SettingsPanel'
 // Import the vrati icon set used on the sidebar, header, and circular send button.
@@ -122,6 +124,8 @@ export function ChatScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   // Hold which overlay is open; 'none' means the chat shell has the focus.
   const [overlay, setOverlay] = useState<ChatOverlay>({ kind: 'none' })
+  // http(s) URL from a scam-flagged bubble, waiting for Continue before it opens.
+  const [pendingScamLink, setPendingScamLink] = useState<string | null>(null)
   // Hold the in-chat search needle; empty means show the full transcript.
   const [inChatQuery, setInChatQuery] = useState('')
   // Hold whether the in-chat search field is visible under the header.
@@ -239,6 +243,10 @@ export function ChatScreen() {
     pinImage,
     forwardImageToContact,
     closeConversation,
+    safetyNumber,
+    peerKeyChange,
+    trustPeerKeyChange,
+    dismissPeerKeyChange,
   } = useEncryptedConversation(
     session,
     authorizedRequest,
@@ -248,6 +256,7 @@ export function ChatScreen() {
     classifier.generation,
     classifier.scoringCheckpointId,
     forgetPreview,
+    classifier.loadFailed,
   )
 
   useEffect(() => {
@@ -1139,6 +1148,8 @@ export function ChatScreen() {
                       : (message.plaintext ?? undefined)
                   const tickClass = deliveryTickClass(message)
                   const tick = deliveryTick(message)
+                  // Banners and the link confirm step belong on received bubbles only.
+                  const showScamBanner = message.scamWarning && message.direction === 'received'
                   const dateLabel =
                     showDate && message.createdAt ? formatLocalDateSeparator(message.createdAt) : null
                   return (
@@ -1150,7 +1161,7 @@ export function ChatScreen() {
                       {dateLabel ? <div className="date-separator">{dateLabel}</div> : null}
                       {message.attachment && !message.verificationFailed ? (
                         <div className={bubbleClass} data-pending={message.pending ? 'true' : 'false'}>
-                          {message.scamWarning ? (
+                          {showScamBanner ? (
                             <p className="scam-banner" role="status">
                               This message shows signs of a scam
                             </p>
@@ -1199,6 +1210,38 @@ export function ChatScreen() {
                             ) : null}
                           </button>
                         </div>
+                      ) : !message.verificationFailed &&
+                        message.plaintext &&
+                        messageHasHttpLink(message.plaintext) ? (
+                        <div
+                          className={`${bubbleClass} message-with-links`}
+                          data-pending={message.pending ? 'true' : 'false'}
+                          onClick={() => setOverlay({ kind: 'message', id: message.id })}
+                        >
+                          {showScamBanner ? (
+                            <p className="scam-banner" role="status">
+                              This message shows signs of a scam
+                            </p>
+                          ) : null}
+                          <span className="message-text">
+                            <MessageBody
+                              text={message.plaintext}
+                              flagged={showScamBanner}
+                              onFlaggedLink={(href) => setPendingScamLink(href)}
+                            />
+                            {message.revision > 0 ? (
+                              <span className="edited-indicator"> (edited)</span>
+                            ) : null}
+                          </span>
+                          <span className="message-time">
+                            {pendingLabel(message)}
+                            {tick ? (
+                              <span className={tickClass} aria-hidden="true">
+                                {tick}
+                              </span>
+                            ) : null}
+                          </span>
+                        </div>
                       ) : (
                         <button
                           type="button"
@@ -1211,7 +1254,7 @@ export function ChatScreen() {
                             <span role="alert">message failed verification</span>
                           ) : (
                             <>
-                              {message.scamWarning ? (
+                              {showScamBanner ? (
                                 <p className="scam-banner" role="status">
                                   This message shows signs of a scam
                                 </p>
@@ -1334,6 +1377,8 @@ export function ChatScreen() {
           onLoadBlocks={loadBlocks}
           onUnblock={unblockAccount}
           onClearDeviceData={clearDeviceData}
+          scamModel={classifier.modelId}
+          onScamModelChange={classifier.selectModel}
           onViewAvatar={(src) =>
             openLightbox({
               src,
@@ -1343,6 +1388,38 @@ export function ChatScreen() {
             })
           }
         />
+      ) : null}
+
+      {pendingScamLink ? (
+        <Modal title="Possible scam link" onClose={() => setPendingScamLink(null)}>
+          <p>
+            This message was flagged as a possible scam. Continue only if you trust this URL.
+          </p>
+          <p className="message-link-confirm-url">{pendingScamLink}</p>
+          <div className="chat-modal-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                const href = pendingScamLink
+                setPendingScamLink(null)
+                try {
+                  const parsed = new URL(href)
+                  if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+                    window.open(parsed.href, '_blank', 'noopener,noreferrer')
+                  }
+                } catch {
+                  // An unparsable value never leaves the chat.
+                }
+              }}
+            >
+              Continue
+            </button>
+            <button type="button" className="text-button" onClick={() => setPendingScamLink(null)}>
+              Cancel
+            </button>
+          </div>
+        </Modal>
       ) : null}
 
       {selectedMessage ? (
@@ -1511,8 +1588,28 @@ export function ChatScreen() {
         </Modal>
       ) : null}
 
+      {peerKeyChange ? (
+        <Modal title="Security key changed" onClose={dismissPeerKeyChange}>
+          <p>
+            The key for {peerKeyChange.peerUsername} is different from the one you saw before. This
+            can mean they reinstalled, or that someone is intercepting the chat. Compare this
+            safety number with them over another channel before trusting it.
+          </p>
+          <p className="safety-number">{peerKeyChange.safetyNumber}</p>
+          <div className="chat-modal-actions">
+            <button type="button" className="primary-button" onClick={() => void trustPeerKeyChange()}>
+              Trust new key
+            </button>
+            <button type="button" className="text-button" onClick={dismissPeerKeyChange}>
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
       {overlay.kind === 'profile' && activeChat ? (
         <ContactProfilePanel
+          safetyNumber={safetyNumber}
           username={activeChat.peerUsername}
           accessToken={currentSession.accessToken}
           profile={peerProfile}

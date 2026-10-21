@@ -4,6 +4,7 @@
 export type CheckpointId =
   | 'distilbert_best'
   | 'distilbert_default'
+  | 'distilbert_student'
   | 'lstm_best'
   | 'lstm_default'
   | 'tfidf_best'
@@ -30,6 +31,8 @@ export interface CheckpointManifest {
   onnx_file: string
   // Serving graph size in bytes.
   onnx_bytes: number
+  // SHA-256 of the serving graph (cache key); absent on older exports.
+  sha256?: string
   // int8 or fp32, recorded after export.
   quantize: 'int8' | 'fp32'
   // Sidecar filenames the TypeScript loaders fetch.
@@ -114,15 +117,30 @@ export interface LoadCheckRow {
 // Historical preference names. The chat shell no longer loads tfidf or lstm.
 export type ChatHeavyPreference = 'tfidf' | 'distilbert' | 'lstm'
 
-// The only graph ChatScreen loads: DistilBERT default (256-token int8, threshold 0.30).
+// Default graph ChatScreen loads: the MiniLM student (128-token int8, threshold 0.25).
 // The live banner also requires P(scam) >= 0.35 (see conversationContext.ts).
-export const CHATSCREEN_DEFAULT_ID: CheckpointId = 'distilbert_default'
+export const CHATSCREEN_DEFAULT_ID = 'distilbert_student' satisfies CheckpointId
 
-// Same id as the chat default. distilbert_best (512 / 0.20) is not loaded in the browser.
-export const DISTILBERT_OPT_IN_ID: CheckpointId = 'distilbert_default'
+// Preferred browser graph: the distilled MiniLM student (~17 MiB int8, 128 tokens).
+export const DISTILBERT_OPT_IN_ID = 'distilbert_student' satisfies CheckpointId
+
+// Optional Settings graph: the 512-token sweep winner (threshold 0.20). One session at a time.
+export const DISTILBERT_BEST_ID = 'distilbert_best' satisfies CheckpointId
+
+// The two choices Settings persists. The student fallback (distilbert_default) is not a choice.
+export type BrowserScamModelId = 'distilbert_student' | 'distilbert_best'
+
+// True when a stored string is one of the two Settings choices.
+export function isBrowserScamModelId(value: string | null | undefined): value is BrowserScamModelId {
+  // Student is the default graph. Best is the explicit opt-in.
+  return value === DISTILBERT_OPT_IN_ID || value === DISTILBERT_BEST_ID
+}
+
+// Fallback when the student export is missing: the original 64 MiB DistilBERT default.
+export const DISTILBERT_FALLBACK_ID = 'distilbert_default' satisfies CheckpointId
 
 // Offline catalog id for the 8-epoch word BiLSTM. The chat app does not fetch it.
-export const LSTM_OPT_IN_ID: CheckpointId = 'lstm_best'
+export const LSTM_OPT_IN_ID = 'lstm_best' satisfies CheckpointId
 
 // Fixed sequential order; skip to the next row if this one OOMs.
 export const CHECKPOINT_LOAD_ORDER: readonly CheckpointId[] = [
