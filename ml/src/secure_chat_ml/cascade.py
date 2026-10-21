@@ -106,9 +106,9 @@ def apply_cascade(
     labels[lstm_settled] = lstm_decision[lstm_settled]
     tier_used[lstm_settled] = 1
     distilbert_rows = escalate_from_tfidf & escalate_from_lstm
-    labels[distilbert_rows] = (
-        p_distilbert[distilbert_rows] >= config.distilbert_threshold
-    ).astype(np.int64)
+    labels[distilbert_rows] = (p_distilbert[distilbert_rows] >= config.distilbert_threshold).astype(
+        np.int64
+    )
     tier_used[distilbert_rows] = 2
     return labels, tier_used
 

@@ -1,0 +1,30 @@
+{
+  "model_dir": "models/distilbert",
+  "threshold": 0.3,
+  "plain": {
+    "accuracy": 0.915,
+    "confusion_matrix": [
+      [
+        92,
+        8
+      ],
+      [
+        9,
+        91
+      ]
+    ]
+  },
+  "multiturn": {
+    "accuracy": 0.715,
+    "confusion_matrix": [
+      [
+        79,
+        21
+      ],
+      [
+        36,
+        64
+      ]
+    ]
+  }
+}

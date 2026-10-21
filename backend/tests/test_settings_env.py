@@ -79,3 +79,25 @@ def test_docker_entrypoint_applies_alembic_then_starts_uvicorn() -> None:
     assert "uvicorn" in text
     # Require fail-closed behavior when migrate returns non-zero.
     assert "sys.exit" in text
+
+
+# Refuse the shipped placeholder secret outside development.
+def test_placeholder_jwt_secret_rejected_in_production() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(app_env="production", jwt_secret_key="replace-with-at-least-32-random-bytes")
+
+
+# Only HS256 is allowed so "none" or confused algorithms cannot be configured.
+def test_non_hs256_algorithm_rejected() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(jwt_algorithm="none")

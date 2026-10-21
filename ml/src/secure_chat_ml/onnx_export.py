@@ -21,6 +21,7 @@ fitting. A missing published TF-IDF joblib is refit into a separate folder.
 import gzip
 
 # Import json to write sidecars and manifests the browser will fetch.
+import hashlib
 import json
 
 # Import math for the logistic sigmoid used when scoring TF-IDF fixtures.
@@ -288,13 +289,9 @@ def build_logistic_head_onnx(
     # Count features so the graph's input shape matches the sidecar vocab.
     n_features = int(weights.shape[0])
     # Declare a dynamic-batch float input named 'features'.
-    features = helper.make_tensor_value_info(
-        "features", TensorProto.FLOAT, [None, n_features]
-    )
+    features = helper.make_tensor_value_info("features", TensorProto.FLOAT, [None, n_features])
     # Declare P(scam) as [batch, 1] so ORT Web returns a typed tensor.
-    probabilities = helper.make_tensor_value_info(
-        "probabilities", TensorProto.FLOAT, [None, 1]
-    )
+    probabilities = helper.make_tensor_value_info("probabilities", TensorProto.FLOAT, [None, 1])
     # Embed W as an initializer rather than a graph input.
     weight_init = numpy_helper.from_array(weights, name="W")
     # Embed the intercept as Gemm's C (bias) initializer.
@@ -535,8 +532,7 @@ def fit_published_tfidf_pipeline(
     dump(pipeline, output_dir / "pipeline.joblib")
     # Tell the operator this was an export-only fit.
     print(
-        f"fit_published_tfidf_pipeline: wrote {output_dir / 'pipeline.joblib'} "
-        "(reports untouched)"
+        f"fit_published_tfidf_pipeline: wrote {output_dir / 'pipeline.joblib'} (reports untouched)"
     )
     # Return the live pipeline so the caller can export immediately.
     return pipeline
@@ -1016,7 +1012,7 @@ def export_lstm_checkpoint(
 
 
 # Dynamically quantize a fp32 ONNX graph to int8 weights (ORT CPU).
-def quantize_onnx_dynamic(fp32_path: Path, int8_path: Path) -> None:
+def quantize_onnx_dynamic(fp32_path: Path, int8_path: Path, *, per_channel: bool = False) -> None:
     """Write an int8-weight ONNX file beside the fp32 source graph."""
 
     # Import here so tests that only build Gemm graphs need not touch quantizer internals.
@@ -1033,6 +1029,8 @@ def quantize_onnx_dynamic(fp32_path: Path, int8_path: Path) -> None:
         model_input=str(inferred_path),
         model_output=str(int8_path),
         weight_type=QuantType.QInt8,
+        # Per-channel scales shrink int8 error on layers with uneven weight ranges.
+        per_channel=per_channel,
     )
     # Drop the inferred intermediate so the export folder stays small.
     inferred_path.unlink(missing_ok=True)
@@ -1081,13 +1079,15 @@ def export_distilbert_checkpoint(
     *,
     frontend_public_ml: Path | None = None,
     quantize: bool = True,
+    # Optional in-memory (model, tokenizer), e.g. a vocab-pruned model; skips loading model_dir.
+    model_override: tuple[Any, Any] | None = None,
 ) -> Path:
     """Write DistilBERT ONNX (prefer int8) + WordPiece vocab; reports stay intact."""
 
     # Load the local HuggingFace checkpoint (no Hub fetch; files are on disk).
     model_dir = resolve_under_ml(ml_root, str(spec["model_dir"]))
     # Tokenizer + classification head were saved by train_distilbert.py.
-    model, tokenizer = load_distilbert(model_dir)
+    model, tokenizer = model_override if model_override is not None else load_distilbert(model_dir)
     # Eager attention avoids SDPA custom ops that ORT Web cannot run.
     force_eager_attention(model)
     # Export from CPU eval; tracing does not need the RTX 4060.
@@ -1227,6 +1227,8 @@ def export_distilbert_checkpoint(
             "max_length": max_length,
             "onnx_file": serving_name,
             "onnx_bytes": onnx_bytes,
+            # Content hash lets the browser cache key change whenever the weights change.
+            "sha256": hashlib.sha256(serving_path.read_bytes()).hexdigest(),
             "quantize": used_quant,
             "sidecars": {
                 "wordpiece": WORDPIECE_VOCAB_NAME,

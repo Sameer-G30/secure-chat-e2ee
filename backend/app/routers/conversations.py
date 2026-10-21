@@ -5,7 +5,7 @@ from typing import Annotated
 from uuid import UUID
 
 # Import FastAPI's routing, dependency, HTTP-error, and status primitives.
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 # Import SQLAlchemy's async session type used by the injected database dependency.
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +32,7 @@ from app.schemas.receipts import ConversationReadResponse
 
 # Import the shared bearer-token authentication dependency.
 from app.security.dependencies import get_current_user
+from app.security.rate_limit import limiter
 
 # Import encrypted-blob store/fetch helpers (ciphertext only; no decrypt).
 from app.services.blobs import get_encrypted_blob, store_encrypted_blob
@@ -173,9 +174,9 @@ async def fetch_conversation_messages(
             limit=limit,
             after_id=after,
         )
-    # A limit, or an explicit `before`, means a newest-page window.
-    elif limit is not None or before is not None:
-        # `before` without a limit still has to be bounded; the hard cap is 200.
+    # Everything else is a bounded newest-page window; unpaged reads default to 200 rows
+    # so one request can never stream an unbounded conversation.
+    else:
         page_limit = limit if limit is not None else 200
         # Newest page when `before` is omitted; the next older page when it is set.
         stored, next_cursor = await list_newest_envelopes_page(
@@ -184,17 +185,6 @@ async def fetch_conversation_messages(
             exclude_hidden_for=current_user.id,
             limit=page_limit,
             before_id=before,
-        )
-    # No cursor and no limit: the legacy full transcript, oldest first.
-    else:
-        # Unpaged reads stay complete so older scripts do not silently lose history.
-        stored, next_cursor = await list_envelopes_page(
-            db,
-            conversation_id,
-            newest_first=False,
-            exclude_hidden_for=current_user.id,
-            limit=None,
-            after_id=None,
         )
     # Attach the peer's delivered/read ticks onto the viewer's own sent envelopes only.
     peer_id = other_user_id(conversation, current_user.id)
@@ -207,9 +197,7 @@ async def fetch_conversation_messages(
             if row.sender_id == current_user.id
             else (False, False)
         )
-        envelopes.append(
-            serialize_envelope(row, peer_delivered=delivered, peer_read=read)
-        )
+        envelopes.append(serialize_envelope(row, peer_delivered=delivered, peer_read=read))
     return MessageHistoryResponse(
         messages=envelopes,
         next_cursor=next_cursor,
@@ -335,9 +323,7 @@ async def mark_conversation_as_read(
             frame,
             exclude_user_id=current_user.id,
         )
-    return ConversationReadResponse(
-        conversation_id=conversation.id, last_read_at=last_read_at
-    )
+    return ConversationReadResponse(conversation_id=conversation.id, last_read_at=last_read_at)
 
 
 # Store one client-encrypted image blob for a conversation the caller belongs to.
@@ -346,7 +332,10 @@ async def mark_conversation_as_read(
     response_model=EncryptedBlobOut,
     status_code=status.HTTP_201_CREATED,
 )
+@limiter.limit("30/minute")
 async def upload_conversation_blob(
+    # slowapi reads the client address from this parameter.
+    request: Request,
     # Identify which conversation this sealed file belongs to.
     conversation_id: UUID,
     # Accept opaque ciphertext, nonce, and a client-chosen blob id.

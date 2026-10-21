@@ -1,11 +1,22 @@
 """Authenticate a WebSocket and relay ciphertext envelopes without decrypting them."""
 
+# Import json for explicit, size-checked frame parsing.
+import json
+
 # Import Annotated and UUID for dependency metadata and conversation path parameters.
 from typing import Annotated
 from uuid import UUID
 
 # Import FastAPI's WebSocket primitives and HTTPException (reused for WS close reasons).
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 
 # Import Pydantic's validation error type so malformed frames become protocol errors.
 from pydantic import ValidationError
@@ -13,17 +24,20 @@ from pydantic import ValidationError
 # Import SQLAlchemy's async session type used by the injected database dependency.
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# Import the shared access-token verifier used by HTTP Bearer auth.
+from app.config import get_settings
+
 # Import the request-scoped database session dependency.
 from app.db import get_db
+from app.models.user import User
 
 # Import the validated inbound envelope schema.
 from app.schemas.messages import RelayEnvelopeIn
 
 # Import the validated inbound receipt schema (metadata only, never a message body).
 from app.schemas.receipts import ReceiptFrameIn
-
-# Import the shared access-token verifier used by HTTP Bearer auth.
-from app.security.dependencies import get_user_from_access_token
+from app.security.dependencies import get_current_user, get_user_from_access_token
+from app.security.rate_limit import limiter
 
 # Import persist/fan-out helpers; none of these decrypt or handle private keys.
 from app.services.conversations import other_user_id
@@ -35,6 +49,7 @@ from app.services.relay import (
     connection_hub,
     relay_envelope,
 )
+from app.services.ws_tickets import issue_ticket, redeem_ticket
 
 # Group the ciphertext relay under a dedicated WebSocket prefix.
 router = APIRouter(prefix="/ws", tags=["websocket"])
@@ -43,6 +58,28 @@ router = APIRouter(prefix="/ws", tags=["websocket"])
 _WS_CLOSE_UNAUTHORIZED = 4401
 # Close the socket with a 4403 when the caller is not a member / keys are missing.
 _WS_CLOSE_FORBIDDEN = 4403
+# Largest text frame accepted; ciphertext is capped at 32 KiB (base64 ~43 KiB) plus JSON overhead.
+_MAX_FRAME_CHARS = 131072
+
+
+# Exchange a valid bearer token for a 30-second single-use WebSocket ticket.
+@router.post("/conversations/{conversation_id}/ticket")
+@limiter.limit("60/minute")
+async def create_ws_ticket(
+    # Required by slowapi to derive the client key.
+    request: Request,
+    conversation_id: UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, object]:
+    """Return a ticket only to members of the conversation."""
+
+    # Membership, key, and block checks match the WebSocket handshake exactly.
+    try:
+        await authorize_relay_connection(db, conversation_id, user)
+    except EnvelopeRejected as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="conversation unavailable") from exc
+    return {"ticket": issue_ticket(user.id, conversation_id), "expires_in": 30}
 
 
 # Authenticate, persist, and fan out ciphertext for one 1:1 conversation.
@@ -62,16 +99,39 @@ async def conversation_relay(
     on the frame are compared against that context and rejected on mismatch.
     """
 
-    # Browsers cannot set Authorization on WebSocket; the access token travels as a query param.
+    settings = get_settings()
+    # Reject cross-site pages: browsers always send Origin on WebSocket upgrades.
+    origin = websocket.headers.get("origin")
+    if origin is not None and origin != settings.frontend_origin:
+        await websocket.close(code=_WS_CLOSE_FORBIDDEN)
+        return
+
+    # Preferred auth: single-use ticket from POST .../ticket (keeps JWTs out of URLs and logs).
+    ticket = websocket.query_params.get("ticket")
     access_token = websocket.query_params.get("access_token")
-    if not access_token:
+    # The legacy query-string token is only honoured outside production.
+    if access_token and not (settings.app_env == "development" or settings.ws_allow_query_token):
+        access_token = None
+    if not ticket and not access_token:
         # Refuse the upgrade rather than accepting an anonymous ciphertext socket.
         await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
         return
 
     try:
-        # Reuse the HTTP access-token verifier so WS auth cannot drift from REST auth.
-        user = await get_user_from_access_token(access_token, db)
+        if ticket:
+            ticket_user_id = redeem_ticket(ticket, conversation_id)
+            if ticket_user_id is None:
+                await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
+                return
+            loaded = await db.get(User, ticket_user_id)
+            if loaded is None:
+                await websocket.close(code=_WS_CLOSE_UNAUTHORIZED)
+                return
+            user = loaded
+        else:
+            # Reuse the HTTP access-token verifier so WS auth cannot drift from REST auth.
+            assert access_token is not None
+            user = await get_user_from_access_token(access_token, db)
         # Confirm membership and that both parties still have public keys.
         conversation = await authorize_relay_connection(db, conversation_id, user)
     except HTTPException as exc:
@@ -111,7 +171,16 @@ async def conversation_relay(
     try:
         while True:
             # Wait for the next JSON frame from this member.
-            raw_frame = await websocket.receive_json()
+            raw_text = await websocket.receive_text()
+            # Oversized frames are a DoS vector; close before parsing.
+            if len(raw_text) > _MAX_FRAME_CHARS:
+                await websocket.close(code=1009)
+                break
+            try:
+                raw_frame = json.loads(raw_text)
+            except ValueError:
+                await websocket.send_json({"type": "error", "detail": "invalid frame"})
+                continue
             # Typing frames are metadata only: never persist, never include draft text.
             if isinstance(raw_frame, dict) and raw_frame.get("type") == "typing":
                 is_typing = bool(raw_frame.get("is_typing"))

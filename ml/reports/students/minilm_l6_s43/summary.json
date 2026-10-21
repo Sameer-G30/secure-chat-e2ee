@@ -1,0 +1,18 @@
+{
+  "student": "nreimers/MiniLM-L6-H384-uncased",
+  "seed": 43,
+  "threshold": 0.25,
+  "max_length": 128,
+  "alpha": 0.5,
+  "temperature": 2.0,
+  "epochs": 6,
+  "learning_rate": 8e-05,
+  "test_metrics": {
+    "accuracy": 0.9820652935407034,
+    "scam_f1": 0.981534910559723
+  },
+  "chat_style_eval_metrics": {
+    "accuracy": 0.89,
+    "scam_f1": 0.8854166666666666
+  }
+}

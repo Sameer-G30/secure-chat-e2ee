@@ -640,11 +640,7 @@ def scaler_from_arrays(
     # Restore the TRAIN feature-wise scale (std, with 0-std columns set to 1).
     scaler.scale_ = np.asarray(scale, dtype=np.float64)
     # Restore variance when the checkpoint stored it; else square the scale.
-    scaler.var_ = (
-        np.asarray(var, dtype=np.float64)
-        if var is not None
-        else np.square(scaler.scale_)
-    )
+    scaler.var_ = np.asarray(var, dtype=np.float64) if var is not None else np.square(scaler.scale_)
     # sklearn 1.7 check_is_fitted looks for n_features_in_.
     scaler.n_features_in_ = int(scaler.mean_.shape[0])
     # Return the reconstructed scaler for transform_url_features.
@@ -725,9 +721,7 @@ def train_model(
             # Fit balanced weights here so tests can also pass an explicit tensor.
             class_weights = balanced_class_weights(label_list)
     # Encode TRAIN with the TRAIN vocabulary (already built by the caller).
-    token_ids, lengths = encode_texts(
-        text_list, token_to_id, max_tokens=hyperparams.max_tokens
-    )
+    token_ids, lengths = encode_texts(text_list, token_to_id, max_tokens=hyperparams.max_tokens)
     # Scale TRAIN URL features, or pass an empty block when URL concat is off.
     url_features = url_feature_array_for_model(text_list, url_scaler, model.url_dim)
     # Wrap encodings as a Dataset DataLoader can iterate.
@@ -981,11 +975,7 @@ def load_saved_classifier(
     # Rebuild hyperparameters from the recorded dict, ignoring unknown keys.
     allowed = {item.name for item in fields(LstmHyperparameters)}
     # Drop keys a newer checkpoint might add that this code does not know yet.
-    hp_payload = {
-        key: value
-        for key, value in meta["hyperparameters"].items()
-        if key in allowed
-    }
+    hp_payload = {key: value for key, value in meta["hyperparameters"].items() if key in allowed}
     # Missing new fields (url_features, weight_decay, ...) use dataclass defaults.
     hyperparams = LstmHyperparameters(**hp_payload)
     # Rebuild the TRAIN vocabulary (token strings → ids).
@@ -1098,6 +1088,7 @@ def summarize_url_slices(
         [extract_message_url_features(text)["has_url"] >= 1.0 for text in text_list],
         dtype=bool,
     )
+
     # Helper: scam recall on an optional boolean mask (None = all rows).
     def _scam_recall(mask: np.ndarray | None) -> float | None:
         # Choose all rows or the caller-provided slice.
@@ -1128,12 +1119,8 @@ def summarize_url_slices(
         "fn_url": int((fn_mask & has_url).sum()),
         "fn_no_url": int((fn_mask & ~has_url).sum()),
         "fp_total": int(((labels == LEGITIMATE_LABEL) & (preds == SCAM_LABEL)).sum()),
-        "fp_url": int(
-            ((labels == LEGITIMATE_LABEL) & (preds == SCAM_LABEL) & has_url).sum()
-        ),
-        "fp_no_url": int(
-            ((labels == LEGITIMATE_LABEL) & (preds == SCAM_LABEL) & ~has_url).sum()
-        ),
+        "fp_url": int(((labels == LEGITIMATE_LABEL) & (preds == SCAM_LABEL) & has_url).sum()),
+        "fp_no_url": int(((labels == LEGITIMATE_LABEL) & (preds == SCAM_LABEL) & ~has_url).sum()),
     }
 
 
@@ -1156,9 +1143,7 @@ def analyze_link_errors(
     preds = (np.asarray(y_proba) >= float(threshold)).astype(int)
     # Identify missed scams and warned ham.
     error_indices = [
-        index
-        for index, (gold, pred) in enumerate(zip(labels, preds, strict=True))
-        if gold != pred
+        index for index, (gold, pred) in enumerate(zip(labels, preds, strict=True)) if gold != pred
     ]
     # Build one audit row per error (FN or FP).
     records = [
@@ -1175,6 +1160,7 @@ def analyze_link_errors(
     false_negatives = [row for row in records if row["error_type"] == "FN"]
     # Warned ham rows (false positives).
     false_positives = [row for row in records if row["error_type"] == "FP"]
+
     # Count extra URL-related FNs (has_url or any lexical phishing flag).
     def _url_related(row: dict[str, Any]) -> bool:
         # A miss is URL-related when a link is present or a phishing flag fired.
@@ -1188,9 +1174,7 @@ def analyze_link_errors(
         "false_negatives": false_negatives,
         "false_positives": false_positives,
         "fn_url_related": int(sum(_url_related(row) for row in false_negatives)),
-        "fn_no_url_social": int(
-            sum(not _url_related(row) for row in false_negatives)
-        ),
+        "fn_no_url_social": int(sum(not _url_related(row) for row in false_negatives)),
         "fp_url_related": int(sum(_url_related(row) for row in false_positives)),
         "fp_link_heavy": int(sum(bool(row["link_heavy"]) for row in false_positives)),
     }
@@ -1257,9 +1241,7 @@ def recommend_char_lstm_exploration(
     extra_test_denom = max(int(test_fn_lstm), 0)
     # TEST URL-related fraction among LSTM FNs (used when chat extras are 0).
     b_test_frac = (
-        float(extra_fn_test_url_related) / float(extra_test_denom)
-        if extra_test_denom > 0
-        else 0.0
+        float(extra_fn_test_url_related) / float(extra_test_denom) if extra_test_denom > 0 else 0.0
     )
     # Prefer chat-eval for B; fall back to TEST inspection when chat extras are 0.
     b_fraction = b_chat_frac if extra_chat_denom > 0 else b_test_frac
@@ -1282,19 +1264,11 @@ def recommend_char_lstm_exploration(
     # TEST URL-bearing LSTM recall.
     lstm_url_test = lstm_url_scam_recall_test
     # Gap on chat-eval URL scams when both sides are defined.
-    c_chat_gap = (
-        tfidf_url_ref_chat - float(lstm_url_chat)
-        if lstm_url_chat is not None
-        else 0.0
-    )
+    c_chat_gap = tfidf_url_ref_chat - float(lstm_url_chat) if lstm_url_chat is not None else 0.0
     # Gap on TEST URL scams when both sides are defined.
-    c_test_gap = (
-        tfidf_url_ref_test - float(lstm_url_test) if lstm_url_test is not None else 0.0
-    )
+    c_test_gap = tfidf_url_ref_test - float(lstm_url_test) if lstm_url_test is not None else 0.0
     # Criterion C: URL concat did not close a material URL-scam recall gap.
-    criterion_c = bool(
-        c_chat_gap >= CHAR_LSTM_C_RECALL_GAP or c_test_gap >= CHAR_LSTM_C_RECALL_GAP
-    )
+    criterion_c = bool(c_chat_gap >= CHAR_LSTM_C_RECALL_GAP or c_test_gap >= CHAR_LSTM_C_RECALL_GAP)
     # Implement-now only when A, B, and C all hold.
     implement_now = bool(criterion_a and criterion_b and criterion_c)
     # Prefer chat-eval FN mix to decide "mostly social-engineering".
@@ -1302,11 +1276,7 @@ def recommend_char_lstm_exploration(
     # Misses are mostly no-URL when no-URL FNs strictly outnumber URL FNs.
     mostly_no_url = bool(
         (chat_fn_total > 0 and int(chat_eval_fn_no_url) > int(chat_eval_fn_url))
-        or (
-            chat_fn_total == 0
-            and int(test_fn_no_url) > int(test_fn_url)
-            and int(test_fn_lstm) > 0
-        )
+        or (chat_fn_total == 0 and int(test_fn_no_url) > int(test_fn_url) and int(test_fn_lstm) > 0)
     )
     # URL-bearing recall is "close" to TF-IDF when the gap is below C's material cut.
     url_recall_close = bool(
@@ -1341,9 +1311,10 @@ def recommend_char_lstm_exploration(
         or only_ham_false_alarms
     )
     # Final verdict: explore only when implement_now and no veto fired.
-    explore = bool(implement_now and not (
-        mostly_no_url or url_recall_close or reasonable_third or only_ham_false_alarms
-    ))
+    explore = bool(
+        implement_now
+        and not (mostly_no_url or url_recall_close or reasonable_third or only_ham_false_alarms)
+    )
     # Human-readable verdict string for the markdown file and agent summary.
     verdict = "explore_char_lstm" if explore else "do_not_explore_char_lstm"
     # Bundle every predicate so the markdown can cite A/B/C with numbers.
@@ -1391,11 +1362,7 @@ def render_char_lstm_decision_markdown(recommendation: dict[str, Any]) -> str:
     # Choose the heading from the verdict string.
     explore = recommendation["verdict"] == "explore_char_lstm"
     # Title states the recommendation up front.
-    title = (
-        "# Char LSTM decision: EXPLORE"
-        if explore
-        else "# Char LSTM decision: DO NOT explore"
-    )
+    title = "# Char LSTM decision: EXPLORE" if explore else "# Char LSTM decision: DO NOT explore"
     # Optional one-paragraph design only when the rule says explore.
     design = ""
     # When explore is recommended, still do not implement in this pass.
@@ -1413,9 +1380,7 @@ def render_char_lstm_decision_markdown(recommendation: dict[str, Any]) -> str:
             "the user confirms.\n"
         )
     # Cite A/B/C with the recorded predicates on short lines for ruff E501.
-    a_line = (
-        f"- **A (not competitive):** {_yn(recommendation['criterion_a'])}"
-    )
+    a_line = f"- **A (not competitive):** {_yn(recommendation['criterion_a'])}"
     # Spell out chat-eval extra FN vs TF-IDF on its own line.
     a_chat_line = (
         f"  Chat-eval extra FN vs TF-IDF = "
@@ -1431,9 +1396,7 @@ def render_char_lstm_decision_markdown(recommendation: dict[str, Any]) -> str:
         f"A_test={_yn(recommendation['criterion_a_test'])}."
     )
     # Criterion B header.
-    b_line = (
-        f"- **B (link-heavy extra misses):** {_yn(recommendation['criterion_b'])}"
-    )
+    b_line = f"- **B (link-heavy extra misses):** {_yn(recommendation['criterion_b'])}"
     # Criterion B fraction and extra-FN counts.
     b_detail = (
         f"  URL-related fraction on {recommendation['criterion_b_used_split']} = "
@@ -1442,10 +1405,7 @@ def render_char_lstm_decision_markdown(recommendation: dict[str, Any]) -> str:
         f"URL-related = {recommendation['extra_fn_chat_eval_url_related']}."
     )
     # Criterion C header.
-    c_line = (
-        f"- **C (URL concat did not close the gap):** "
-        f"{_yn(recommendation['criterion_c'])}"
-    )
+    c_line = f"- **C (URL concat did not close the gap):** {_yn(recommendation['criterion_c'])}"
     # Criterion C gaps vs TF-IDF URL/overall recall.
     c_detail = (
         f"  Chat URL-recall gap vs TF-IDF ref = "
@@ -1455,8 +1415,7 @@ def render_char_lstm_decision_markdown(recommendation: dict[str, Any]) -> str:
     )
     # Stop-condition bullets, each kept under 100 characters.
     stop_no_url = (
-        f"- Misses mostly no-URL social-engineering: "
-        f"{_yn(recommendation['mostly_no_url'])}"
+        f"- Misses mostly no-URL social-engineering: {_yn(recommendation['mostly_no_url'])}"
     )
     # URL-recall-close stop.
     stop_url_close = (

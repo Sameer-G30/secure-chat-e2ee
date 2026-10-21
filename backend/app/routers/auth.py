@@ -63,6 +63,8 @@ _REGISTER_RATE_LIMIT = "5/minute"
 # Bound login attempts per client address; this is the spec's other explicitly
 # required rate limit and the classic target of credential-stuffing/brute force.
 _LOGIN_RATE_LIMIT = "10/minute"
+# Refresh runs on every reload and token expiry: allow more than login, but still bound it.
+_REFRESH_RATE_LIMIT = "30/minute"
 # Generic, non-specific message for every failed login cause (wrong username,
 # wrong password, or an unusable account). Never reveal which one it was.
 _INVALID_CREDENTIALS_DETAIL = "invalid username or password"
@@ -180,7 +182,10 @@ async def login(
 
 # Rotate a refresh token for a new access/refresh pair, detecting reuse of a stale token.
 @router.post("/refresh", response_model=TokenPairResponse)
+@limiter.limit(_REFRESH_RATE_LIMIT)
 async def refresh(
+    # slowapi's decorator inspects this parameter to read the client address.
+    request: Request,
     # Accept and validate the refresh payload from the request body.
     payload: RefreshRequest,
     # Inject a request-scoped async database session.
@@ -238,8 +243,27 @@ async def refresh(
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="account no longer exists")
 
-    # Rotate: this presented token becomes permanently unusable regardless of outcome.
-    stored_token.revoked_at = datetime.now(UTC)
+    # Rotate atomically: only one concurrent request can flip revoked_at from NULL.
+    # A plain read-then-write would let two parallel refreshes both mint a session.
+    claimed = await db.execute(
+        sa_update(RefreshToken)
+        .where(RefreshToken.id == stored_token.id)
+        .where(RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    if claimed.rowcount != 1:  # type: ignore[attr-defined]
+        # Lost the race: the token was consumed by a concurrent request, i.e. reuse.
+        await db.execute(
+            sa_update(RefreshToken)
+            .where(RefreshToken.user_id == stored_token.user_id)
+            .where(RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            detail="refresh token has already been used; all sessions were revoked",
+        )
     # Issue the replacement access token.
     access_token = create_access_token(user.id, user.username)
     # Issue the replacement refresh token.

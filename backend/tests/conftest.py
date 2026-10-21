@@ -1,5 +1,8 @@
 """Provide a fast, isolated database and HTTP client for backend tests."""
 
+# Import os so CI can point the suite at a real Postgres via TEST_DATABASE_URL.
+import os
+
 # Import AsyncIterator and Iterator to type async and sync fixture generators.
 from collections.abc import AsyncIterator, Iterator
 
@@ -28,7 +31,7 @@ from app.services.relay import connection_hub
 # Use an in-memory SQLite database so tests never require a running Postgres
 # container or network access; StaticPool keeps the single in-memory database
 # alive across the multiple connections FastAPI's async session opens.
-_TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+_TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 
 # Build one private engine and schema per test function.
@@ -37,9 +40,16 @@ async def _engine() -> AsyncIterator[AsyncEngine]:
     """Yield a fresh in-memory SQLite engine with all tables created."""
 
     # Build a private engine so tests never touch the real development database.
-    test_engine = create_async_engine(_TEST_DATABASE_URL, poolclass=StaticPool)
+    is_sqlite = _TEST_DATABASE_URL.startswith("sqlite")
+    if is_sqlite:
+        test_engine = create_async_engine(_TEST_DATABASE_URL, poolclass=StaticPool)
+    else:
+        test_engine = create_async_engine(_TEST_DATABASE_URL)
     # Create every table fresh for this test.
     async with test_engine.begin() as connection:
+        if not is_sqlite:
+            # Start from a clean schema on a shared Postgres.
+            await connection.run_sync(Base.metadata.drop_all)
         # Run the synchronous DDL API through the async connection bridge.
         await connection.run_sync(Base.metadata.create_all)
     # Hand the ready engine to dependent fixtures.

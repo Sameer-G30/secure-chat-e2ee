@@ -153,3 +153,70 @@ jobs:
       - name: Run ML unit tests
         # These tests never touch ml/data/raw, so no dataset download is needed in CI.
         run: uv run pytest
+
+  # Run the backend suite against a real PostgreSQL, since SQLite hides dialect differences.
+  backend-postgres:
+    runs-on: ubuntu-latest
+    # Provide a throwaway Postgres reachable on localhost.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: secure_chat_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.11.9
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      # Point the suite at Postgres; conftest drops and recreates the schema per test.
+      - name: Run backend tests on Postgres
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://ci:ci-only-password@localhost:5432/secure_chat_test
+        run: uv run pytest
+
+  # Build the API image so Dockerfile regressions fail before deployment.
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -t secure-chat-api:ci backend
+
+  # Scan dependencies and history for known vulnerabilities and leaked secrets.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs full history to scan past commits.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+      - name: Audit Python dependencies
+        working-directory: backend
+        run: uv export --frozen --no-dev --no-hashes -o /tmp/req.txt && uvx pip-audit -r /tmp/req.txt --disable-pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Audit npm dependencies
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -233,9 +233,7 @@ def hyperparameters_to_dict(hyperparameters: BaselineHyperparameters) -> dict[st
             "none" if hyperparameters.stop_words is None else str(hyperparameters.stop_words)
         ),
         "strip_accents": (
-            "none"
-            if hyperparameters.strip_accents is None
-            else str(hyperparameters.strip_accents)
+            "none" if hyperparameters.strip_accents is None else str(hyperparameters.strip_accents)
         ),
         "url_features": bool(hyperparameters.url_features),
         "class_weight": (
@@ -280,12 +278,8 @@ def hyperparameters_from_mapping(payload: dict[str, Any]) -> BaselineHyperparame
         max_df=float(source.get("max_df", 1.0)),
         sublinear_tf=bool(source.get("sublinear_tf", True)),
         use_idf=bool(source.get("use_idf", True)),
-        stop_words=_sklearn_stop_words(
-            None if stop_words_raw is None else str(stop_words_raw)
-        ),
-        strip_accents=_sklearn_strip_accents(
-            None if strip_raw is None else str(strip_raw)
-        ),
+        stop_words=_sklearn_stop_words(None if stop_words_raw is None else str(stop_words_raw)),
+        strip_accents=_sklearn_strip_accents(None if strip_raw is None else str(strip_raw)),
         url_features=bool(url_features),
         class_weight=_sklearn_class_weight(
             None if class_weight_raw is None else str(class_weight_raw)
@@ -500,11 +494,14 @@ def build_pipeline(
             # Transform raw message text into TF-IDF plus optional scaled URL features.
             ("features", build_feature_union(hyperparameters=knobs)),
             # Classify with a logistic head at the chosen C (searched on VAL, not TEST).
-            ("classifier", build_classifier(
-                C=C,
-                random_state=knobs.random_state,
-                hyperparameters=knobs,
-            )),
+            (
+                "classifier",
+                build_classifier(
+                    C=C,
+                    random_state=knobs.random_state,
+                    hyperparameters=knobs,
+                ),
+            ),
         ]
     )
 
@@ -727,9 +724,7 @@ def tune_on_validation(
         # Score scam probabilities on VALIDATION only.
         val_proba = classifier.predict_proba(X_val)[:, SCAM_LABEL]
         # Reuse the shared threshold scorer so DistilBERT and TF-IDF share one grid.
-        candidates.extend(
-            score_threshold_grid(y_val, val_proba, threshold_grid, C=float(C))
-        )
+        candidates.extend(score_threshold_grid(y_val, val_proba, threshold_grid, C=float(C)))
     # Document the selection rule in the result so reports stay auditable.
     selection_rule = (
         f"maximize scam recall subject to legitimate recall >= {legit_recall_floor:.2f}"

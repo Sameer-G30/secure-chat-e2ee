@@ -1,7 +1,10 @@
 // Import the login/registration screen shown while no session exists.
 import { AuthScreen } from './components/AuthScreen'
-// Import the authenticated chat screen shown once a session exists.
-import { ChatScreen } from './components/ChatScreen'
+// Load the chat screen lazily so signed-out users never download ORT, WASM, or chat code.
+import { lazy, Suspense } from 'react'
+const ChatScreen = lazy(() =>
+  import('./components/ChatScreen').then((module) => ({ default: module.ChatScreen })),
+)
 // Import the sequential ORT Web measurement page (not part of the chat UX).
 import { MlLoadCheckScreen } from './components/MlLoadCheckScreen'
 // Import the session provider and reader for protected routing.
@@ -33,7 +36,21 @@ function AppRoutes() {
     )
   }
   // A restored or fresh session opens ChatScreen. Logout is what returns to AuthScreen.
-  return session ? <ChatScreen /> : <AuthScreen />
+  return session ? (
+    <Suspense
+      fallback={
+        <main className="auth-screen">
+          <p className="chat-status" role="status">
+            Loading chat…
+          </p>
+        </main>
+      }
+    >
+      <ChatScreen />
+    </Suspense>
+  ) : (
+    <AuthScreen />
+  )
 }
 
 // Render the current application entry point, wrapped in session context.

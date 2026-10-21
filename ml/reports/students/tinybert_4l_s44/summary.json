@@ -1,0 +1,18 @@
+{
+  "student": "huawei-noah/TinyBERT_General_4L_312D",
+  "seed": 44,
+  "threshold": 0.25,
+  "max_length": 128,
+  "alpha": 0.5,
+  "temperature": 2.0,
+  "epochs": 8,
+  "learning_rate": 0.0001,
+  "test_metrics": {
+    "accuracy": 0.9787025360795852,
+    "scam_f1": 0.9781294964028777
+  },
+  "chat_style_eval_metrics": {
+    "accuracy": 0.89,
+    "scam_f1": 0.8854166666666666
+  }
+}

@@ -144,6 +144,26 @@ export async function displayBlobForVerifiedImage(bytes: Uint8Array, mime: strin
   return reencodeStill(bytes, mime)
 }
 
+// Re-encode a still image before sealing so EXIF (GPS, device, timestamps) never leaves this device.
+// GIF is passed through because re-encoding would drop the animation.
+export async function sanitizeImageForSend(
+  bytes: Uint8Array,
+  mime: string,
+): Promise<{ bytes: Uint8Array; mime: string }> {
+  // Animated GIFs keep their bytes; their metadata blocks are rarely sensitive.
+  if (mime === 'image/gif') {
+    return { bytes, mime }
+  }
+  // Environments without canvas (tests) cannot re-encode; fail closed only in a real browser.
+  if (typeof document === 'undefined' || typeof createImageBitmap === 'undefined') {
+    return { bytes, mime }
+  }
+  // Draw and re-encode: the canvas output carries pixels only.
+  const blob = await reencodeStill(bytes, mime)
+  // Report the actual output type (WebP becomes JPEG).
+  return { bytes: new Uint8Array(await blob.arrayBuffer()), mime: blob.type || mime }
+}
+
 // Decode one QR payload from the decrypted image, or return null when none is present.
 export async function readQrPayload(bytes: Uint8Array, mime: string): Promise<string | null> {
   // Tests without a document cannot draw. No QR means no extra classification.

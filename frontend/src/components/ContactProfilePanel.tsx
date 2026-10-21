@@ -11,6 +11,8 @@ import { IconClose } from '../icons'
 export interface ContactProfilePanelProps {
   // Carry the peer handle used for avatar fetch and headings.
   username: string
+  // Safety number both peers can compare out of band to detect key substitution.
+  safetyNumber?: string | null
   // Carry the bearer token used for the authenticated avatar GET.
   accessToken: string
   // Carry the public profile metadata, or null while it is still loading.
@@ -34,6 +36,7 @@ export interface ContactProfilePanelProps {
 
 // Render public profile metadata the server is allowed to store (not E2EE).
 export function ContactProfilePanel({
+  safetyNumber,
   username,
   accessToken,
   profile,
@@ -82,6 +85,13 @@ export function ContactProfilePanel({
           <div className="contact-profile-name">{displayName}</div>
           <div className="contact-profile-handle">@{username}</div>
           <div className="contact-profile-status">{online ? 'Online' : 'Offline'}</div>
+          {safetyNumber ? (
+            <div className="contact-profile-safety">
+              <strong>Safety number</strong>
+              <p className="safety-number">{safetyNumber}</p>
+              <small>Compare with {username} in person or over a trusted channel.</small>
+            </div>
+          ) : null}
           {profile?.bio ? <p className="contact-profile-bio">{profile.bio}</p> : null}
           <div className="contact-profile-actions">
             <button type="button" className="settings-item" onClick={onSearch}>

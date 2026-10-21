@@ -223,9 +223,20 @@ async def list_conversations_for_user(
         .where(or_(Conversation.user_a_id == self_user.id, Conversation.user_b_id == self_user.id))
         .order_by(Conversation.created_at.desc())
     )
+    conversation_rows = list(rows)
+    # Load every peer in ONE query instead of one db.get per conversation (N+1).
+    peer_ids = [other_user_id(conversation, self_user.id) for conversation in conversation_rows]
+    peers = (
+        {
+            peer.id: peer
+            for peer in (await db.scalars(select(User).where(User.id.in_(peer_ids)))).all()
+        }
+        if peer_ids
+        else {}
+    )
     conversations: list[ConversationResponse] = []
-    for conversation in rows:
-        peer_user = await db.get(User, other_user_id(conversation, self_user.id))
+    for conversation in conversation_rows:
+        peer_user = peers.get(other_user_id(conversation, self_user.id))
         if peer_user is None:
             continue
         conversations.append(serialize_conversation(conversation, self_user, peer_user))

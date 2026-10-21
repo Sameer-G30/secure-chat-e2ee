@@ -4,7 +4,7 @@
 from typing import Annotated
 
 # Import FastAPI's routing and dependency primitives.
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 
 # Import SQLAlchemy's async session type used by the injected database dependency.
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from app.schemas.reports import ReportResponse, ReportUserRequest
 
 # Import the shared bearer-token authentication dependency.
 from app.security.dependencies import get_current_user
+from app.security.rate_limit import limiter
 
 # Import the report-filing helper so the router stays thin.
 from app.services.reports import file_report
@@ -30,7 +31,10 @@ router = APIRouter(tags=["reports"])
 
 # File a metadata-only abuse report against a named account.
 @router.post("/reports", response_model=ReportResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/minute")
 async def report_user(
+    # slowapi reads the client address from this parameter.
+    request: Request,
     payload: ReportUserRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],

@@ -8,9 +8,13 @@ const DISTILBERT_CACHE_NAME = 'secure-chat-distilbert-default'
 
 // Build a Request the Cache API can store. The host is synthetic so it cannot
 // collide with a year-long HTTP cache of /ml/.../model.onnx.
-export function distilbertCacheRequest(filename: string, versionBytes: number): Request {
+export function distilbertCacheRequest(
+  filename: string,
+  versionKey: number | string,
+  checkpointId: string = 'distilbert_default',
+): Request {
   // Version is the manifest's onnx byte length (the sidecar has no separate hash).
-  const url = `https://secure-chat.invalid/ml/distilbert_default/${filename}?bytes=${versionBytes}`
+  const url = `https://secure-chat.invalid/ml/${checkpointId}/${filename}?v=${versionKey}`
   // GET is the only method the Cache API match uses for this artifact.
   return new Request(url)
 }
@@ -19,10 +23,11 @@ export function distilbertCacheRequest(filename: string, versionBytes: number): 
 export async function readOrFetchBytes(
   networkUrl: string,
   filename: string,
-  versionBytes: number,
+  versionKey: number | string,
+  checkpointId: string = 'distilbert_default',
 ): Promise<ArrayBuffer> {
   // The versioned key changes when manifest.onnx_bytes changes.
-  const cacheKey = distilbertCacheRequest(filename, versionBytes)
+  const cacheKey = distilbertCacheRequest(filename, versionKey, checkpointId)
   // jsdom and locked-down browsers may not expose the Cache API.
   if (typeof caches !== 'undefined') {
     try {

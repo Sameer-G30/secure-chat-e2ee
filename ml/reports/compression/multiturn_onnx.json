@@ -1,0 +1,10 @@
+{
+  "distilbert_default": {
+    "plain_accuracy": 0.895,
+    "multiturn_accuracy_mean": 0.77
+  },
+  "distilbert_student_s42": {
+    "plain_accuracy": 0.895,
+    "multiturn_accuracy_mean": 0.8833333333333334
+  }
+}

@@ -4,7 +4,7 @@
 from typing import Annotated
 
 # Import FastAPI's routing, dependency, file-upload, query, and response primitives.
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response
 
 # Import SQLAlchemy's async session type used by the injected database dependency.
@@ -32,6 +32,7 @@ from app.schemas.users import (
 
 # Import the shared bearer-token authentication dependency.
 from app.security.dependencies import get_current_user
+from app.security.rate_limit import limiter
 
 # Import profile load/update helpers so the router stays thin.
 from app.services.profiles import (
@@ -50,7 +51,10 @@ router = APIRouter(tags=["users"])
 
 # Search for accounts by a case-insensitive username prefix.
 @router.get("/users/search", response_model=UserSearchResponse)
+@limiter.limit("60/minute")
 async def search_users_by_prefix(
+    # slowapi reads the client address from this parameter.
+    request: Request,
     # Require a valid access token; this replaces the legacy app's approach of
     # downloading every user row to an unauthenticated browser tab.
     current_user: Annotated[User, Depends(get_current_user)],
@@ -100,7 +104,10 @@ async def update_me(
 
 # Replace the signed-in account's public avatar image.
 @router.post("/users/me/avatar", response_model=MeProfileResponse)
+@limiter.limit("10/minute")
 async def upload_my_avatar(
+    # slowapi reads the client address from this parameter.
+    request: Request,
     # Require a valid access token.
     current_user: Annotated[User, Depends(get_current_user)],
     # Inject a request-scoped async database session.
@@ -121,9 +128,7 @@ async def upload_my_avatar(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="avatar file is empty")
     if len(image_bytes) > MAX_AVATAR_BYTES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="avatar exceeds 200KB")
-    return await replace_avatar(
-        db, current_user, image_bytes=image_bytes, media_type=media_type
-    )
+    return await replace_avatar(db, current_user, image_bytes=image_bytes, media_type=media_type)
 
 
 # Remove the signed-in account's public avatar.

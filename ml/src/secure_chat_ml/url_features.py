@@ -396,10 +396,14 @@ def extract_single_url_features(url: str) -> dict[str, float]:
     # Flag '@' which can hide the real host in http://user@evil/ paths.
     has_at_sign = 1.0 if "@" in url else 0.0
     # Flag frozen shortener hosts; this is a list lookup, not a resolve.
-    is_known_shortener = 1.0 if (
-        host_norm in KNOWN_SHORTENER_HOSTS
-        or any(host_norm.endswith("." + name) for name in KNOWN_SHORTENER_HOSTS)
-    ) else 0.0
+    is_known_shortener = (
+        1.0
+        if (
+            host_norm in KNOWN_SHORTENER_HOSTS
+            or any(host_norm.endswith("." + name) for name in KNOWN_SHORTENER_HOSTS)
+        )
+        else 0.0
+    )
     # Flag frozen suspicious TLDs using the last hostname label only.
     suspicious_tld = 1.0 if _tld(host) in SUSPICIOUS_TLDS else 0.0
     # Flag credential-harvesting keywords anywhere in path or query.

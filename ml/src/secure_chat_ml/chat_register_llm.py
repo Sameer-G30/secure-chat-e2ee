@@ -122,7 +122,7 @@ SYSTEM_PROMPT = (
     "- Preserve meaning: same request, same facts, same scam or same benign topic.\n"
     "- Register: informal chat (contractions, casual punctuation). Not email.\n"
     "- Do not keep From/To/Subject, disclaimers, unsubscribe, quoted reply threads.\n"
-    "- Do not summarize as \"this email is about X\". Write the message itself.\n"
+    '- Do not summarize as "this email is about X". Write the message itself.\n'
     "- Label is provided. Copy it. Do not decide whether the row is a scam.\n"
     "- If label=0 (legitimate): no new phishing verbs, prizes,\n"
     '  "verify account", OTP, seed phrases, or urgency that the source did not have.\n'
@@ -273,9 +273,7 @@ def build_user_prompt(text: str, label: int, urls: list[str]) -> str:
     # Only mention truncation when the body was actually cut.
     if len(text) > MAX_SOURCE_CHARS:
         # URLs listed above are still complete even when the body window is not.
-        truncation_note = (
-            "\n\n[Source truncated for context; the URL list above is complete.]"
-        )
+        truncation_note = "\n\n[Source truncated for context; the URL list above is complete.]"
     # Assemble the labeled user turn; output must still be the DM only.
     return (
         f"Label: {int(label)} ({label_word})\n\n"

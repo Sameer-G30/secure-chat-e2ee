@@ -1,10 +1,11 @@
 """Create the ciphertext-only FastAPI service."""
 
 # Import Annotated to describe dependency-injected parameter metadata.
+# Import FastAPI's application and dependency injection primitives.
+from collections.abc import Awaitable, Callable
 from typing import Annotated
 
-# Import FastAPI's application and dependency injection primitives.
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request, Response
 
 # Import CORS middleware so the Vite dev origin may call authenticated endpoints.
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,6 +59,30 @@ app.add_middleware(
     # Allow the headers the frontend needs to send, including future auth headers.
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+# Add defensive headers to every API response (the API serves JSON and sealed bytes only).
+@app.middleware("http")
+async def add_security_headers(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Attach nosniff, framing, referrer, cache, and HSTS headers."""
+
+    response = await call_next(request)
+    # Stop browsers from sniffing stored avatars/blobs into executable types.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # The API is never meant to be framed.
+    response.headers["X-Frame-Options"] = "DENY"
+    # Lock down anything that is accidentally rendered as a document.
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    # Never leak API URLs through Referer.
+    response.headers["Referrer-Policy"] = "no-referrer"
+    # Authenticated responses must not be stored by shared caches.
+    response.headers.setdefault("Cache-Control", "no-store")
+    # HSTS only matters over HTTPS; harmless on plain HTTP.
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 
 # Mount the authentication router's endpoints onto the application.
 app.include_router(auth.router)

@@ -1,0 +1,52 @@
+{
+  "chosen_threshold": 0.25,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.8715596330275229,
+      "recall": 0.95,
+      "f1-score": 0.9090909090909091,
+      "support": 100.0
+    },
+    "scam": {
+      "precision": 0.945054945054945,
+      "recall": 0.86,
+      "f1-score": 0.900523560209424,
+      "support": 100.0
+    },
+    "accuracy": 0.905,
+    "macro avg": {
+      "precision": 0.908307289041234,
+      "recall": 0.905,
+      "f1-score": 0.9048072346501665,
+      "support": 200.0
+    },
+    "weighted avg": {
+      "precision": 0.9083072890412339,
+      "recall": 0.905,
+      "f1-score": 0.9048072346501665,
+      "support": 200.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      95,
+      5
+    ],
+    [
+      14,
+      86
+    ]
+  ],
+  "student": "huawei-noah/TinyBERT_General_4L_312D",
+  "seed": 42,
+  "threshold": 0.25,
+  "max_length": 128,
+  "alpha": 0.5,
+  "temperature": 2.0,
+  "epochs": 8,
+  "learning_rate": 0.0001,
+  "test_metrics": {
+    "accuracy": 0.9784223062911588,
+    "scam_f1": 0.9778735632183908
+  }
+}

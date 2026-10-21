@@ -4,7 +4,11 @@
 from functools import lru_cache
 
 # Import Pydantic's settings base class and settings-specific options.
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The documented placeholder that must never reach a real deployment.
+_PLACEHOLDER_JWT_SECRET = "replace-with-at-least-32-random-bytes"
 
 
 # Define every configuration value the first backend slice consumes.
@@ -25,6 +29,8 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "replace-with-at-least-32-random-bytes"
     # Pin the signing algorithm explicitly rather than trusting a token-supplied header.
     jwt_algorithm: str = "HS256"
+    # Allow the legacy ?access_token= WebSocket query param outside development (off by default).
+    ws_allow_query_token: bool = False
     # Keep access tokens short-lived so a leaked token has a small blast radius.
     access_token_expire_minutes: int = 15
     # Let refresh tokens live far longer, since rotation-on-use limits replay risk.
@@ -40,6 +46,26 @@ class Settings(BaseSettings):
     # Combined with the message-count rule by OR: either trigger is enough.
     # Set to 0 to disable the wall-clock trigger (message-count can still fire).
     epoch_rotate_after_hours: int = 24
+
+    # Refuse insecure placeholder secrets and unsafe algorithms outside development.
+    @model_validator(mode="after")
+    def _reject_insecure_defaults(self) -> "Settings":
+        """Fail fast at startup instead of silently shipping known secrets."""
+
+        # Only HS256 is supported; blocks "none" and algorithm-confusion misconfiguration.
+        if self.jwt_algorithm != "HS256":
+            raise ValueError("JWT_ALGORITHM must be HS256")
+        if self.app_env != "development":
+            # Reject the shipped placeholder and anything too short to be random.
+            if self.jwt_secret_key == _PLACEHOLDER_JWT_SECRET or len(self.jwt_secret_key) < 32:
+                raise ValueError(
+                    "JWT_SECRET_KEY must be a random value of 32+ chars outside development"
+                )
+            # Reject the shipped database password placeholder.
+            if ":change-me@" in self.database_url:
+                raise ValueError("DATABASE_URL still uses the placeholder password")
+        return self
+
     # Read case-insensitive variables without silently accepting unknown keys.
     model_config = SettingsConfigDict(
         # Load a local untracked file when the API runs outside Docker.

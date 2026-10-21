@@ -468,9 +468,29 @@ function parseEncryptedBlob(value: unknown): EncryptedBlobRecord {
   }
 }
 
-// Convert the REST API origin into the WebSocket origin used by the ciphertext relay.
-export function conversationWebSocketUrl(conversationId: string, accessToken: string): string {
+// Exchange the bearer token for a 30-second single-use WebSocket ticket.
+// The JWT then never appears in a URL, proxy log, or browser history.
+export async function fetchWebSocketTicket(
+  accessToken: string,
+  conversationId: string,
+): Promise<string> {
+  const response = await fetch(
+    `${API_BASE_URL}/ws/conversations/${encodeURIComponent(conversationId)}/ticket`,
+    { method: 'POST', headers: authHeaders(accessToken) },
+  )
+  const body: unknown = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new ConversationsApiError(
+      extractErrorDetail(body, 'Could not open the encrypted connection.'),
+      response.status,
+    )
+  }
+  return (body as { ticket: string }).ticket
+}
+
+// Build the WebSocket URL; `ticket` is the single-use value from fetchWebSocketTicket.
+export function conversationWebSocketUrl(conversationId: string, ticket: string): string {
   const wsBase = API_BASE_URL.replace(/^http/, 'ws')
-  const params = new URLSearchParams({ access_token: accessToken })
+  const params = new URLSearchParams({ ticket })
   return `${wsBase}/ws/conversations/${encodeURIComponent(conversationId)}?${params.toString()}`
 }

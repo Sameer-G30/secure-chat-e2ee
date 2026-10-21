@@ -28,6 +28,12 @@ COPY alembic ./alembic
 # Copy the Slice 9 startup script that migrates, then execs uvicorn.
 COPY docker-entrypoint.py ./
 
+# Run as an unprivileged user so a compromised process cannot modify the image.
+RUN useradd --system --uid 10001 --no-create-home app && chown -R app:app /app
+# Keep uv writable state out of the read-only app tree.
+ENV UV_CACHE_DIR=/tmp/uv-cache
+USER app
+
 # Document the HTTP port served by the ASGI process.
 EXPOSE 8000
 

@@ -1,0 +1,99 @@
+{
+  "candidate": "exports/onnx_web/distilbert_pruned_pc",
+  "candidate_mib": 54.15322017669678,
+  "baseline_mib": 64.28183841705322,
+  "test": {
+    "rows": 7137,
+    "baseline": {
+      "tp": 3404,
+      "fp": 61,
+      "fn": 70,
+      "tn": 3602,
+      "precision": 0.9823953823953824,
+      "recall": 0.9798503166378814,
+      "f1": 0.9811211990200316,
+      "accuracy": 0.9816449488580636,
+      "roc_auc": 0.9982904084803912,
+      "pr_auc": 0.9982980564372022
+    },
+    "candidate": {
+      "tp": 3408,
+      "fp": 69,
+      "fn": 66,
+      "tn": 3594,
+      "precision": 0.9801553062985332,
+      "recall": 0.9810017271157168,
+      "f1": 0.9805783340526543,
+      "accuracy": 0.9810844892812106,
+      "roc_auc": 0.9982727271155595,
+      "pr_auc": 0.9982728374554035
+    },
+    "mcnemar_p_vs_baseline": 0.5402913746074199
+  },
+  "chat_v1": {
+    "rows": 200,
+    "baseline": {
+      "tp": 86,
+      "fp": 6,
+      "fn": 14,
+      "tn": 94,
+      "precision": 0.9347826086956522,
+      "recall": 0.86,
+      "f1": 0.8958333333333334,
+      "accuracy": 0.9,
+      "roc_auc": 0.963,
+      "pr_auc": 0.9686566411179601
+    },
+    "candidate": {
+      "tp": 87,
+      "fp": 8,
+      "fn": 13,
+      "tn": 92,
+      "precision": 0.9157894736842105,
+      "recall": 0.87,
+      "f1": 0.8923076923076922,
+      "accuracy": 0.895,
+      "roc_auc": 0.9631,
+      "pr_auc": 0.9686530969510362
+    },
+    "mcnemar_p_vs_baseline": 1.0
+  },
+  "chat_v2": {
+    "rows": 200,
+    "baseline": {
+      "tp": 85,
+      "fp": 6,
+      "fn": 15,
+      "tn": 94,
+      "precision": 0.9340659340659341,
+      "recall": 0.85,
+      "f1": 0.8900523560209425,
+      "accuracy": 0.895,
+      "roc_auc": 0.947,
+      "pr_auc": 0.9583144205178725
+    },
+    "candidate": {
+      "tp": 85,
+      "fp": 5,
+      "fn": 15,
+      "tn": 95,
+      "precision": 0.9444444444444444,
+      "recall": 0.85,
+      "f1": 0.8947368421052632,
+      "accuracy": 0.9,
+      "roc_auc": 0.9398,
+      "pr_auc": 0.9545542725423527
+    },
+    "mcnemar_p_vs_baseline": 1.0
+  },
+  "chat_pooled_mcnemar_p": 0.7236736098317631,
+  "verdicts": {
+    "test_f1": true,
+    "test_recall": true,
+    "test_roc_auc": true,
+    "chat_v1_accuracy": true,
+    "chat_no_significant_regression": true,
+    "size": true
+  },
+  "passed": true
+}

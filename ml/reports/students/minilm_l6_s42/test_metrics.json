@@ -1,0 +1,48 @@
+{
+  "chosen_threshold": 0.25,
+  "classification_report": {
+    "legitimate": {
+      "precision": 0.9838709677419355,
+      "recall": 0.9825279825279826,
+      "f1-score": 0.9831990165277967,
+      "support": 3663.0
+    },
+    "scam": {
+      "precision": 0.9816039091693015,
+      "recall": 0.9830166954519286,
+      "f1-score": 0.9823097943333813,
+      "support": 3474.0
+    },
+    "accuracy": 0.9827658680117697,
+    "macro avg": {
+      "precision": 0.9827374384556185,
+      "recall": 0.9827723389899556,
+      "f1-score": 0.982754405430589,
+      "support": 7137.0
+    },
+    "weighted avg": {
+      "precision": 0.9827674562551302,
+      "recall": 0.9827658680117697,
+      "f1-score": 0.9827661794949539,
+      "support": 7137.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      3599,
+      64
+    ],
+    [
+      59,
+      3415
+    ]
+  ],
+  "student": "nreimers/MiniLM-L6-H384-uncased",
+  "seed": 42,
+  "threshold": 0.25,
+  "max_length": 128,
+  "alpha": 0.5,
+  "temperature": 2.0,
+  "epochs": 6,
+  "learning_rate": 8e-05
+}
