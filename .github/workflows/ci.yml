@@ -17,8 +17,8 @@ permissions:
 jobs:
   # Verify the FastAPI foundation and its quality gates.
   backend:
-    # Use GitHub's current Ubuntu runner image.
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 still has the Python 3.11.9 build. ubuntu-latest is 26.04 and does not.
+    runs-on: ubuntu-24.04
     # Set backend commands relative to the Python project.
     defaults:
       # Configure every shell step in this job.
@@ -66,8 +66,8 @@ jobs:
 
   # Verify React, TypeScript, UI behavior, and the crypto proof.
   frontend:
-    # Use GitHub's current Ubuntu runner image.
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 still has the Python 3.11.9 build. ubuntu-latest is 26.04 and does not.
+    runs-on: ubuntu-24.04
     # Set frontend commands relative to the Vite project.
     defaults:
       # Configure every shell step in this job.
@@ -111,8 +111,8 @@ jobs:
 
   # Verify offline data-preparation source without downloading corpora.
   ml:
-    # Use GitHub's current Ubuntu runner image.
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 still has the Python 3.11.9 build. ubuntu-latest is 26.04 and does not.
+    runs-on: ubuntu-24.04
     # Set commands relative to the independent ML project.
     defaults:
       # Configure every shell step in this job.
@@ -156,7 +156,7 @@ jobs:
 
   # Run the backend suite against a real PostgreSQL, since SQLite hides dialect differences.
   backend-postgres:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Provide a throwaway Postgres reachable on localhost.
     services:
       postgres:
@@ -192,7 +192,7 @@ jobs:
 
   # Build the API image so Dockerfile regressions fail before deployment.
   docker-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Build backend image
@@ -200,7 +200,7 @@ jobs:
 
   # Scan dependencies and history for known vulnerabilities and leaked secrets.
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -209,7 +209,8 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - name: Audit Python dependencies
         working-directory: backend
-        run: uv export --frozen --no-dev --no-hashes -o /tmp/req.txt && uvx pip-audit -r /tmp/req.txt --disable-pip
+        # The export is already fully resolved and has no hashes, so pip-audit must not try to install deps.
+        run: uv export --frozen --no-dev --no-hashes -o /tmp/req.txt && uvx pip-audit -r /tmp/req.txt --disable-pip --no-deps
       - uses: actions/setup-node@v4
         with:
           node-version: 22
